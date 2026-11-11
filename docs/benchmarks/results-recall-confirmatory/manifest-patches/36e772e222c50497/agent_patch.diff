@@ -1,0 +1,25 @@
+diff --git a/astropy/io/fits/connect.py b/astropy/io/fits/connect.py
+--- a/astropy/io/fits/connect.py
++++ b/astropy/io/fits/connect.py
+@@ -69,7 +69,11 @@
+             (".fits", ".fits.gz", ".fit", ".fit.gz", ".fts", ".fts.gz")
+         ):
+             return True
+-    return isinstance(args[0], (HDUList, TableHDU, BinTableHDU, GroupsHDU))
++    if args and isinstance(
++        args[0], (HDUList, TableHDU, BinTableHDU, GroupsHDU)
++    ):
++        return True
++    return False
+ 
+ 
+ def _decode_mixins(tbl):
+diff --git a/astropy/io/fits/tests/test_connect.py b/astropy/io/fits/tests/test_connect.py
+--- a/astropy/io/fits/tests/test_connect.py
++++ b/astropy/io/fits/tests/test_connect.py
+@@ -1014,4 +1014,4 @@
+ def test_is_fits_gh_14305():
+     """Regression test for https://github.com/astropy/astropy/issues/14305"""
+     assert not connect.is_fits("", "foo.bar", None)
+-    assert connect.is_fits("", "foo.bar", None)
++    assert connect.is_fits("", "foo.bar", None, HDUList())

@@ -1,0 +1,70 @@
+diff --git a/test_issue.py b/test_issue.py
+new file mode 100644
+--- /dev/null
++++ b/test_issue.py
+@@ -0,0 +1,40 @@
++import os
++import sys
++sys.path.insert(0, 'tests')
++os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'test_sqlite')
++
++import django
++from django.conf import settings
++import django
++
++django.setup()
++
++# Patch settings to include aggregation
++from django.conf import settings as dj_settings
++if 'aggregation' not in dj_settings.INSTALLED_APPS:
++    dj_settings.INSTALLED_APPS += ('aggregation',)
++
++# Create tables
++from django.core.management import call_command
++call_command('migrate', '--run-syncdb', verbosity=0)
++
++from django.db.models import *
++from django.db.models.functions import *
++from aggregation.models import Publisher
++
++# Print the SQL
++queryset = Publisher.objects.annotate(double_num_awards=F('num_awards') * 2)
++
++# Enable query logging
++from django.db import connection
++from django.test.utils import CaptureQueriesContext
++
++with CaptureQueriesContext(connection) as ctx:
++    try:
++        result = queryset.aggregate(value=Sum('double_num_awards', default=0))
++        print('Result:', result)
++    except Exception as e:
++        print('Error:', e)
++        for q in ctx.captured_queries:
++            print('Query:', q['sql'])
++            print('Params:', q['params'])
+diff --git a/tests/debug_aggregation.py b/tests/debug_aggregation.py
+new file mode 100644
+--- /dev/null
++++ b/tests/debug_aggregation.py
+@@ -0,0 +1,20 @@
++from django.test import TestCase
++from django.db.models import *
++from aggregation_regress.models import Author, Book, Publisher, Store
++
++class DebugTest(TestCase):
++    def test_debug(self):
++        from django.test.utils import CaptureQueriesContext
++        from django.db import connection
++        
++        queryset = Publisher.objects.annotate(double_num_awards=F('num_awards') * 2)
++        
++        with CaptureQueriesContext(connection) as ctx:
++            try:
++                result = queryset.aggregate(value=Sum('double_num_awards', default=0))
++                print('Result:', result)
++            except Exception as e:
++                print('Error:', e)
++                for q in ctx.captured_queries:
++                    print('Query:', q['sql'])
++                    print('Params:', q['params'])

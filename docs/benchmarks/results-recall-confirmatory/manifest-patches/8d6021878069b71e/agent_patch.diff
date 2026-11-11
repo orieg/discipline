@@ -1,0 +1,23 @@
+diff --git a/sympy/simplify/sqrtdenest.py b/sympy/simplify/sqrtdenest.py
+--- a/sympy/simplify/sqrtdenest.py
++++ b/sympy/simplify/sqrtdenest.py
+@@ -157,6 +157,19 @@
+     elif p.is_Add:
+         pargs = sorted(p.args, key=default_sort_key)
+         if all((x**2).is_Rational for x in pargs):
++            # check if there are any surds before calling split_surds
++            # a surd is either a Pow with exp=1/2 or a Mul containing such
++            has_surds = False
++            for x in pargs:
++                if x.is_Pow and x.exp == S.Half:
++                    has_surds = True
++                    break
++                elif x.is_Mul:
++                    if any(y.is_Pow and y.exp == S.Half for y in x.args):
++                        has_surds = True
++                        break
++            if not has_surds:
++                return []
+             r, b, a = split_surds(p)
+             res = a, b, r
+             return list(res)

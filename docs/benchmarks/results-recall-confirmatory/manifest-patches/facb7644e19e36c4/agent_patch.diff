@@ -1,0 +1,14 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -435,6 +435,10 @@
+                 for annotation in self.annotations.values()
+             )
+             or having
++            or any(
++                getattr(annotation, "contains_over_clause", False)
++                for annotation in self.annotations.values()
++            )
+         )
+         # Decide if we need to use a subquery.
+         #

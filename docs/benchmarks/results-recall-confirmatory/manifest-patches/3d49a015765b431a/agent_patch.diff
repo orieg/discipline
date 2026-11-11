@@ -1,0 +1,171 @@
+diff --git a/classes_No_Name.dot b/classes_No_Name.dot
+new file mode 100644
+--- /dev/null
++++ b/classes_No_Name.dot
+@@ -0,0 +1,9 @@
++digraph "classes_No_Name" {
++charset="utf-8"
++rankdir=BT
++"0" [label="{Ancestor|attr : str\lcls_member\l|get_value()\lset_value(value)\l}", shape="record"];
++"1" [label="{DoNothing|\l|}", shape="record"];
++"2" [label="{Interface|\l|get_value()\lset_value(value)\l}", shape="record"];
++"3" [label="{Specialization|TYPE : str\lrelation\ltop : str\l|}", shape="record"];
++"3" -> "0" [arrowhead="empty", arrowtail="none"];
++}
+diff --git a/packages_No_Name.dot b/packages_No_Name.dot
+new file mode 100644
+--- /dev/null
++++ b/packages_No_Name.dot
+@@ -0,0 +1,7 @@
++digraph "packages_No_Name" {
++charset="utf-8"
++rankdir=BT
++"0" [label="/testbed/tests/data/__init__.py", shape="box"];
++"1" [label="/testbed/tests/data/clientmodule_test.py", shape="box"];
++"2" [label="/testbed/tests/data/suppliermodule_test.py", shape="box"];
++}
+diff --git a/pylint/pyreverse/utils.py b/pylint/pyreverse/utils.py
+--- a/pylint/pyreverse/utils.py
++++ b/pylint/pyreverse/utils.py
+@@ -20,6 +20,8 @@
+ import re
+ import sys
+ 
++import astroid
++
+ RCFILE = ".pyreverserc"
+ 
+ 
+@@ -213,3 +215,132 @@
+         if methods[1] is not None:
+             return methods[1](node)
+         return None
++
++
++def _is_none_default(node):
++    """Check if a node is a None default value."""
++    return isinstance(node, astroid.Const) and node.value is None
++
++
++def _is_optional_annotation(annotation):
++    """Check if an annotation is an Optional type."""
++    if annotation is None:
++        return False
++    if isinstance(annotation, astroid.Name):
++        return annotation.name == "Optional"
++    if isinstance(annotation, astroid.Subscript):
++        if hasattr(annotation.value, "name"):
++            return annotation.value.name == "Optional"
++    return False
++
++
++class AnnotationInfo:
++    """Represents an annotation with a name attribute for compatibility."""
++
++    def __init__(self, name):
++        self.name = name
++
++
++def get_annotation(node):
++    """Get the type annotation for a node.
++
++    Args:
++        node: An astroid node, either:
++            - An AnnAssign value node (e.g., the 'None' in 'a: str = None')
++            - An AssignAttr node (e.g., 'self.x' in 'self.x = x')
++
++    Returns:
++        An AnnotationInfo object with a 'name' attribute, or None if no
++        annotation found.
++    """
++    if isinstance(node, astroid.AnnAssign):
++        # node is the AnnAssign itself
++        annotation = node.annotation
++        value = node.value
++    elif hasattr(node, "parent") and isinstance(node.parent, astroid.AnnAssign):
++        # node is the value of an AnnAssign
++        ann_assign = node.parent
++        annotation = ann_assign.annotation
++        value = ann_assign.value
++    elif isinstance(node, astroid.AssignAttr):
++        # node is an AssignAttr (self.x = x)
++        # Find the parent function
++        current = node
++        while current is not None and not isinstance(current, astroid.FunctionDef):
++            current = current.parent
++
++        if current is None or not isinstance(current, astroid.FunctionDef):
++            return None
++
++        func = current
++        attrname = node.attrname
++
++        # Find the annotation for this attribute
++        arg_names = [a.name for a in func.args.args]
++        if attrname not in arg_names:
++            return None
++
++        idx = arg_names.index(attrname)
++        annotation = func.args.annotations[idx]
++
++        # Check if there's a default value and if it's None
++        defaults = func.args.defaults
++        has_none_default = False
++        num_args = len(func.args.args)
++        default_idx = idx - num_args + len(defaults)
++        if 0 <= default_idx < len(defaults):
++            default = defaults[default_idx]
++            has_none_default = _is_none_default(default)
++
++        if annotation is None:
++            return None
++
++        # Check if annotation is Optional
++        is_optional = _is_optional_annotation(annotation)
++
++        if is_optional:
++            return AnnotationInfo(annotation.as_string())
++        elif has_none_default:
++            return AnnotationInfo(f"Optional[{annotation.as_string()}]")
++        else:
++            return AnnotationInfo(annotation.as_string())
++    else:
++        return None
++
++    if annotation is None:
++        return None
++
++    # Check if annotation is Optional
++    is_optional = _is_optional_annotation(annotation)
++    has_none_default = _is_none_default(value) if value is not None else False
++
++    if is_optional:
++        return AnnotationInfo(annotation.as_string())
++    elif has_none_default:
++        return AnnotationInfo(f"Optional[{annotation.as_string()}]")
++    else:
++        return AnnotationInfo(annotation.as_string())
++
++
++def infer_node(node):
++    """Try to infer the type of a node.
++
++    Args:
++        node: An astroid node.
++
++    Returns:
++        A set of inferred values, or an empty set if inference fails
++        or an annotation was already found.
++    """
++    try:
++        annotation = get_annotation(node)
++        if annotation is not None:
++            return set()
++    except Exception:
++        pass
++
++    # Try to infer from the node
++    try:
++        return set(node.infer())
++    except astroid.InferenceError:
++        return set()

@@ -1,0 +1,15 @@
+diff --git a/django/contrib/auth/backends.py b/django/contrib/auth/backends.py
+--- a/django/contrib/auth/backends.py
++++ b/django/contrib/auth/backends.py
+@@ -44,7 +44,10 @@
+         except UserModel.DoesNotExist:
+             # Run the default password hasher once to reduce the timing
+             # difference between an existing and a nonexistent user (#20760).
+-            UserModel().set_password(password)
++            # Only run the hasher if both username and password are provided,
++            # since timing concerns don't apply when username is not provided.
++            if username is not None and password is not None:
++                UserModel().set_password(password)
+         else:
+             if user.check_password(password) and self.user_can_authenticate(user):
+                 return user

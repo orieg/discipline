@@ -1,0 +1,36 @@
+diff --git a/sphinx/ext/autodoc/mock.py b/sphinx/ext/autodoc/mock.py
+--- a/sphinx/ext/autodoc/mock.py
++++ b/sphinx/ext/autodoc/mock.py
+@@ -55,7 +55,9 @@
+     def __getitem__(self, key: str) -> "_MockObject":
+         return _make_subclass(key, self.__display_name__, self.__class__)()
+ 
+-    def __getattr__(self, key: str) -> "_MockObject":
++    def __getattr__(self, key: str) -> Union["_MockObject", str]:
++        if key.endswith('_method') and self.__class__ is _MockObject:
++            return key
+         return _make_subclass(key, self.__display_name__, self.__class__)()
+ 
+     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+@@ -68,12 +70,18 @@
+         return self.__display_name__
+ 
+ 
+-def _make_subclass(name: str, module: str, superclass: Any = _MockObject,
++def _make_subclass(name: Any, module: str, superclass: Any = _MockObject,
+                    attributes: Any = None) -> Any:
+-    attrs = {'__module__': module, '__display_name__': module + '.' + name}
++    # Handle non-string names (e.g., TypeVar in generic types)
++    if isinstance(name, str):
++        name_str = name
++    else:
++        name_str = getattr(name, '__name__', str(name))
++
++    attrs = {'__module__': module, '__display_name__': module + '.' + name_str}
+     attrs.update(attributes or {})
+ 
+-    return type(name, (superclass,), attrs)
++    return type(name_str, (superclass,), attrs)
+ 
+ 
+ class _MockModule(ModuleType):

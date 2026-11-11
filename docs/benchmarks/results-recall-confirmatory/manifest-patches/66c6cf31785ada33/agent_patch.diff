@@ -1,0 +1,25 @@
+diff --git a/django/db/backends/ddl_references.py b/django/db/backends/ddl_references.py
+--- a/django/db/backends/ddl_references.py
++++ b/django/db/backends/ddl_references.py
+@@ -84,7 +84,9 @@
+     def __str__(self):
+         def col_str(column, idx):
+             try:
+-                return self.quote_name(column) + self.col_suffixes[idx]
++                suffix = self.col_suffixes[idx]
++                # Only add a space before suffix if it's not empty.
++                return self.quote_name(column) + (' ' + suffix if suffix else '')
+             except IndexError:
+                 return self.quote_name(column)
+ 
+@@ -114,7 +116,9 @@
+             # length as self.columns.
+             col = '{} {}'.format(self.quote_name(column), self.opclasses[idx])
+             try:
+-                col = '{} {}'.format(col, self.col_suffixes[idx])
++                suffix = self.col_suffixes[idx]
++                # Only add a space before suffix if it's not empty.
++                col = '{}{}'.format(col, ' ' + suffix if suffix else '')
+             except IndexError:
+                 pass
+             return col

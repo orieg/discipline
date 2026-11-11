@@ -1,0 +1,135 @@
+diff --git a/django/db/models/fields/related_descriptors.py b/django/db/models/fields/related_descriptors.py
+--- a/django/db/models/fields/related_descriptors.py
++++ b/django/db/models/fields/related_descriptors.py
+@@ -145,7 +145,17 @@
+             }
+         else:
+             query = {"%s__in" % self.field.related_query_name(): instances}
+-        queryset = queryset.filter(**query)
++        # If the queryset is sliced, we need to handle it differently because
++        # filtering a sliced queryset raises an error. We clone the queryset,
++        # clear the slice, apply the filter, then re-apply the slice.
++        if queryset.query.is_sliced:
++            queryset = queryset._chain()
++            low_mark, high_mark = queryset.query.low_mark, queryset.query.high_mark
++            queryset.query.clear_limits()
++            queryset = queryset.filter(**query)
++            queryset.query.set_limits(low_mark, high_mark)
++        else:
++            queryset = queryset.filter(**query)
+ 
+         # Since we're going to assign directly in the cache,
+         # we must manage the reverse relation cache manually.
+@@ -404,7 +414,17 @@
+         instance_attr = self.related.field.get_foreign_related_value
+         instances_dict = {instance_attr(inst): inst for inst in instances}
+         query = {"%s__in" % self.related.field.name: instances}
+-        queryset = queryset.filter(**query)
++        # If the queryset is sliced, we need to handle it differently because
++        # filtering a sliced queryset raises an error. We clone the queryset,
++        # clear the slice, apply the filter, then re-apply the slice.
++        if queryset.query.is_sliced:
++            queryset = queryset._chain()
++            low_mark, high_mark = queryset.query.low_mark, queryset.query.high_mark
++            queryset.query.clear_limits()
++            queryset = queryset.filter(**query)
++            queryset.query.set_limits(low_mark, high_mark)
++        else:
++            queryset = queryset.filter(**query)
+ 
+         # Since we're going to assign directly in the cache,
+         # we must manage the reverse relation cache manually.
+@@ -719,7 +739,17 @@
+             instance_attr = self.field.get_foreign_related_value
+             instances_dict = {instance_attr(inst): inst for inst in instances}
+             query = {"%s__in" % self.field.name: instances}
+-            queryset = queryset.filter(**query)
++            # If the queryset is sliced, we need to handle it differently because
++            # filtering a sliced queryset raises an error. We clone the queryset,
++            # clear the slice, apply the filter, then re-apply the slice.
++            if queryset.query.is_sliced:
++                queryset = queryset._chain()
++                low_mark, high_mark = queryset.query.low_mark, queryset.query.high_mark
++                queryset.query.clear_limits()
++                queryset = queryset.filter(**query)
++                queryset.query.set_limits(low_mark, high_mark)
++            else:
++                queryset = queryset.filter(**query)
+ 
+             # Since we just bypassed this class' get_queryset(), we must manage
+             # the reverse relation manually.
+@@ -1052,27 +1082,53 @@
+             queryset = queryset.using(queryset._db or self._db)
+ 
+             query = {"%s__in" % self.query_field_name: instances}
+-            queryset = queryset._next_is_sticky().filter(**query)
+-
+-            # M2M: need to annotate the query in order to get the primary model
+-            # that the secondary model was actually related to. We know that
+-            # there will already be a join on the join table, so we can just add
+-            # the select.
+-
+-            # For non-autocreated 'through' models, can't assume we are
+-            # dealing with PK values.
+-            fk = self.through._meta.get_field(self.source_field_name)
+-            join_table = fk.model._meta.db_table
+-            connection = connections[queryset.db]
+-            qn = connection.ops.quote_name
+-            queryset = queryset.extra(
+-                select={
+-                    "_prefetch_related_val_%s"
+-                    % f.attname: "%s.%s"
+-                    % (qn(join_table), qn(f.column))
+-                    for f in fk.local_related_fields
+-                }
+-            )
++            # If the queryset is sliced, we need to handle it differently because
++            # filtering and adding extras on a sliced queryset raises an error.
++            # We clone the queryset, clear the slice, apply the filter and extras,
++            # then re-apply the slice.
++            if queryset.query.is_sliced:
++                queryset = queryset._chain()
++                low_mark, high_mark = queryset.query.low_mark, queryset.query.high_mark
++                queryset.query.clear_limits()
++                queryset = queryset._next_is_sticky().filter(**query)
++                # M2M: need to annotate the query in order to get the primary model
++                # that the secondary model was actually related to. We know that
++                # there will already be a join on the join table, so we can just add
++                # the select.
++                fk = self.through._meta.get_field(self.source_field_name)
++                join_table = fk.model._meta.db_table
++                connection = connections[queryset.db]
++                qn = connection.ops.quote_name
++                queryset = queryset.extra(
++                    select={
++                        "_prefetch_related_val_%s"
++                        % f.attname: "%s.%s"
++                        % (qn(join_table), qn(f.column))
++                        for f in fk.local_related_fields
++                    }
++                )
++                queryset.query.set_limits(low_mark, high_mark)
++            else:
++                queryset = queryset._next_is_sticky().filter(**query)
++                # M2M: need to annotate the query in order to get the primary model
++                # that the secondary model was actually related to. We know that
++                # there will already be a join on the join table, so we can just add
++                # the select.
++
++                # For non-autocreated 'through' models, can't assume we are
++                # dealing with PK values.
++                fk = self.through._meta.get_field(self.source_field_name)
++                join_table = fk.model._meta.db_table
++                connection = connections[queryset.db]
++                qn = connection.ops.quote_name
++                queryset = queryset.extra(
++                    select={
++                        "_prefetch_related_val_%s"
++                        % f.attname: "%s.%s"
++                        % (qn(join_table), qn(f.column))
++                        for f in fk.local_related_fields
++                    }
++                )
+             return (
+                 queryset,
+                 lambda result: tuple(

@@ -1,0 +1,39 @@
+diff --git a/django/utils/timezone.py b/django/utils/timezone.py
+--- a/django/utils/timezone.py
++++ b/django/utils/timezone.py
+@@ -73,6 +73,35 @@
+ 
+ def _get_timezone_name(timezone):
+     """Return the name of ``timezone``."""
++    # For Etc/GMT* timezones, return the offset string since the sign in the
++    # name is inverted relative to the actual offset. For example, Etc/GMT-10
++    # represents UTC+10 (10 hours east of UTC), but the name suggests UTC-10.
++    if getattr(timezone, 'zone', None) and timezone.zone.startswith('Etc/GMT'):
++        # pytz timezone with Etc/GMT name - get the actual offset
++        offset = timezone.utcoffset(None)
++        if offset is not None:
++            total_seconds = int(offset.total_seconds())
++            hours, remainder = divmod(abs(total_seconds), 3600)
++            sign = '-' if total_seconds < 0 else '+'
++            return f'{sign}{hours:02d}'
++    if hasattr(timezone, 'zone') and timezone.zone:
++        # pytz timezone
++        return str(timezone)
++    if hasattr(timezone, 'key') and timezone.key:
++        # zoneinfo timezone
++        if timezone.key.startswith('Etc/GMT'):
++            # Get the actual offset for Etc/GMT timezones
++            offset = timezone.utcoffset(None)
++            if offset is not None:
++                total_seconds = int(offset.total_seconds())
++                hours, remainder = divmod(abs(total_seconds), 3600)
++                sign = '-' if total_seconds < 0 else '+'
++                return f'{sign}{hours:02d}'
++        return timezone.key
++    # datetime.timezone
++    name = timezone.tzname(None)
++    if name is not None:
++        return name
+     return str(timezone)
+ 
+ # Timezone selection functions.

@@ -1,0 +1,48 @@
+diff --git a/django/db/models/fields/__init__.py b/django/db/models/fields/__init__.py
+--- a/django/db/models/fields/__init__.py
++++ b/django/db/models/fields/__init__.py
+@@ -513,20 +513,29 @@
+         name, path, args, kwargs = self.deconstruct()
+         return self.__class__(*args, **kwargs)
+ 
++    def _get_model_label(self):
++        return getattr(self, 'model', None) and self.model._meta.label
++
+     def __eq__(self, other):
+         # Needed for @total_ordering
+         if isinstance(other, Field):
+-            return self.creation_counter == other.creation_counter
++            return (
++                self.creation_counter == other.creation_counter
++                and self._get_model_label() == other._get_model_label()
++            )
+         return NotImplemented
+ 
+     def __lt__(self, other):
+         # This is needed because bisect does not take a comparison function.
+         if isinstance(other, Field):
+-            return self.creation_counter < other.creation_counter
++            return (self.creation_counter, self._get_model_label()) < (
++                other.creation_counter,
++                other._get_model_label(),
++            )
+         return NotImplemented
+ 
+     def __hash__(self):
+-        return hash(self.creation_counter)
++        return hash((self.creation_counter, self._get_model_label()))
+ 
+     def __deepcopy__(self, memodict):
+         # We don't have to deepcopy very much here, since most things are not
+diff --git a/tests/model_fields/tests.py b/tests/model_fields/tests.py
+--- a/tests/model_fields/tests.py
++++ b/tests/model_fields/tests.py
+@@ -120,7 +120,7 @@
+         inherit1_model_field = InheritAbstractModel1._meta.get_field('field')
+         inherit2_model_field = InheritAbstractModel2._meta.get_field('field')
+ 
+-    self.assertEqual(abstract_model_field, inherit1_model_field)
++        self.assertNotEqual(abstract_model_field, inherit1_model_field)
+         self.assertNotEqual(abstract_model_field, inherit2_model_field)
+         self.assertNotEqual(inherit1_model_field, inherit2_model_field)
+ 

@@ -1,0 +1,28 @@
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -1002,6 +1002,24 @@
+             nums = [m for m in other.args if m.is_number]
+             if nums == []:
+                 return None
++            # Handle mixed numeric and symbolic elements
++            new_set = []
++            has_undetermined = False
++            for el in other:
++                c = self.contains(el)
++                if c is S.true:
++                    # Element is definitely in the interval, remove it
++                    continue
++                elif c is S.false:
++                    # Element is definitely not in the interval, keep it
++                    new_set.append(el)
++                else:
++                    # Contains is undetermined (e.g., for symbols)
++                    has_undetermined = True
++                    new_set.append(el)
++            if has_undetermined and new_set:
++                return Complement(FiniteSet(*new_set), self, evaluate=False)
++            return FiniteSet(*new_set)
+ 
+         return Set._complement(self, other)
+ 

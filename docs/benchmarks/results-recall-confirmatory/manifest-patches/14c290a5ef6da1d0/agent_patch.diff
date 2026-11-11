@@ -1,0 +1,34 @@
+diff --git a/pylint/checkers/similar.py b/pylint/checkers/similar.py
+--- a/pylint/checkers/similar.py
++++ b/pylint/checkers/similar.py
+@@ -394,6 +394,8 @@
+ 
+     def _compute_sims(self) -> List[Tuple[int, Set[LinesChunkLimits_T]]]:
+         """compute similarities in appended files"""
++        if self.min_lines == 0:
++            return []
+         no_duplicates: Dict[int, List[Set[LinesChunkLimits_T]]] = defaultdict(list)
+ 
+         for commonality in self._iter_sims():
+@@ -436,7 +438,8 @@
+     ) -> None:
+         """Display computed similarities on stdout"""
+         report = self._get_similarity_report(similarities)
+-        print(report)
++        if report:
++            print(report)
+ 
+     def _get_similarity_report(
+         self, similarities: List[Tuple[int, Set[LinesChunkLimits_T]]]
+@@ -454,8 +457,9 @@
+                 for line in line_set._real_lines[start_line:end_line]:
+                     report += f"   {line.rstrip()}\n" if line.rstrip() else "\n"
+             duplicated_line_number += number * (len(couples_l) - 1)
+-        total_line_number: int = sum(len(lineset) for lineset in self.linesets)
+-        report += f"TOTAL lines={total_line_number} duplicates={duplicated_line_number} percent={duplicated_line_number * 100.0 / total_line_number:.2f}\n"
++        if similarities:
++            total_line_number: int = sum(len(lineset) for lineset in self.linesets)
++            report += f"TOTAL lines={total_line_number} duplicates={duplicated_line_number} percent={duplicated_line_number * 100.0 / total_line_number:.2f}\n"
+         return report
+ 
+     def _find_common(

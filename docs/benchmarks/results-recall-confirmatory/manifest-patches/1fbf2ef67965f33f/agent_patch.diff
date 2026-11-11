@@ -1,0 +1,47 @@
+diff --git a/sympy/core/relational.py b/sympy/core/relational.py
+--- a/sympy/core/relational.py
++++ b/sympy/core/relational.py
+@@ -311,7 +311,10 @@
+             v = None
+             if dif.is_comparable:
+                 v = dif.n(2)
+-            elif dif.equals(0):  # XXX this is expensive
++            elif hasattr(dif, 'equals') and dif.equals(0):  # XXX this is expensive
++                v = S.Zero
++            elif getattr(dif, 'is_empty', None) is True:
++                # EmptySet indicates the two sides are equal
+                 v = S.Zero
+             if v is not None:
+                 r = r.func._eval_relation(v, S.Zero)
+diff --git a/sympy/sets/handlers/issubset.py b/sympy/sets/handlers/issubset.py
+--- a/sympy/sets/handlers/issubset.py
++++ b/sympy/sets/handlers/issubset.py
+@@ -1,7 +1,7 @@
+ from sympy import S, Symbol
+ from sympy.core.logic import fuzzy_and, fuzzy_bool, fuzzy_not, fuzzy_or
+ from sympy.core.relational import Eq
+-from sympy.sets.sets import FiniteSet, Interval, Set, Union
++from sympy.sets.sets import FiniteSet, Interval, ProductSet, Set, Union
+ from sympy.sets.fancysets import Complexes, Reals, Range, Rationals
+ from sympy.multipledispatch import dispatch
+ 
+@@ -100,6 +100,19 @@
+                 return True
+         return None
+ 
++@dispatch(ProductSet, FiniteSet)  # type: ignore # noqa:F811
++def is_subset_sets(a_productset, b_finiteset): # noqa:F811
++    # A ProductSet is a subset of a FiniteSet if:
++    # - All elements of the ProductSet are in the FiniteSet
++    # - The ProductSet must be finite and iterable
++    if a_productset.is_empty:
++        return True
++    if a_productset.is_finite_set is False:
++        return False
++    if a_productset.is_iterable:
++        return fuzzy_and(b_finiteset.contains(x) for x in a_productset)
++    return None
++
+ @dispatch(Interval, Range)  # type: ignore # noqa:F811
+ def is_subset_sets(a_interval, b_range): # noqa:F811
+     if a_interval.measure.is_extended_nonzero:

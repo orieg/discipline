@@ -1,0 +1,32 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -436,6 +436,10 @@
+             )
+             or having
+         )
++        has_existing_window = any(
++            getattr(annotation, "contains_over_clause", False)
++            for annotation in self.annotations.values()
++        )
+         # Decide if we need to use a subquery.
+         #
+         # Existing aggregations would cause incorrect results as
+@@ -446,6 +450,9 @@
+         # those operations must be done in a subquery so that the query
+         # aggregates on the limit and/or distinct results instead of applying
+         # the distinct and limit after the aggregation.
++        #
++        # Window functions also require wrapping since aggregating over
++        # window functions (e.g., SUM(AVG() OVER (...))) is not valid SQL.
+         if (
+             isinstance(self.group_by, tuple)
+             or self.is_sliced
+@@ -454,6 +461,7 @@
+             or qualify
+             or self.distinct
+             or self.combinator
++            or has_existing_window
+         ):
+             from django.db.models.sql.subqueries import AggregateQuery
+ 

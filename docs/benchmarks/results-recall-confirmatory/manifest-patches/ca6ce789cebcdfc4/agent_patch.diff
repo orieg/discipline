@@ -1,0 +1,23 @@
+diff --git a/django/db/models/enums.py b/django/db/models/enums.py
+--- a/django/db/models/enums.py
++++ b/django/db/models/enums.py
+@@ -31,6 +31,7 @@
+         # that is passed in as "self" as the value to use when looking up the
+         # label in the choices.
+         cls.label = property(lambda self: cls._value2label_map_.get(self.value))
++        cls.do_not_call_in_templates = True
+         return enum.unique(cls)
+ 
+     def __contains__(cls, member):
+diff --git a/tests/model_enums/tests.py b/tests/model_enums/tests.py
+--- a/tests/model_enums/tests.py
++++ b/tests/model_enums/tests.py
+@@ -155,6 +155,8 @@
+         output = template.render(Context({'Suit': Suit}))
+         self.assertEqual(output, 'Diamond|1')
+ 
++        template = Template('{{ Suit.SPADE.label }}|{{ Suit.SPADE.value }}')
++        output = template.render(Context({'Suit': Suit}))
+         self.assertEqual(output, 'Spade|2')
+ 
+ 

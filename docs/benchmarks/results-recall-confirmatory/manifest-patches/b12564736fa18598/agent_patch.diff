@@ -1,0 +1,17 @@
+diff --git a/django/core/paginator.py b/django/core/paginator.py
+--- a/django/core/paginator.py
++++ b/django/core/paginator.py
+@@ -98,6 +98,13 @@
+         hits = max(1, self.count - self.orphans)
+         return ceil(hits / self.per_page)
+ 
++    def __iter__(self):
++        """
++        Make the paginator object iterable, yielding each page.
++        """
++        for page_num in self.page_range:
++            yield self.page(page_num)
++
+     @property
+     def page_range(self):
+         """

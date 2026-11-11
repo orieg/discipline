@@ -1,0 +1,33 @@
+diff --git a/sympy/crypto/crypto.py b/sympy/crypto/crypto.py
+--- a/sympy/crypto/crypto.py
++++ b/sympy/crypto/crypto.py
+@@ -1520,7 +1520,7 @@
+     "..-": "U", "...-": "V",
+     ".--": "W", "-..-": "X",
+     "-.--": "Y", "--..": "Z",
+-    "-----": "0", "----": "1",
++    "-----": "0", ".----": "1",
+     "..---": "2", "...--": "3",
+     "....-": "4", ".....": "5",
+     "-....": "6", "--...": "7",
+@@ -1561,6 +1561,7 @@
+     word_sep = 2*sep
+     mapping[" "] = word_sep
+     suffix = msg and msg[-1] in whitespace
++    suffix_is_space = msg and msg[-1] == ' '
+ 
+     # normalize whitespace
+     msg = (' ' if word_sep else '').join(msg.split())
+@@ -1580,7 +1581,11 @@
+         word = sep.join(morseword)
+         morsestring.append(word)
+ 
+-    return word_sep.join(morsestring) + (word_sep if suffix else '')
++    if suffix_is_space:
++        return word_sep.join(morsestring) + word_sep
++    elif suffix:
++        return word_sep.join(morsestring) + sep
++    return word_sep.join(morsestring)
+ 
+ 
+ def decode_morse(msg, sep='|', mapping=None):

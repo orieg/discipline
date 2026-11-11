@@ -1,0 +1,30 @@
+diff --git a/django/db/backends/postgresql/client.py b/django/db/backends/postgresql/client.py
+--- a/django/db/backends/postgresql/client.py
++++ b/django/db/backends/postgresql/client.py
+@@ -4,6 +4,15 @@
+ 
+ from django.db.backends.base.client import BaseDatabaseClient
+ 
++# SSL connection parameters for PostgreSQL.
++# Map Django connection params to psql environment variables.
++SSL_ENVVAR_KEYS = {
++    'sslmode': 'PGSSLMODE',
++    'sslrootcert': 'PGSSLROOTCERT',
++    'sslcert': 'PGSSLCERT',
++    'sslkey': 'PGSSLKEY',
++}
++
+ 
+ class DatabaseClient(BaseDatabaseClient):
+     executable_name = 'psql'
+@@ -30,6 +39,10 @@
+         subprocess_env = os.environ.copy()
+         if passwd:
+             subprocess_env['PGPASSWORD'] = str(passwd)
++        for key, envvar in SSL_ENVVAR_KEYS.items():
++            value = conn_params.get(key)
++            if value:
++                subprocess_env[envvar] = str(value)
+         try:
+             # Allow SIGINT to pass to psql to abort queries.
+             signal.signal(signal.SIGINT, signal.SIG_IGN)

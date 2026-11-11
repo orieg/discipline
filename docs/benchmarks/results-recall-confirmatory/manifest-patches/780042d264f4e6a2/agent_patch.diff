@@ -1,0 +1,48 @@
+diff --git a/django/core/servers/basehttp.py b/django/core/servers/basehttp.py
+--- a/django/core/servers/basehttp.py
++++ b/django/core/servers/basehttp.py
+@@ -128,6 +128,34 @@
+             LimitedStream(stdin, content_length), stdout, stderr, environ, **kwargs
+         )
+ 
++    def finish_response(self):
++        """
++        Override to not write body for HEAD requests per RFC 7231.
++        """
++        is_head = self.environ.get("REQUEST_METHOD") == "HEAD"
++        try:
++            if is_head:
++                # HEAD requests don't include body, but we still need to iterate
++                # over result to allow WSGI middleware to run properly.
++                # Send headers but don't send body.
++                self.send_headers()
++                for _ in self.result:
++                    pass
++                self.finish_content()
++            else:
++                return super().finish_response()
++        except:
++            # Call close() on the iterable returned by the WSGI application
++            # in case of an exception.
++            if hasattr(self.result, "close"):
++                self.result.close()
++            raise
++        else:
++            if is_head:
++                # We only call close() when no exception is raised, because it
++                # will set status, result, headers, and environ fields to None.
++                self.close()
++
+     def cleanup_headers(self):
+         super().cleanup_headers()
+         # HTTP/1.1 requires support for persistent connections. Send 'close' if
+@@ -142,6 +170,9 @@
+         # application sent the header.
+         if self.headers.get("Connection") == "close":
+             self.request_handler.close_connection = True
++        # Don't set Content-Length for HEAD requests.
++        if self.environ.get("REQUEST_METHOD") == "HEAD":
++            del self.headers["Content-Length"]
+ 
+     def close(self):
+         self.get_stdin().read()

@@ -1,0 +1,15 @@
+diff --git a/django/db/models/base.py b/django/db/models/base.py
+--- a/django/db/models/base.py
++++ b/django/db/models/base.py
+@@ -808,6 +808,11 @@
+                     getattr(self, field.attname) is not None):
+                 setattr(self, parent._meta.pk.attname, getattr(self, field.attname))
+             parent_inserted = self._save_parents(cls=parent, using=using, update_fields=update_fields)
++            # If the parent pointer is None, we need to insert a new parent.
++            if field and getattr(self, field.attname) is None:
++                parent_inserted = True
++                # Also clear the parent's pk so it gets inserted with a new value.
++                setattr(self, parent._meta.pk.attname, None)
+             updated = self._save_table(
+                 cls=parent, using=using, update_fields=update_fields,
+                 force_insert=parent_inserted,

@@ -1,0 +1,13 @@
+diff --git a/django/core/validators.py b/django/core/validators.py
+--- a/django/core/validators.py
++++ b/django/core/validators.py
+@@ -105,6 +105,9 @@
+         scheme = value.split('://')[0].lower()
+         if scheme not in self.schemes:
+             raise ValidationError(self.message, code=self.code, params={'value': value})
++        # Check for control characters that should not be in URLs.
++        if any(c in value for c in ('\n', '\r', '\t')):
++            raise ValidationError(self.message, code=self.code, params={'value': value})
+ 
+         # Then check full URL
+         try:

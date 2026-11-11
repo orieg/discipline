@@ -1,0 +1,23 @@
+diff --git a/django/apps/registry.py b/django/apps/registry.py
+--- a/django/apps/registry.py
++++ b/django/apps/registry.py
+@@ -376,6 +376,7 @@
+         # Call expire cache on each model. This will purge
+         # the relation tree and the fields cache.
+         self.get_models.cache_clear()
++        self.get_swappable_settings_name.cache_clear()
+         if self.ready:
+             # Circumvent self.get_models() to prevent that the cache is refilled.
+             # This particularly prevents that an empty value is cached while cloning.
+diff --git a/tests/apps/tests.py b/tests/apps/tests.py
+--- a/tests/apps/tests.py
++++ b/tests/apps/tests.py
+@@ -205,7 +205,7 @@
+ 
+         apps.clear_cache()
+ 
+-   self.assertEqual(apps.get_swappable_settings_name.cache_info().currsize, 1)
++        self.assertEqual(apps.get_swappable_settings_name.cache_info().currsize, 0)
+         self.assertEqual(apps.get_models.cache_info().currsize, 0)
+ 
+     @override_settings(INSTALLED_APPS=["apps.apps.RelabeledAppsConfig"])

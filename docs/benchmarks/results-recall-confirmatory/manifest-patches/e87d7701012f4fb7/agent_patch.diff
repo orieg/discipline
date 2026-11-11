@@ -1,0 +1,52 @@
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -882,6 +882,29 @@
+         signode.append(nodes.Text(txt, txt))
+ 
+ 
++class ASTUserDefinedLiteral(ASTLiteral):
++    def __init__(self, literal: ASTLiteral, suffix: str) -> None:
++        self.literal = literal
++        self.suffix = suffix
++
++    def _stringify(self, transform: StringifyTransform) -> str:
++        return str(self.literal) + self.suffix
++
++    def get_id(self, version: int) -> str:
++        # Mangled format: clL_Zli<suffix_len><suffix>E<literal_id>E
++        # where cl is call expression, L...E is literal expression,
++        # _Zli<suffix_len><suffix>E is the mangled operator name
++        suffix_len = str(len(self.suffix))
++        operator_id = "_Zli" + suffix_len + self.suffix + "E"
++        literal_id = self.literal.get_id(version)
++        return "clL" + operator_id + literal_id + "E"
++
++    def describe_signature(self, signode: TextElement, mode: str,
++                           env: "BuildEnvironment", symbol: "Symbol") -> None:
++        txt = str(self)
++        signode.append(nodes.Text(txt, txt))
++
++
+ class ASTThisLiteral(ASTExpression):
+     def _stringify(self, transform: StringifyTransform) -> str:
+         return "this"
+@@ -4751,9 +4774,18 @@
+         # "(" expression ")"
+         # fold-expression
+         # id-expression -> we parse this with _parse_nested_name
++        # user-defined-literal
+         self.skip_ws()
+         res = self._parse_literal()  # type: ASTExpression
+         if res is not None:
++            # Check for user-defined literal suffix
++            self.skip_ws()
++            if self.current_char in 'a-zA-Z_~@':
++                pos = self.pos
++                if self.match(identifier_re):
++                    suffix = self.matched_text
++                    return ASTUserDefinedLiteral(res, suffix)
++                self.pos = pos
+             return res
+         self.skip_ws()
+         if self.skip_word("this"):

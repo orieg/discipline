@@ -1,0 +1,27 @@
+diff --git a/tests/roots/test-toctree-index/conf.py b/tests/roots/test-toctree-index/conf.py
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-toctree-index/conf.py
+@@ -0,0 +1,1 @@
++# empty config
+diff --git a/tests/roots/test-toctree-index/index.rst b/tests/roots/test-toctree-index/index.rst
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-toctree-index/index.rst
+@@ -0,0 +1,16 @@
++Test
++====
++
++Indices
++-------
++
++.. toctree::
++
++.. toctree::
++   :maxdepth: 1
++   :caption: Indices
++   :hidden:
++
++   genindex
++   modindex
++   search

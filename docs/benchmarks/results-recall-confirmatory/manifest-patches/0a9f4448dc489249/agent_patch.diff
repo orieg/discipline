@@ -1,0 +1,50 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -35,6 +35,32 @@
+     return False
+ 
+ 
++def _parse_annotation_for_field(annotation: str) -> Tuple[str, str]:
++    """Parse a field annotation to extract type and parameter name.
++
++    This function handles type annotations that may contain brackets,
++    such as Dict[str, str] or List[int].
++
++    Returns a tuple of (type, name) or (None, None) if parsing fails.
++    """
++    # Track bracket depth to find the first whitespace outside brackets
++    bracket_depth = 0
++    for i, char in enumerate(annotation):
++        if char in '([{':
++            bracket_depth += 1
++        elif char in ')]}':
++            bracket_depth -= 1
++        elif char.isspace() and bracket_depth == 0:
++            # Found the first whitespace outside brackets
++            # Check if there's more content after (the parameter name)
++            remainder = annotation[i + 1:].strip()
++            if remainder:
++                return annotation[:i].strip(), remainder
++
++    # No valid split point found
++    return None, None
++
++
+ class Field:
+     """A doc field that is never grouped.  It can have an argument or not, the
+     argument can be linked using a specified *rolename*.  Field should be used
+@@ -297,11 +323,8 @@
+ 
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+-                try:
+-                    argtype, argname = fieldarg.split(None, 1)
+-                except ValueError:
+-                    pass
+-                else:
++                argtype, argname = _parse_annotation_for_field(fieldarg)
++                if argtype is not None:
+                     types.setdefault(typename, {})[argname] = \
+                         [nodes.Text(argtype)]
+                     fieldarg = argname

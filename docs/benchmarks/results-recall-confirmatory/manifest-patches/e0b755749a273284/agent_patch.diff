@@ -1,0 +1,29 @@
+diff --git a/django/core/paginator.py b/django/core/paginator.py
+--- a/django/core/paginator.py
++++ b/django/core/paginator.py
+@@ -106,6 +106,13 @@
+         """
+         return range(1, self.num_pages + 1)
+ 
++    def __iter__(self):
++        """
++        Implement iterator protocol to enable iteration over pages.
++        """
++        for page_num in self.page_range:
++            yield self.page(page_num)
++
+     def _check_object_list_is_ordered(self):
+         """
+         Warn if self.object_list is unordered (typically a QuerySet).
+diff --git a/tests/pagination/tests.py b/tests/pagination/tests.py
+--- a/tests/pagination/tests.py
++++ b/tests/pagination/tests.py
+@@ -300,7 +300,7 @@
+     def test_paginator_iteration(self):
+         paginator = Paginator([1, 2, 3], 2)
+         page_iterator = iter(paginator)
+-        for page, expected in enumerate(([1, 3], [3]), start=1):
++        for page, expected in enumerate(([1, 2], [3]), start=1):
+             with self.subTest(page=page):
+                 self.assertEqual(expected, list(next(page_iterator)))
+ 

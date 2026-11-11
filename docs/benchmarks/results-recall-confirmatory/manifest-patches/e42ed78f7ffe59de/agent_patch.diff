@@ -1,0 +1,27 @@
+diff --git a/sympy/polys/matrices/normalforms.py b/sympy/polys/matrices/normalforms.py
+--- a/sympy/polys/matrices/normalforms.py
++++ b/sympy/polys/matrices/normalforms.py
+@@ -232,10 +232,20 @@
+             add_columns(A, k, k, -1, 0, -1, 0)
+             b = -b
+         # The pivot entry will be 0 iff the row was 0 from the pivot col all the
+-        # way to the left. In this case, we are still working on the same pivot
+-        # col for the next row. Therefore:
++        # way to the left. In this case, we need to search for a nonzero entry
++        # in columns k+1, k+2, ..., n-1. If found, swap columns and use that
++        # as the pivot. If not found, we are still working on the same pivot
++        # col for the next row.
+         if b == 0:
+-            k += 1
++            for j in range(k + 1, n):
++                if A[i][j] != 0:
++                    # Swap columns j and k
++                    for row in A:
++                        row[k], row[j] = row[j], row[k]
++                    b = A[i][k]
++                    break
++            else:
++                k += 1
+         # If the pivot entry is nonzero, then we want to reduce all entries to its
+         # right in the sense of the division algorithm, i.e. make them all remainders
+         # w.r.t. the pivot as divisor.

@@ -1,0 +1,31 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -571,6 +571,27 @@
+                     None,
+                     True
+                 ))
++            # Depend on any field removals from base models where this model
++            # has a field with the same name to avoid FieldError at runtime.
++            # This handles the case where a field is moved from a base model
++            # to a new subclass in the same migration.
++            base_field_removals = []
++            local_field_names = {field.name for field in model_opts.local_fields}
++            for base in model_state.bases:
++                if isinstance(base, str) and "." in base:
++                    base_app_label, base_name = base.split(".", 1)
++                    # Check if this base is being kept and has a field being removed
++                    if (base_app_label, base_name) in self.kept_model_keys:
++                        for field_name in model_state.fields:
++                            if field_name in local_field_names:
++                                # Check if this field is being removed from the base
++                                if (base_app_label, base_name, field_name) in (
++                                    self.old_field_keys - self.new_field_keys
++                                ):
++                                    base_field_removals.append(
++                                        (base_app_label, base_name, field_name, False)
++                                    )
++            dependencies.extend(base_field_removals)
+             # Generate creation operation
+             self.add_operation(
+                 app_label,

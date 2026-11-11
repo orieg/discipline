@@ -1,0 +1,16 @@
+diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
+--- a/sphinx/ext/autodoc/typehints.py
++++ b/sphinx/ext/autodoc/typehints.py
+@@ -29,7 +29,11 @@
+                 if param.annotation is not param.empty:
+                     annotation[param.name] = typing.stringify(param.annotation, mode)
+             if sig.return_annotation is not sig.empty:
+-                annotation['return'] = typing.stringify(sig.return_annotation, mode)
++                # For classes, __init__ always returns None, so we don't need to
++                # record it in the annotations. The return annotation of the class
++                # signature is the same as __init__'s return annotation.
++                if objtype != 'class':
++                    annotation['return'] = typing.stringify(sig.return_annotation, mode)
+     except (TypeError, ValueError):
+         pass
+ 

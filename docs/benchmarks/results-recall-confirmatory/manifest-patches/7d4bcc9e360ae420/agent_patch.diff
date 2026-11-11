@@ -1,0 +1,42 @@
+diff --git a/django/contrib/auth/checks.py b/django/contrib/auth/checks.py
+--- a/django/contrib/auth/checks.py
++++ b/django/contrib/auth/checks.py
+@@ -4,10 +4,26 @@
+ from django.apps import apps
+ from django.conf import settings
+ from django.core import checks
++from django.db.models import UniqueConstraint
+ 
+ from .management import _get_builtin_permissions
+ 
+ 
++def _is_field_uniquely_constrained(model, field):
++    """
++    Check if a field is uniquely constrained via a model constraint (not
++    field-level unique=True).
++    """
++    for constraint in model._meta.constraints:
++        if (
++            isinstance(constraint, UniqueConstraint)
++            and constraint.condition is None
++            and field.name in constraint.fields
++        ):
++            return True
++    return False
++
++
+ def check_user_model(app_configs=None, **kwargs):
+     if app_configs is None:
+         cls = apps.get_model(settings.AUTH_USER_MODEL)
+@@ -52,7 +68,10 @@
+         )
+ 
+     # Check that the username field is unique
+-    if not cls._meta.get_field(cls.USERNAME_FIELD).unique:
++    username_field = cls._meta.get_field(cls.USERNAME_FIELD)
++    if not username_field.unique and not _is_field_uniquely_constrained(
++        cls, username_field,
++    ):
+         if (settings.AUTHENTICATION_BACKENDS ==
+                 ['django.contrib.auth.backends.ModelBackend']):
+             errors.append(

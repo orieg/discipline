@@ -1,0 +1,21 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -571,6 +571,17 @@
+                     None,
+                     True
+                 ))
++            # Depend on the removal of any fields from base models that the new
++            # model explicitly declares, to avoid clashes (e.g., #21890).
++            removed_fields = self.old_field_keys - self.new_field_keys
++            for base in model_state.bases:
++                if isinstance(base, str) and "." in base:
++                    base_app_label, base_name = base.split(".", 1)
++                    for field_name in model_state.fields:
++                        if (base_app_label, base_name, field_name) in removed_fields:
++                            dependencies.append((
++                                base_app_label, base_name, field_name, False,
++                            ))
+             # Generate creation operation
+             self.add_operation(
+                 app_label,

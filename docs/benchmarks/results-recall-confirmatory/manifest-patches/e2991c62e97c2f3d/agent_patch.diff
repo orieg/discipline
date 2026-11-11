@@ -1,0 +1,66 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -95,7 +95,7 @@
+     """
+     show_last = {
+         '--version', '--verbosity', '--traceback', '--settings', '--pythonpath',
+-        '--no-color', '--force-color',
++        '--no-color', '--force-color', '--skip-checks',
+     }
+ 
+     def _reordered_actions(self, actions):
+@@ -286,6 +286,10 @@
+             '--force-color', action='store_true',
+             help='Force colorization of the command output.',
+         )
++        parser.add_argument(
++            '--skip-checks', action='store_true',
++            help='Disable system checks.',
++        )
+         self.add_arguments(parser)
+         return parser
+ 
+diff --git a/tests/admin_scripts/tests.py b/tests/admin_scripts/tests.py
+--- a/tests/admin_scripts/tests.py
++++ b/tests/admin_scripts/tests.py
+@@ -911,7 +911,8 @@
+             out,
+             "EXECUTE: noargs_command options=[('force_color', False), "
+             "('no_color', False), ('pythonpath', None), ('settings', "
+-            "'alternate_settings'), ('traceback', False), ('verbosity', 1)]"
++            "'alternate_settings'), ('skip_checks', False), "
++            "('traceback', False), ('verbosity', 1)]"
+         )
+         self.assertNoOutput(err)
+ 
+@@ -923,7 +924,7 @@
+             out,
+             "EXECUTE: noargs_command options=[('force_color', False), "
+             "('no_color', False), ('pythonpath', None), ('settings', None), "
+-            "('traceback', False), ('verbosity', 1)]"
++            "('skip_checks', False), ('traceback', False), ('verbosity', 1)]"
+         )
+         self.assertNoOutput(err)
+ 
+@@ -935,7 +936,8 @@
+             out,
+             "EXECUTE: noargs_command options=[('force_color', False), "
+             "('no_color', True), ('pythonpath', None), ('settings', "
+-            "'alternate_settings'), ('traceback', False), ('verbosity', 1)]"
++            "'alternate_settings'), ('skip_checks', False), "
++            "('traceback', False), ('verbosity', 1)]"
+         )
+         self.assertNoOutput(err)
+ 
+diff --git a/tests/user_commands/tests.py b/tests/user_commands/tests.py
+--- a/tests/user_commands/tests.py
++++ b/tests/user_commands/tests.py
+@@ -262,7 +262,6 @@
+         out, err = self.run_manage(['set_option', '--skip-checks', '--set', 'foo'])
+         self.assertNoOutput(err)
+         self.assertEqual(out.strip(), 'Set foo')
+-    self.assertEqual(out.strip(), 'Set bar')
+ 
+ 
+ class UtilsTests(SimpleTestCase):

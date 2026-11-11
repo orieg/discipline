@@ -1,0 +1,54 @@
+diff --git a/django/views/generic/base.py b/django/views/generic/base.py
+--- a/django/views/generic/base.py
++++ b/django/views/generic/base.py
+@@ -159,8 +159,23 @@
+     def get(self, request, *args, **kwargs):
+         # RemovedInDjango40Warning: when the deprecation ends, replace with:
+         #   context = self.get_context_data()
+-        context_kwargs = _wrap_url_kwargs_with_deprecation_warning(kwargs)
+-        context = self.get_context_data(**context_kwargs)
++        # Store the original kwargs and their lazy-wrapped versions.
++        # The lazy-wrapped versions will be used for the context (with deprecation
++        # warning), while the original values will be used for get_context_data.
++        original_kwargs = {}
++        context_kwargs = {}
++        for key, value in kwargs.items():
++            original_kwargs[key] = value
++            context_kwargs[key] = _wrap_url_kwarg_for_context(key, value)
++        # Pass original (non-lazy) values to get_context_data so user code
++        # works correctly (e.g., database queries).
++        context = self.get_context_data(**original_kwargs)
++        # Replace resolved values in the context with lazy objects for
++        # backward compatibility. The deprecation warning will fire when
++        # the context value is accessed (e.g., in templates).
++        for key in kwargs:
++            if key in context:
++                context[key] = context_kwargs[key]
+         return self.render_to_response(context)
+ 
+ 
+@@ -182,6 +197,24 @@
+     return context_kwargs
+ 
+ 
++# RemovedInDjango40Warning
++def _wrap_url_kwarg_for_context(key, value):
++    """
++    Wrap a single value with a deprecation warning. This is used to create
++    fresh lazy objects for the context.
++    """
++    @SimpleLazyObject
++    def access_value(key=key, value=value):
++        warnings.warn(
++            'TemplateView passing URL kwargs to the context is '
++            'deprecated. Reference %s in your template through '
++            'view.kwargs instead.' % key,
++            RemovedInDjango40Warning, stacklevel=2,
++        )
++        return value
++    return access_value
++
++
+ class RedirectView(View):
+     """Provide a redirect on any GET request."""
+     permanent = False

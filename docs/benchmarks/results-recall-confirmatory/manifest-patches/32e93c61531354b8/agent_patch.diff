@@ -1,0 +1,36 @@
+diff --git a/django/core/servers/basehttp.py b/django/core/servers/basehttp.py
+--- a/django/core/servers/basehttp.py
++++ b/django/core/servers/basehttp.py
+@@ -130,10 +130,16 @@
+ 
+     def cleanup_headers(self):
+         super().cleanup_headers()
++        # HEAD requests must not return a body or Content-Length header per
++        # RFC 2616 section 9.4.
++        head_request = self.environ.get("REQUEST_METHOD") == "HEAD"
++        if head_request:
++            if "Content-Length" in self.headers:
++                del self.headers["Content-Length"]
+         # HTTP/1.1 requires support for persistent connections. Send 'close' if
+         # the content length is unknown to prevent clients from reusing the
+         # connection.
+-        if "Content-Length" not in self.headers:
++        if "Content-Length" not in self.headers and not head_request:
+             self.headers["Connection"] = "close"
+         # Persistent connections require threading server.
+         elif not isinstance(self.request_handler.server, socketserver.ThreadingMixIn):
+@@ -143,6 +149,14 @@
+         if self.headers.get("Connection") == "close":
+             self.request_handler.close_connection = True
+ 
++    def write(self, data):
++        # Don't write body for HEAD requests as per RFC 2616 section 9.4.
++        # The headers are already sent by super().write() but we need to
++        # prevent the body from being written.
++        if self.environ.get("REQUEST_METHOD") == "HEAD":
++            return
++        super().write(data)
++
+     def close(self):
+         self.get_stdin().read()
+         super().close()

@@ -1,0 +1,118 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -173,14 +173,23 @@
+                    items: Tuple, env: BuildEnvironment = None) -> nodes.field:
+         def handle_item(fieldarg: str, content: str) -> nodes.paragraph:
+             par = nodes.paragraph()
+-            par.extend(self.make_xrefs(self.rolename, domain, fieldarg,
++            # Extract parameter name and type annotation from fieldarg
++            # e.g., "Dict[str, str] params" -> name="params", type="Dict[str, str]"
++            fieldname, fieldtype = _extract_arg_and_type(fieldarg)
++            par.extend(self.make_xrefs(self.rolename, domain, fieldname,
+                                        addnodes.literal_strong, env=env))
+-            if fieldarg in types:
++            # Use fieldtype if provided, otherwise look up in types
++            if fieldtype:
++                par += nodes.Text(' (')
++                par.extend(self.make_xrefs(self.typerolename, domain, fieldtype,
++                                           addnodes.literal_emphasis, env=env))
++                par += nodes.Text(')')
++            elif fieldname in types:
+                 par += nodes.Text(' (')
+                 # NOTE: using .pop() here to prevent a single type node to be
+                 # inserted twice into the doctree, which leads to
+                 # inconsistencies later when references are resolved
+-                fieldtype = types.pop(fieldarg)
++                fieldtype = types.pop(fieldname)
+                 if len(fieldtype) == 1 and isinstance(fieldtype[0], nodes.Text):
+                     typename = fieldtype[0].astext()
+                     par.extend(self.make_xrefs(self.typerolename, domain, typename,
+@@ -204,6 +213,72 @@
+         return nodes.field('', fieldname, fieldbody)
+ 
+ 
++def _extract_arg_and_type(fieldarg: str) -> Tuple[str, str]:
++    """
++    Extract parameter name and type annotation from a field argument.
++    
++    Examples:
++        'params' -> ('params', '')
++        'Dict[str, str] params' -> ('params', 'Dict[str, str]')
++        'dict(str, str) opc_meta' -> ('opc_meta', 'dict(str, str)')
++        'List[int] items' -> ('items', 'List[int]')
++        'str name' -> ('name', 'str')
++        'int age' -> ('age', 'int')
++    """
++    fieldarg = fieldarg.strip()
++    
++    # Find the first bracket or parenthesis
++    bracket_start = None
++    paren_start = None
++    
++    for i, c in enumerate(fieldarg):
++        if c == '[':
++            bracket_start = i
++            break
++        elif c == '(':
++            paren_start = i
++            break
++    
++    if bracket_start is not None:
++        # Find matching ]
++        depth = 0
++        for i in range(bracket_start, len(fieldarg)):
++            if fieldarg[i] == '[':
++                depth += 1
++            elif fieldarg[i] == ']':
++                depth -= 1
++                if depth == 0:
++                    bracket_end = i
++                    break
++        if depth == 0:
++            type_part = fieldarg[:bracket_end + 1]
++            name_part = fieldarg[bracket_end + 1:].strip()
++            return name_part, type_part
++    elif paren_start is not None:
++        # Find matching )
++        depth = 0
++        for i in range(paren_start, len(fieldarg)):
++            if fieldarg[i] == '(':
++                depth += 1
++            elif fieldarg[i] == ')':
++                depth -= 1
++                if depth == 0:
++                    paren_end = i
++                    break
++        if depth == 0:
++            type_part = fieldarg[:paren_end + 1]
++            name_part = fieldarg[paren_end + 1:].strip()
++            return name_part, type_part
++    else:
++        # No brackets or parens - try to split on whitespace
++        # to get "type name" pattern
++        parts = fieldarg.split(None, 1)
++        if len(parts) == 2:
++            return parts[1], parts[0]
++    
++    return fieldarg, ''
++
++
+ class DocFieldTransformer:
+     """
+     Transforms field lists in "doc field" syntax into better-looking
+@@ -297,11 +372,9 @@
+ 
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+-                try:
+-                    argtype, argname = fieldarg.split(None, 1)
+-                except ValueError:
+-                    pass
+-                else:
++                # Use _extract_arg_and_type to properly handle types with brackets/parens
++                argname, argtype = _extract_arg_and_type(fieldarg)
++                if argtype:
+                     types.setdefault(typename, {})[argname] = \
+                         [nodes.Text(argtype)]
+                     fieldarg = argname

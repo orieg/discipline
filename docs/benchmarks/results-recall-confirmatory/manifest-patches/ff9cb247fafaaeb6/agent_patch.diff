@@ -1,0 +1,22 @@
+diff --git a/django/forms/fields.py b/django/forms/fields.py
+--- a/django/forms/fields.py
++++ b/django/forms/fields.py
+@@ -200,6 +200,7 @@
+         memo[id(self)] = result
+         result.widget = copy.deepcopy(self.widget, memo)
+         result.validators = self.validators[:]
++        result.error_messages = self.error_messages.copy()
+         return result
+ 
+ 
+diff --git a/tests/forms_tests/tests/test_forms.py b/tests/forms_tests/tests/test_forms.py
+--- a/tests/forms_tests/tests/test_forms.py
++++ b/tests/forms_tests/tests/test_forms.py
+@@ -3694,7 +3694,6 @@
+         field = CustomCharField()
+         field_copy = copy.deepcopy(field)
+         self.assertIsInstance(field_copy, CustomCharField)
+-    self.assertIs(field_copy.error_messages, field.error_messages)
+         self.assertIsNot(field_copy.error_messages, field.error_messages)
+ 
+ 

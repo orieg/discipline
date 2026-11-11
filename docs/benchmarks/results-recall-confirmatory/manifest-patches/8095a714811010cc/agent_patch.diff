@@ -1,0 +1,24 @@
+diff --git a/astropy/units/core.py b/astropy/units/core.py
+--- a/astropy/units/core.py
++++ b/astropy/units/core.py
+@@ -1710,15 +1710,17 @@
+         _unrecognized_operator
+ 
+     def __eq__(self, other):
+-        other = Unit(other, parse_strict='silent')
++        try:
++            other = Unit(other, parse_strict='silent')
++        except (ValueError, UnitsError, TypeError):
++            return False
+         return isinstance(other, UnrecognizedUnit) and self.name == other.name
+ 
+     def __ne__(self, other):
+         return not (self == other)
+ 
+     def is_equivalent(self, other, equivalencies=None):
+-        self._normalize_equivalencies(equivalencies)
+-        return self == other
++        return False
+ 
+     def _get_converter(self, other, equivalencies=None):
+         self._normalize_equivalencies(equivalencies)

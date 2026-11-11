@@ -1,0 +1,38 @@
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+@@ -136,6 +136,9 @@
+     )
+     if match:
+         kw = match.groupdict()
++        # Check if standard_duration_re matched without a day component
++        # (for handling negative durations correctly)
++        has_days = kw.get('days') is not None
+         days = datetime.timedelta(float(kw.pop('days', 0) or 0))
+         sign = -1 if kw.pop('sign', '+') == '-' else 1
+         if kw.get('microseconds'):
+@@ -143,4 +146,15 @@
+         if kw.get('seconds') and kw.get('microseconds') and kw['seconds'].startswith('-'):
+             kw['microseconds'] = '-' + kw['microseconds']
+         kw = {k: float(v) for k, v in kw.items() if v is not None}
++        # Handle negative durations for standard_duration_re.
++        # When the input starts with '-' and there's no day component
++        # (standard format, not Python format), all time components should
++        # be negative. Also reject inputs with multiple '-' signs (e.g., '-01:-01').
++        if 'sign' not in kw and not has_days:  # standard_duration_re matched
++            if value.startswith('-') and value.count('-') > 1:
++                # Invalid: multiple '-' signs in a standard format duration
++                return None
++            if value.startswith('-'):
++                # Negate all time components to ensure the entire duration is negative
++                kw = {k: -abs(v) for k, v in kw.items()}
+         return days + sign * datetime.timedelta(**kw)

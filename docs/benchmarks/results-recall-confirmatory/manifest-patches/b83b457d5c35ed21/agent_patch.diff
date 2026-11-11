@@ -1,0 +1,13 @@
+diff --git a/django/forms/widgets.py b/django/forms/widgets.py
+--- a/django/forms/widgets.py
++++ b/django/forms/widgets.py
+@@ -387,6 +387,9 @@
+     def value_omitted_from_data(self, data, files, name):
+         return name not in files
+ 
++    def use_required_attribute(self, initial):
++        return not initial
++
+ 
+ FILE_INPUT_CONTRADICTION = object()
+ 

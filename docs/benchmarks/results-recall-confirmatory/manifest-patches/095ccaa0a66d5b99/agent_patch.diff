@@ -1,0 +1,29 @@
+diff --git a/settings.py b/settings.py
+new file mode 100644
+--- /dev/null
++++ b/settings.py
+@@ -0,0 +1,10 @@
++
++SECRET_KEY = 'test'
++DATABASES = {
++    'default': {
++        'ENGINE': 'django.db.backends.sqlite3',
++        'NAME': ':memory:',
++    }
++}
++INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth']
++ROOT_URLCONF = ''
+diff --git a/test_sqlite/__init__.py b/test_sqlite/__init__.py
+new file mode 100644
+diff --git a/test_sqlite/settings.py b/test_sqlite/settings.py
+new file mode 100644
+--- /dev/null
++++ b/test_sqlite/settings.py
+@@ -0,0 +1,7 @@
++
++SECRET_KEY = 'test'
++DATABASES = {
++    'ENGINE': 'django.db.backends.sqlite3',
++    'NAME': ':memory:',
++}
++INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth']

@@ -1,0 +1,20 @@
+diff --git a/sklearn/pipeline.py b/sklearn/pipeline.py
+--- a/sklearn/pipeline.py
++++ b/sklearn/pipeline.py
+@@ -219,6 +219,16 @@
+             return self.named_steps[ind]
+         return est
+ 
++    def __len__(self):
++        """Return the number of steps in the pipeline.
++
++        Returns
++        -------
++        n_steps : int
++            The number of steps in the pipeline.
++        """
++        return len(self.steps)
++
+     @property
+     def _estimator_type(self):
+         return self.steps[-1][1]._estimator_type

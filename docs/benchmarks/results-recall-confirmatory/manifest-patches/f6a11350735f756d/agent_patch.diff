@@ -1,0 +1,63 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -95,7 +95,7 @@
+     """
+     show_last = {
+         '--version', '--verbosity', '--traceback', '--settings', '--pythonpath',
+-        '--no-color', '--force-color',
++        '--no-color', '--force-color', '--skip-checks',
+     }
+ 
+     def _reordered_actions(self, actions):
+@@ -286,6 +286,10 @@
+             '--force-color', action='store_true',
+             help='Force colorization of the command output.',
+         )
++        parser.add_argument(
++            '--skip-checks', action='store_true',
++            help='Ignore system checks.',
++        )
+         self.add_arguments(parser)
+         return parser
+ 
+diff --git a/tests/admin_scripts/tests.py b/tests/admin_scripts/tests.py
+--- a/tests/admin_scripts/tests.py
++++ b/tests/admin_scripts/tests.py
+@@ -1612,8 +1612,8 @@
+             "EXECUTE:BaseCommand labels=%s, "
+             "options=[('force_color', False), ('no_color', False), "
+             "('option_a', %s), ('option_b', %s), ('option_c', '3'), "
+-            "('pythonpath', None), ('settings', None), ('traceback', False), "
+-            "('verbosity', 1)]") % (labels, option_a, option_b)
++            "('pythonpath', None), ('settings', None), ('skip_checks', False), "
++            "('traceback', False), ('verbosity', 1)]") % (labels, option_a, option_b)
+         self.assertNoOutput(err)
+         self.assertOutput(out, expected_out)
+ 
+@@ -1856,8 +1856,8 @@
+             "EXECUTE:BaseCommand labels=('testlabel',), options=["
+             "('force_color', False), ('no_color', False), ('option_a', 'x'), "
+             "('option_b', %s), ('option_c', '3'), ('pythonpath', None), "
+-            "('settings', 'alternate_settings'), ('traceback', False), "
+-            "('verbosity', 1)]" % option_b
++            "('settings', 'alternate_settings'), ('skip_checks', False), "
++            "('traceback', False), ('verbosity', 1)]" % option_b
+         )
+ 
+ 
+diff --git a/tests/user_commands/tests.py b/tests/user_commands/tests.py
+--- a/tests/user_commands/tests.py
++++ b/tests/user_commands/tests.py
+@@ -259,9 +259,9 @@
+             # list.
+             'STATICFILES_DIRS': '"foo"',
+         })
+-        out, err = self.run_manage(['set_option', '--skip-checks', '--set', 'foo'])
++        out, err = self.run_manage(['set_option', '--skip-checks', '--set', 'bar'])
+         self.assertNoOutput(err)
+-    self.assertEqual(out.strip(), 'Set bar')
++        self.assertEqual(out.strip(), 'Set bar')
+ 
+ 
+ class UtilsTests(SimpleTestCase):

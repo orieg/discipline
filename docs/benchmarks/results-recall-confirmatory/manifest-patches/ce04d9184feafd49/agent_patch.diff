@@ -1,0 +1,30 @@
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -261,7 +261,14 @@
+ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+     outcome = yield
+     rep = outcome.get_result()
+-    xfailed = item._store.get(xfailed_key, None)
++
++    # Re-evaluate xfail marks to pick up any dynamically added markers,
++    # but only if the test was actually run (call phase).
++    if rep.when == "call":
++        xfailed = evaluate_xfail_marks(item)
++        item._store[xfailed_key] = xfailed
++    else:
++        xfailed = item._store.get(xfailed_key, None)
+     # unittest special case, see setting of unexpectedsuccess_key
+     if unexpectedsuccess_key in item._store and rep.when == "call":
+         reason = item._store[unexpectedsuccess_key]
+diff --git a/testing/test_skipping.py b/testing/test_skipping.py
+--- a/testing/test_skipping.py
++++ b/testing/test_skipping.py
+@@ -438,7 +438,6 @@
+         )
+         result = testdir.runpytest(p)
+         result.assert_outcomes(xfailed=1)
+-    result.assert_outcomes(passed=1)
+ 
+     def test_dynamic_xfail_set_during_runtest_passed_strict(
+         self, testdir: Testdir

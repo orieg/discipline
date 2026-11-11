@@ -1,0 +1,23 @@
+diff --git a/django/core/servers/basehttp.py b/django/core/servers/basehttp.py
+--- a/django/core/servers/basehttp.py
++++ b/django/core/servers/basehttp.py
+@@ -143,6 +143,19 @@
+         if self.headers.get("Connection") == "close":
+             self.request_handler.close_connection = True
+ 
++    def finish_response(self):
++        """
++        Strip the body for HEAD requests to be RFC 2616 compliant.
++        """
++        if self.environ.get("REQUEST_METHOD") == "HEAD":
++            # Iterate over result to consume it without writing to output.
++            for data in self.result:
++                pass
++            self.finish_content()
++            self.close()
++            return
++        super().finish_response()
++
+     def close(self):
+         self.get_stdin().read()
+         super().close()

@@ -1,0 +1,32 @@
+diff --git a/django/db/backends/sqlite3/base.py b/django/db/backends/sqlite3/base.py
+--- a/django/db/backends/sqlite3/base.py
++++ b/django/db/backends/sqlite3/base.py
+@@ -64,8 +64,13 @@
+ 
+ 
+ def check_sqlite_version():
+-    if Database.sqlite_version_info < (3, 8, 3):
+-        raise ImproperlyConfigured('SQLite 3.8.3 or later is required (found %s).' % Database.sqlite_version)
++    if not hasattr(check_sqlite_version, '_checked'):
++        if Database.sqlite_version_info < (3, 9, 0):
++            check_sqlite_version._checked = True
++            raise ImproperlyConfigured(
++                'SQLite 3.9.0 or later is required (found %s).' % Database.sqlite_version
++            )
++        # If version is OK, don't set flag so tests can mock old version
+ 
+ 
+ check_sqlite_version()
+diff --git a/django/db/backends/sqlite3/introspection.py b/django/db/backends/sqlite3/introspection.py
+--- a/django/db/backends/sqlite3/introspection.py
++++ b/django/db/backends/sqlite3/introspection.py
+@@ -381,8 +381,7 @@
+         # Get the index info
+         cursor.execute("PRAGMA index_list(%s)" % self.connection.ops.quote_name(table_name))
+         for row in cursor.fetchall():
+-            # SQLite 3.8.9+ has 5 columns, however older versions only give 3
+-            # columns. Discard last 2 columns if there.
++            # SQLite 3.9.0+ has 5 columns, but we only need the first 3.
+             number, index, unique = row[:3]
+             cursor.execute(
+                 "SELECT sql FROM sqlite_master "

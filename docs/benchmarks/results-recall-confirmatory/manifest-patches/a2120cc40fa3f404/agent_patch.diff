@@ -1,0 +1,31 @@
+diff --git a/sympy/printing/mathematica.py b/sympy/printing/mathematica.py
+--- a/sympy/printing/mathematica.py
++++ b/sympy/printing/mathematica.py
+@@ -6,6 +6,7 @@
+ from sympy.printing.codeprinter import CodePrinter
+ from sympy.printing.str import StrPrinter
+ from sympy.printing.precedence import precedence
++from sympy.core.function import AppliedUndef
+ 
+ # Used in MCodePrinter._print_Function(self)
+ known_functions = {
+@@ -94,12 +95,17 @@
+     _print_Tuple = _print_list
+ 
+     def _print_Function(self, expr):
+-        if expr.func.__name__ in self.known_functions:
++        if isinstance(expr, AppliedUndef):
++            # User-defined functions use parentheses
++            return "%s(%s)" % (expr.func.__name__, self.stringify(expr.args, ", "))
++        elif expr.func.__name__ in self.known_functions:
+             cond_mfunc = self.known_functions[expr.func.__name__]
+             for cond, mfunc in cond_mfunc:
+                 if cond(*expr.args):
+                     return "%s[%s]" % (mfunc, self.stringify(expr.args, ", "))
+-        return expr.func.__name__ + "[%s]" % self.stringify(expr.args, ", ")
++        return "%s[%s]" % (expr.func.__name__, self.stringify(expr.args, ", "))
++    # Override _print_Expr to use our _print_Function
++    _print_Expr = _print_Function
+ 
+     def _print_Integral(self, expr):
+         if len(expr.variables) == 1 and not expr.limits[0][1:]:

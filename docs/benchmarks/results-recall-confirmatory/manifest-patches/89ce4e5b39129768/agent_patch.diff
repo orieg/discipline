@@ -1,0 +1,33 @@
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -166,6 +166,17 @@
+         return "{" + ", ".join(self.visit(e) for e in node.elts) + "}"
+ 
+     def visit_Subscript(self, node: ast.Subscript) -> str:
++        def is_simple_tuple(slice_value):
++            """Check if the slice is a simple tuple (no starred elements)."""
++            return (isinstance(slice_value, ast.Tuple) and
++                    slice_value.elts and
++                    not any(isinstance(elt, ast.Starred) for elt in slice_value.elts))
++
++        if is_simple_tuple(node.slice):
++            # For simple tuples in subscript, traverse elements directly without
++            # wrapping in parentheses (e.g., Tuple[int, int] not Tuple[(int, int)])
++            return "%s[%s]" % (self.visit(node.value),
++                               ", ".join(self.visit(elt) for elt in node.slice.elts))
+         return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
+ 
+     def visit_UnaryOp(self, node: ast.UnaryOp) -> str:
+@@ -173,7 +184,10 @@
+ 
+     def visit_Tuple(self, node: ast.Tuple) -> str:
+         if node.elts:
+-            return ", ".join(self.visit(e) for e in node.elts)
++            if len(node.elts) == 1:
++                # Single-element tuple requires a trailing comma
++                return "(%s,)" % self.visit(node.elts[0])
++            return "(" + ", ".join(self.visit(e) for e in node.elts) + ")"
+         else:
+             return "()"
+ 

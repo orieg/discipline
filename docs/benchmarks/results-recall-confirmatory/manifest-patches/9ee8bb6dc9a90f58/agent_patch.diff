@@ -1,0 +1,30 @@
+diff --git a/sympy/concrete/products.py b/sympy/concrete/products.py
+--- a/sympy/concrete/products.py
++++ b/sympy/concrete/products.py
+@@ -276,17 +276,15 @@
+ 
+         elif term.is_Add:
+             p, q = term.as_numer_denom()
+-            q = self._eval_product(q, (k, a, n))
+-            if q.is_Number:
+-
+-                # There is expression, which couldn't change by
+-                # as_numer_denom(). E.g. n**(2/3) + 1 --> (n**(2/3) + 1, 1).
+-                # We have to catch this case.
+-
+-                p = sum([self._eval_product(i, (k, a, n)) for i in p.as_coeff_Add()])
+-            else:
+-                p = self._eval_product(p, (k, a, n))
+-            return p / q
++            # If both numerator and denominator are polynomials in k,
++            # we can evaluate the product of each separately.
++            # For example, Product(1 + 1/k, (k, 1, n)) = Product(k + 1, ...) / Product(k, ...)
++            if p.is_polynomial(k) and q.is_polynomial(k):
++                p_result = self._eval_product(p, (k, a, n))
++                q_result = self._eval_product(q, (k, a, n))
++                if p_result is not None and q_result is not None:
++                    return p_result / q_result
++            return None
+ 
+         elif term.is_Mul:
+             exclude, include = [], []

@@ -1,0 +1,14 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -754,7 +754,9 @@
+                 # (if it's not a reverse relation) to the things we select.
+                 if not is_reverse_o2o(source):
+                     must_include[old_model].add(source)
+-                add_to_dict(must_include, cur_model, opts.pk)
++                # Use concrete_model to handle proxy models correctly, since
++                # field.model in get_default_columns uses the concrete model.
++                add_to_dict(must_include, opts.concrete_model, opts.pk)
+             field = opts.get_field(parts[-1])
+             is_reverse_object = field.auto_created and not field.concrete
+             model = field.related_model if is_reverse_object else field.model

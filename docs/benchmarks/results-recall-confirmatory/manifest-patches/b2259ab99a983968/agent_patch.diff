@@ -1,0 +1,166 @@
+diff --git a/classes_no_name.dot b/classes_no_name.dot
+new file mode 100644
+--- /dev/null
++++ b/classes_no_name.dot
+@@ -0,0 +1,9 @@
++digraph "classes_no_name" {
++charset="utf-8"
++rankdir=BT
++"0" [label="{Ancestor|attr : str\lcls_member\l|get_value()\lset_value(value)\l}", shape="record"];
++"1" [label="{DoNothing|\l|}", shape="record"];
++"2" [label="{Interface|\l|get_value()\lset_value(value)\l}", shape="record"];
++"3" [label="{Specialization|TYPE : str\lrelation\ltop : str\l|}", shape="record"];
++"3" -> "0" [arrowhead="empty", arrowtail="none"];
++}
+diff --git a/packages_no_name.dot b/packages_no_name.dot
+new file mode 100644
+--- /dev/null
++++ b/packages_no_name.dot
+@@ -0,0 +1,7 @@
++digraph "packages_no_name" {
++charset="utf-8"
++rankdir=BT
++"0" [label="/testbed/tests/data/__init__.py", shape="box"];
++"1" [label="/testbed/tests/data/clientmodule_test.py", shape="box"];
++"2" [label="/testbed/tests/data/suppliermodule_test.py", shape="box"];
++}
+diff --git a/pylint/pyreverse/utils.py b/pylint/pyreverse/utils.py
+--- a/pylint/pyreverse/utils.py
++++ b/pylint/pyreverse/utils.py
+@@ -20,6 +20,8 @@
+ import re
+ import sys
+ 
++import astroid
++
+ RCFILE = ".pyreverserc"
+ 
+ 
+@@ -213,3 +215,127 @@
+         if methods[1] is not None:
+             return methods[1](node)
+         return None
++
++
++def _get_annotation_from_assignattr(node):
++    """Get annotation from an AssignAttr node by looking up the function parameter."""
++    # Navigate up to find the function definition
++    # For self.x = ..., the parent chain is:
++    # AssignAttr -> Assign -> FunctionDef
++    parent = node.parent
++    if parent is None:
++        return None
++    if isinstance(parent, astroid.Assign):
++        parent = parent.parent
++    if parent is None:
++        return None
++    if isinstance(parent, astroid.FunctionDef):
++        funcdef = parent
++        attr_name = node.attrname
++        # Find the argument with matching name
++        for arg in funcdef.args.args:
++            if arg.name == attr_name:
++                # Find the annotation for this argument
++                # The annotations list is parallel to args list
++                arg_index = funcdef.args.args.index(arg)
++                annotation = funcdef.args.annotations[arg_index]
++                return annotation
++    return None
++
++
++def get_annotation(node):
++    """Get the type annotation for a node.
++
++    For AnnAssign nodes (e.g., a: str = None), looks at the parent AnnAssign
++    to get the annotation.
++
++    For AssignAttr nodes (e.g., self.x = x), looks at the function parameters
++    to find the corresponding annotation.
++
++    Returns an object with a 'name' attribute containing the type string,
++    or None if no annotation is found.
++    """
++    annotation = None
++
++    # Check if parent is an AnnAssign
++    if isinstance(node.parent, astroid.AnnAssign):
++        ann_assign = node.parent
++        annotation = ann_assign.annotation
++        # If value is None and annotation is not Optional, wrap in Optional
++        if node.value is None and annotation is not None:
++            # Check if it's already Optional[...]
++            if not isinstance(annotation, astroid.Subscript):
++                # Need to wrap in Optional
++                annotation_name = annotation.as_string()
++                return _AnnotationInfo(f"Optional[{annotation_name}]")
++    # Check if it's an AssignAttr (self.x type annotation)
++    elif isinstance(node, astroid.AssignAttr):
++        annotation = _get_annotation_from_assignattr(node)
++        if annotation is not None:
++            # Check if this parameter has a default value of None
++            # Navigate up to find the Assign node
++            parent = node.parent
++            if isinstance(parent, astroid.Assign):
++                parent = parent.parent
++            if isinstance(parent, astroid.FunctionDef):
++                funcdef = parent
++                attr_name = node.attrname
++                # Find the argument with matching name and check its default
++                for arg in funcdef.args.args:
++                    if arg.name == attr_name:
++                        arg_index = funcdef.args.args.index(arg)
++                        # Check defaults
++                        defaults = funcdef.args.defaults
++                        # Calculate the offset for defaults (args without defaults come first)
++                        num_args = len(funcdef.args.args)
++                        num_defaults = len(defaults)
++                        default_index = arg_index - (num_args - num_defaults)
++                        if default_index >= 0 and default_index < len(defaults):
++                            default_node = defaults[default_index]
++                            # Check if default is None
++                            if isinstance(default_node, astroid.Const) and default_node.value is None:
++                                # Check if annotation is not already Optional
++                                if not isinstance(annotation, astroid.Subscript):
++                                    annotation_name = annotation.as_string()
++                                    return _AnnotationInfo(f"Optional[{annotation_name}]")
++    elif hasattr(node, "annotation") and node.annotation is not None:
++        # Direct annotation attribute (e.g., from AnnAssign.annotation)
++        annotation = node.annotation
++
++    if annotation is None:
++        return None
++
++    # Check if it's already an Optional[...] or Union[..., None]
++    if isinstance(annotation, astroid.Subscript):
++        # Get the base name (Optional or Union)
++        base_name = annotation.value.as_string()
++        if base_name in ("Optional", "Union"):
++            return _AnnotationInfo(annotation.as_string())
++
++    # Return the annotation's string representation
++    return _AnnotationInfo(annotation.as_string())
++
++
++class _AnnotationInfo:
++    """Wrapper to provide a 'name' attribute for type annotations."""
++
++    def __init__(self, name):
++        self.name = name
++
++
++def infer_node(node):
++    """Infer the value of a node.
++
++    First tries to get the annotation. If no annotation is found,
++    tries to infer the node's value.
++
++    Returns a set of inferred values, or empty set if inference fails.
++    """
++    annotation = get_annotation(node)
++    if annotation is not None:
++        return set()
++    # No annotation, try to infer
++    try:
++        return set(node.infer())
++    except astroid.InferenceError:
++        return set()

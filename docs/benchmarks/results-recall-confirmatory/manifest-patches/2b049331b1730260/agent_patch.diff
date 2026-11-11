@@ -1,0 +1,18 @@
+diff --git a/seaborn/_core/scales.py b/seaborn/_core/scales.py
+--- a/seaborn/_core/scales.py
++++ b/seaborn/_core/scales.py
+@@ -378,7 +378,13 @@
+             axis.set_view_interval(vmin, vmax)
+             locs = axis.major.locator()
+             locs = locs[(vmin <= locs) & (locs <= vmax)]
+-            labels = axis.major.formatter.format_ticks(locs)
++            formatter = axis.major.formatter
++            # Use format_data instead of format_ticks to include offset values
++            # in the labels. format_ticks would return offset-reduced values
++            # (e.g., "1" instead of "1000000" when offset is 1e6).
++            labels = [
++                formatter.format_data(loc) if loc != 0 else "0" for loc in locs
++            ]
+             new._legend = list(locs), list(labels)
+ 
+         return new

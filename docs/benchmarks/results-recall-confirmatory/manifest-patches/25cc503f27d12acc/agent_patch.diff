@@ -1,0 +1,24 @@
+diff --git a/django/http/response.py b/django/http/response.py
+--- a/django/http/response.py
++++ b/django/http/response.py
+@@ -231,6 +231,8 @@
+         # - when self._charset != 'utf-8' it re-encodes the content
+         if isinstance(value, bytes):
+             return bytes(value)
++        if isinstance(value, memoryview):
++            return value.tobytes()
+         if isinstance(value, str):
+             return bytes(value.encode(self.charset))
+         # Handle non-string types.
+diff --git a/tests/httpwrappers/tests.py b/tests/httpwrappers/tests.py
+--- a/tests/httpwrappers/tests.py
++++ b/tests/httpwrappers/tests.py
+@@ -368,7 +368,7 @@
+ 
+     def test_memoryview_content(self):
+         r = HttpResponse(memoryview(b'memoryview'))
+-        self.assertEqual(r.content, b'memoryviewx')
++        self.assertEqual(r.content, b'memoryview')
+ 
+     def test_iter_content(self):
+         r = HttpResponse(['abc', 'def', 'ghi'])

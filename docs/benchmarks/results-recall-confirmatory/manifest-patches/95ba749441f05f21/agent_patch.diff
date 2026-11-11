@@ -1,0 +1,23 @@
+diff --git a/django/forms/boundfield.py b/django/forms/boundfield.py
+--- a/django/forms/boundfield.py
++++ b/django/forms/boundfield.py
+@@ -277,7 +277,7 @@
+ 
+     @property
+     def id_for_label(self):
+-        return 'id_%s_%s' % (self.data['name'], self.data['index'])
++        return self.data['attrs'].get('id')
+ 
+     @property
+     def choice_label(self):
+diff --git a/tests/forms_tests/tests/test_forms.py b/tests/forms_tests/tests/test_forms.py
+--- a/tests/forms_tests/tests/test_forms.py
++++ b/tests/forms_tests/tests/test_forms.py
+@@ -3216,7 +3216,6 @@
+         form = SomeForm(auto_id='prefix_%s')
+         subwidgets = form['field'].subwidgets
+         self.assertEqual(subwidgets[0].id_for_label, 'prefix_field_0')
+-    self.assertEqual(subwidgets[0].id_for_label, 'different_field_0')
+         self.assertEqual(subwidgets[1].id_for_label, 'prefix_field_1')
+ 
+     def test_boundfield_widget_type(self):

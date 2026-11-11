@@ -1,0 +1,20 @@
+diff --git a/astropy/modeling/separable.py b/astropy/modeling/separable.py
+--- a/astropy/modeling/separable.py
++++ b/astropy/modeling/separable.py
+@@ -58,6 +58,7 @@
+         is_separable = np.array([False] * transform.n_outputs).T
+         return is_separable
+     separable_matrix = _separable(transform)
++    separable_matrix = np.where(separable_matrix != 0, True, False)
+     is_separable = separable_matrix.sum(1)
+     is_separable = np.where(is_separable != 1, False, True)
+     return is_separable
+@@ -242,7 +243,7 @@
+         cright = _coord_matrix(right, 'right', noutp)
+     else:
+         cright = np.zeros((noutp, right.shape[1]))
+-        cright[-right.shape[0]:, -right.shape[1]:] = 1
++        cright[-right.shape[0]:, -right.shape[1]:] = right
+ 
+     return np.hstack([cleft, cright])
+ 

@@ -1,0 +1,19 @@
+diff --git a/django/db/backends/base/schema.py b/django/db/backends/base/schema.py
+--- a/django/db/backends/base/schema.py
++++ b/django/db/backends/base/schema.py
+@@ -341,6 +341,15 @@
+         # Check for fields that aren't actually columns (e.g. M2M).
+         if column_db_type is None:
+             return None, None
++        # Propagate the target field's collation to the FK column.
++        if field.remote_field and field_db_params.get("collation") is None:
++            target_field = field.remote_field.model._meta.get_field(
++                field.remote_field.field_name
++            )
++            target_db_params = target_field.db_parameters(connection=self.connection)
++            if target_collation := target_db_params.get("collation"):
++                field_db_params = field_db_params.copy()
++                field_db_params["collation"] = target_collation
+         params = []
+         return (
+             " ".join(

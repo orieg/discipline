@@ -1,0 +1,12 @@
+diff --git a/sympy/physics/quantum/operator.py b/sympy/physics/quantum/operator.py
+--- a/sympy/physics/quantum/operator.py
++++ b/sympy/physics/quantum/operator.py
+@@ -309,6 +309,8 @@
+ 
+         if isinstance(other, Operator):
+             return other
++        if isinstance(other, Dagger) and isinstance(other.args[0], Operator):
++            return other
+ 
+         return Mul(self, other)
+ 

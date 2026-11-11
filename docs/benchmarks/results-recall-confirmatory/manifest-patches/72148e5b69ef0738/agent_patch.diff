@@ -1,0 +1,21 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -1407,11 +1407,15 @@
+ class SQLDeleteCompiler(SQLCompiler):
+     @cached_property
+     def single_alias(self):
+-        return sum(self.query.alias_refcount[t] > 0 for t in self.query.alias_map) == 1
++        return sum(self.query.alias_refcount[t] > 0 for t in self.query.alias_map) <= 1
+ 
+     def _as_sql(self, query):
++        base_table = query.base_table
++        # base_table is None when the query has no tables in it (empty query).
++        if base_table is None:
++            base_table = query.model._meta.db_table
+         result = [
+-            'DELETE FROM %s' % self.quote_name_unless_alias(query.base_table)
++            'DELETE FROM %s' % self.quote_name_unless_alias(base_table)
+         ]
+         where, params = self.compile(query.where)
+         if where:

@@ -1,0 +1,27 @@
+diff --git a/src/_pytest/unittest.py b/src/_pytest/unittest.py
+--- a/src/_pytest/unittest.py
++++ b/src/_pytest/unittest.py
+@@ -316,7 +316,11 @@
+             # Arguably we could always postpone tearDown(), but this changes the moment where the
+             # TestCase instance interacts with the results object, so better to only do it
+             # when absolutely needed.
+-            if self.config.getoption("usepdb") and not _is_skipped(self.obj):
++            if (
++                self.config.getoption("usepdb")
++                and not _is_skipped(self.obj)
++                and not _is_skipped(self.parent.obj)
++            ):
+                 self._explicit_tearDown = self._testcase.tearDown
+                 setattr(self._testcase, "tearDown", lambda *args: None)
+ 
+diff --git a/testing/test_unittest.py b/testing/test_unittest.py
+--- a/testing/test_unittest.py
++++ b/testing/test_unittest.py
+@@ -1312,7 +1312,6 @@
+     result = pytester.runpytest_inprocess("--pdb")
+     result.stdout.fnmatch_lines("* 1 skipped in *")
+     assert tracked == []
+-    assert len(tracked) == 2
+ 
+ 
+ def test_async_support(pytester: Pytester) -> None:

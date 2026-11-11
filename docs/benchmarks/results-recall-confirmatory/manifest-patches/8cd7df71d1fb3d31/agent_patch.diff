@@ -1,0 +1,25 @@
+diff --git a/xarray/core/variable.py b/xarray/core/variable.py
+--- a/xarray/core/variable.py
++++ b/xarray/core/variable.py
+@@ -1947,7 +1947,8 @@
+                 # point, which doesn't have a copy method, so make a deep copy
+                 # of the underlying `pandas.MultiIndex` and create a new
+                 # `PandasIndexAdapter` instance with it.
+-                data = PandasIndexAdapter(self._data.array.copy(deep=True))
++                data = PandasIndexAdapter(self._data.array.copy(deep=True),
++                                          dtype=self._data.dtype)
+             else:
+                 data = self._data
+         else:
+diff --git a/xarray/tests/test_variable.py b/xarray/tests/test_variable.py
+--- a/xarray/tests/test_variable.py
++++ b/xarray/tests/test_variable.py
+@@ -482,7 +482,7 @@
+         v = self.cls('x', (0.5 * np.arange(10)).astype(astype), {'foo': 'bar'})
+         w = v.copy(deep=deep)
+         assert type(v) is type(w)
+-    assert not v.identical(w)
++        assert not v.identical(w)
+         assert v.dtype == w.dtype
+         if self.cls is Variable:
+             if deep:

@@ -1,0 +1,16 @@
+diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py
+--- a/django/urls/resolvers.py
++++ b/django/urls/resolvers.py
+@@ -154,7 +154,11 @@
+             # non-named groups. Otherwise, pass all non-named arguments as
+             # positional arguments.
+             kwargs = match.groupdict()
+-            args = () if kwargs else match.groups()
++            # Filter out None values for optional groups
++            kwargs = {k: v for k, v in kwargs.items() if v is not None}
++            # Check if there are any named groups in the pattern before filtering
++            has_named_groups = bool(self.regex.groupindex)
++            args = () if has_named_groups else match.groups()
+             return path[match.end():], args, kwargs
+         return None
+ 

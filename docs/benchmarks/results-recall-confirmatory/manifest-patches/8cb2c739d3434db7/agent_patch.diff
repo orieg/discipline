@@ -1,0 +1,23 @@
+diff --git a/django/db/models/query_utils.py b/django/db/models/query_utils.py
+--- a/django/db/models/query_utils.py
++++ b/django/db/models/query_utils.py
+@@ -217,6 +217,7 @@
+         if lookup_name is None:
+             lookup_name = lookup.lookup_name
+         del cls.class_lookups[lookup_name]
++        cls._clear_cached_lookups()
+ 
+ 
+ def select_related_descend(field, restricted, requested, load_fields, reverse=False):
+diff --git a/tests/custom_lookups/tests.py b/tests/custom_lookups/tests.py
+--- a/tests/custom_lookups/tests.py
++++ b/tests/custom_lookups/tests.py
+@@ -260,7 +260,7 @@
+             )
+             self.assertSequenceEqual(Author.objects.filter(age__div3=2), [a2])
+         self.assertSequenceEqual(Author.objects.filter(age__div3=0), [a1])
+-            self.assertSequenceEqual(Author.objects.filter(age__div3=3), [])
++        self.assertSequenceEqual(Author.objects.filter(age__div3=3), [])
+ 
+     @unittest.skipUnless(
+         connection.vendor == "postgresql", "PostgreSQL specific SQL used"

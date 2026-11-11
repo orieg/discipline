@@ -1,0 +1,13 @@
+diff --git a/tests/checkers/unittest_similar.py b/tests/checkers/unittest_similar.py
+--- a/tests/checkers/unittest_similar.py
++++ b/tests/checkers/unittest_similar.py
+@@ -509,4 +509,8 @@
+     with redirect_stdout(output), pytest.raises(SystemExit) as ex:
+         similar.Run(["--duplicates=0", SIMILAR1, SIMILAR2])
+     assert ex.value.code == 0
+-    assert output.getvalue() == "Expected output"
++    assert (
++        output.getvalue().strip()
++        == """\
++TOTAL lines=62 duplicates=0 percent=0.00""".strip()
++    )

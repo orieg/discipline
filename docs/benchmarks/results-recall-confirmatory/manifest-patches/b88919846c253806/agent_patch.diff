@@ -1,0 +1,34 @@
+diff --git a/xarray/core/rolling.py b/xarray/core/rolling.py
+--- a/xarray/core/rolling.py
++++ b/xarray/core/rolling.py
+@@ -270,13 +270,24 @@
+     def __iter__(self) -> Iterator[tuple[RollingKey, DataArray]]:
+         if self.ndim > 1:
+             raise ValueError("__iter__ is only supported for 1d-rolling")
+-        stops = np.arange(1, len(self.window_labels) + 1)
+-        starts = stops - int(self.window[0])
+-        starts[: int(self.window[0])] = 0
+-        for (label, start, stop) in zip(self.window_labels, starts, stops):
+-            window = self.obj.isel({self.dim[0]: slice(start, stop)})
+ 
+-            counts = window.count(dim=self.dim[0])
++        window_size = int(self.window[0])
++        is_centered = self.center[0]
++        n = len(self.window_labels)
++        dim = self.dim[0]
++        data = self.obj.values
++
++        # Create the full windowed array using construct
++        # This handles centering and padding correctly
++        constructed = self._construct(self.obj, "window")
++
++        for i, label in enumerate(self.window_labels):
++            # Get the window at position i from the constructed array
++            window = constructed.isel({dim: i})
++
++            # Count valid (non-NaN) elements in the window
++            counts = window.count(dim="window")
++            # Apply min_periods filtering
+             window = window.where(counts >= self.min_periods)
+ 
+             yield (label, window)

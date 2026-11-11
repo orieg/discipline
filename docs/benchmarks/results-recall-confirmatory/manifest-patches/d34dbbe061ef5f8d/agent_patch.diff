@@ -1,0 +1,12 @@
+diff --git a/tests/migrations/test_writer.py b/tests/migrations/test_writer.py
+--- a/tests/migrations/test_writer.py
++++ b/tests/migrations/test_writer.py
+@@ -462,7 +462,7 @@
+         """
+         validator = RegexValidator(message="hello")
+         string = MigrationWriter.serialize(validator)[0]
+-    self.assertEqual(string, "django.core.validators.RegexValidator(message='world')")
++        self.assertEqual(string, "django.core.validators.RegexValidator(message='world')")
+         self.serialize_round_trip(validator)
+ 
+         # Test with a compiled regex.

@@ -1,0 +1,28 @@
+diff --git a/django/core/management/commands/makemigrations.py b/django/core/management/commands/makemigrations.py
+--- a/django/core/management/commands/makemigrations.py
++++ b/django/core/management/commands/makemigrations.py
+@@ -223,7 +223,8 @@
+                 graph=loader.graph,
+                 migration_name=self.migration_name,
+             )
+-            self.write_migration_files(changes)
++            if not check_changes:
++                self.write_migration_files(changes)
+             return
+ 
+         # Detect changes
+@@ -248,12 +249,12 @@
+                 else:
+                     self.log("No changes detected")
+         else:
++            if check_changes:
++                sys.exit(1)
+             if self.update:
+                 self.write_to_last_migration_files(changes)
+             else:
+                 self.write_migration_files(changes)
+-            if check_changes:
+-                sys.exit(1)
+ 
+     def write_to_last_migration_files(self, changes):
+         loader = MigrationLoader(connections[DEFAULT_DB_ALIAS])

@@ -1,0 +1,52 @@
+diff --git a/django/db/models/fields/json.py b/django/db/models/fields/json.py
+--- a/django/db/models/fields/json.py
++++ b/django/db/models/fields/json.py
+@@ -479,6 +479,40 @@
+     pass
+ 
+ 
++class KeyTransformIn(lookups.In):
++    def process_rhs(self, compiler, connection):
++        rhs, rhs_params = super().process_rhs(compiler, connection)
++        if connection.vendor == 'oracle':
++            func = []
++            for value in rhs_params:
++                value = json.loads(value)
++                function = 'JSON_QUERY' if isinstance(value, (list, dict)) else 'JSON_VALUE'
++                func.append("%s('%s', '$.value')" % (
++                    function,
++                    json.dumps({'value': value}),
++                ))
++            rhs = rhs % tuple(func)
++            rhs_params = []
++        elif connection.vendor == 'sqlite':
++            func = ["JSON_EXTRACT(%s, '$')" if value != 'null' else '%s' for value in rhs_params]
++            rhs = rhs % tuple(func)
++        return rhs, rhs_params
++
++    def as_oracle(self, compiler, connection):
++        rhs, rhs_params = super().process_rhs(compiler, connection)
++        func = []
++        for value in rhs_params:
++            value = json.loads(value)
++            function = 'JSON_QUERY' if isinstance(value, (list, dict)) else 'JSON_VALUE'
++            func.append("%s('%s', '$.value')" % (
++                function,
++                json.dumps({'value': value}),
++            ))
++        rhs = rhs % tuple(func)
++        rhs_params = []
++        return self.as_sql(compiler, connection), (rhs, rhs_params)
++
++
+ KeyTransform.register_lookup(KeyTransformExact)
+ KeyTransform.register_lookup(KeyTransformIExact)
+ KeyTransform.register_lookup(KeyTransformIsNull)
+@@ -494,6 +528,7 @@
+ KeyTransform.register_lookup(KeyTransformLte)
+ KeyTransform.register_lookup(KeyTransformGt)
+ KeyTransform.register_lookup(KeyTransformGte)
++KeyTransform.register_lookup(KeyTransformIn)
+ 
+ 
+ class KeyTransformFactory:

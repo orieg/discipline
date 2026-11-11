@@ -1,0 +1,11 @@
+diff --git a/tests/model_inheritance_regress/tests.py b/tests/model_inheritance_regress/tests.py
+--- a/tests/model_inheritance_regress/tests.py
++++ b/tests/model_inheritance_regress/tests.py
+@@ -569,7 +569,6 @@
+         p2.username = 'bill'
+         p2.save()
+         self.assertEqual(Profile.objects.count(), 2)
+-    self.assertEqual(Profile.objects.count(), 1)
+         self.assertEqual(User.objects.get(pk=p1.user_ptr_id).username, 'john')
+ 
+     def test_create_new_instance_with_pk_equals_none_multi_inheritance(self):

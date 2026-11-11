@@ -1,0 +1,119 @@
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -882,6 +882,52 @@
+         signode.append(nodes.Text(txt, txt))
+ 
+ 
++class ASTUDLiteral(ASTLiteral):
++    def __init__(self, data: str, suffix: str) -> None:
++        self.data = data
++        self.suffix = suffix
++
++    def _stringify(self, transform: StringifyTransform) -> str:
++        return self.data + self.suffix
++
++    def get_id(self, version: int) -> str:
++        if version >= 4:
++            # Itanium C++ ABI mangling for user-defined literals
++            # Format: L_Zli<suffix_len><suffix>E<literal_mangled>E
++            literal_id = self._get_literal_id()
++            return "L_Zli%d%sl%sE" % (len(self.suffix), self.suffix, literal_id)
++        elif version == 3:
++            # Older format
++            return "L_Zli%d%sl%sl%sl%sl%sE" % (
++                len(self.suffix), self.suffix,
++                len(self.suffix), self.suffix,
++                len(self.suffix), self.suffix,
++                self._get_literal_id())
++        else:
++            # Fallback for older versions
++            return "L_Zli%d%sl%sl%sE" % (
++                len(self.suffix), self.suffix,
++                len(self.suffix), self.suffix,
++                self._get_literal_id())
++
++    def _get_literal_id(self) -> str:
++        """Get the mangled ID for the literal value."""
++        # Try to parse as a number literal
++        try:
++            # Check if it's a float
++            float(float(self.data))
++            return "L%slE" % self.data
++        except ValueError:
++            pass
++        # Otherwise, return as-is
++        return self.data
++
++    def describe_signature(self, signode: TextElement, mode: str,
++                           env: "BuildEnvironment", symbol: "Symbol") -> None:
++        txt = str(self)
++        signode.append(nodes.Text(txt, txt))
++
++
+ class ASTThisLiteral(ASTExpression):
+     def _stringify(self, transform: StringifyTransform) -> str:
+         return "this"
+@@ -4664,16 +4710,29 @@
+             if self.match(regex):
+                 while self.current_char in 'uUlLfF':
+                     self.pos += 1
++                # Check for user-defined literal suffix
++                udSuffix = self._parse_ud_suffix()
++                if udSuffix:
++                    return ASTUDLiteral(self.definition[pos:self.pos], udSuffix)
+                 return ASTNumberLiteral(self.definition[pos:self.pos])
+ 
+         string = self._parse_string()
+         if string is not None:
++            # Check for user-defined literal suffix
++            udSuffix = self._parse_ud_suffix()
++            if udSuffix:
++                return ASTUDLiteral(string, udSuffix)
+             return ASTStringLiteral(string)
+ 
+         # character-literal
+         if self.match(char_literal_re):
+             prefix = self.last_match.group(1)  # may be None when no prefix
+             data = self.last_match.group(2)
++            literalStr = (prefix if prefix else '') + "'" + data + "'"
++            # Check for user-defined literal suffix
++            udSuffix = self._parse_ud_suffix()
++            if udSuffix:
++                return ASTUDLiteral(literalStr, udSuffix)
+             try:
+                 return ASTCharLiteral(prefix, data)
+             except UnicodeDecodeError as e:
+@@ -4685,6 +4744,32 @@
+         # TODO: user-defined lit
+         return None
+ 
++    def _parse_ud_suffix(self) -> str:
++        """Parse a user-defined literal suffix if present.
++        
++        Returns the suffix string if found, None otherwise.
++        A ud-suffix is an identifier that can start with a letter or underscore,
++        followed by any number of letters, digits, or underscores.
++        """
++        self.skip_ws()
++        # Match ud-suffix: must start with letter or underscore, not digit
++        # Unlike regular identifiers, we don't need word boundary at start
++        # because ud-suffixes can follow digits (e.g., 123_udl)
++        pos = self.pos
++        if pos >= len(self.definition):
++            return None
++        first_char = self.definition[pos]
++        if first_char in '_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ':
++            # Start of ud-suffix, now match the rest
++            start = pos
++            pos += 1
++            while pos < len(self.definition) and self.definition[pos] in '_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789':
++                pos += 1
++            if pos > start:
++                self.pos = pos
++                return self.definition[start:pos]
++        return None
++
+     def _parse_fold_or_paren_expression(self) -> ASTExpression:
+         # "(" expression ")"
+         # fold-expression

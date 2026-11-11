@@ -1,0 +1,99 @@
+diff --git a/pylint/config/argument.py b/pylint/config/argument.py
+--- a/pylint/config/argument.py
++++ b/pylint/config/argument.py
+@@ -114,8 +114,23 @@
+ def _regexp_csv_transfomer(value: str) -> Sequence[Pattern[str]]:
+     """Transforms a comma separated list of regular expressions."""
+     patterns: list[Pattern[str]] = []
+-    for pattern in _csv_transformer(value):
+-        patterns.append(_regex_transformer(pattern))
++    errors: list[str] = []
++    for pattern in pylint_utils._check_csv_regex(value):
++        try:
++            patterns.append(_regex_transformer(pattern))
++        except argparse.ArgumentTypeError as e:
++            errors.append(str(e))
++
++    if errors:
++        # Format errors with "Invalid regex syntax:" prefix for each pattern
++        formatted_errors = [
++            f"Invalid regex syntax: {error.split(': ', 1)[1]}" if error.startswith("Error in provided regular expression:") else error
++            for error in errors
++        ]
++        raise argparse.ArgumentTypeError(
++            f"{'; '.join(formatted_errors)}"
++        )
++
+     return patterns
+ 
+ 
+diff --git a/pylint/utils/__init__.py b/pylint/utils/__init__.py
+--- a/pylint/utils/__init__.py
++++ b/pylint/utils/__init__.py
+@@ -14,6 +14,7 @@
+     HAS_ISORT_5,
+     IsortDriver,
+     _check_csv,
++    _check_csv_regex,
+     _splitstrip,
+     _unquote,
+     decoding_stream,
+@@ -32,6 +33,7 @@
+     "HAS_ISORT_5",
+     "IsortDriver",
+     "_check_csv",
++    "_check_csv_regex",
+     "_splitstrip",
+     "_unquote",
+     "decoding_stream",
+diff --git a/pylint/utils/utils.py b/pylint/utils/utils.py
+--- a/pylint/utils/utils.py
++++ b/pylint/utils/utils.py
+@@ -253,6 +253,47 @@
+     return _splitstrip(value)
+ 
+ 
++def _check_csv_regex(value: list[str] | tuple[str] | str) -> Sequence[str]:
++    """Return a list of stripped strings by splitting on commas, but not inside
++    curly braces (which are used for regex quantifiers like {1,3}).
++
++    Empty strings are discarded.
++
++    >>> _check_csv_regex('foo, bar{1,3}, baz')
++    ['foo', 'bar{1,3}', 'baz']
++    >>> _check_csv_regex('foo{1,}, bar')
++    ['foo{1,}', 'bar']
++    >>> _check_csv_regex('foo')
++    ['foo']
++    """
++    if isinstance(value, (list, tuple)):
++        return value
++
++    result: list[str] = []
++    current: list[str] = []
++    brace_depth = 0
++
++    for char in value:
++        if char == "{":
++            brace_depth += 1
++            current.append(char)
++        elif char == "}":
++            brace_depth -= 1
++            current.append(char)
++        elif char == "," and brace_depth == 0:
++            result.append("".join(current).strip())
++            current = []
++        else:
++            current.append(char)
++
++    # Add the last element
++    if current or value.endswith(","):
++        result.append("".join(current).strip())
++
++    # Filter out empty strings
++    return [item for item in result if item]
++
++
+ def _comment(string: str) -> str:
+     """Return string as a comment."""
+     lines = [line.strip() for line in string.splitlines()]

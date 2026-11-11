@@ -1,0 +1,26 @@
+diff --git a/sklearn/ensemble/_iforest.py b/sklearn/ensemble/_iforest.py
+--- a/sklearn/ensemble/_iforest.py
++++ b/sklearn/ensemble/_iforest.py
+@@ -288,6 +288,11 @@
+             Fitted estimator.
+         """
+         self._validate_params()
++
++        # Need to fit `offset_` but need to make sure to use the raw
++        # data (X with feature names) to check consistency for data with
++        # feature names.
++        X_raw = X
+         X = self._validate_data(X, accept_sparse=["csc"], dtype=tree_dtype)
+         if issparse(X):
+             # Pre-sort indices to avoid that each individual tree of the
+@@ -345,7 +350,9 @@
+             return self
+ 
+         # else, define offset_ wrt contamination parameter
+-        self.offset_ = np.percentile(self.score_samples(X), 100.0 * self.contamination)
++        self.offset_ = np.percentile(
++            self.score_samples(X_raw), 100.0 * self.contamination
++        )
+ 
+         return self
+ 

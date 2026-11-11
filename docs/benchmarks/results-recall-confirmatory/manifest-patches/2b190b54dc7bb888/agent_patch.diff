@@ -1,0 +1,25 @@
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -1000,9 +1000,21 @@
+ 
+         if isinstance(other, FiniteSet):
+             nums = [m for m in other.args if m.is_number]
++            non_nums = [m for m in other.args if not m.is_number]
++
+             if nums == []:
++                # Only non-numeric elements, let parent handle
+                 return None
+ 
++            if non_nums:
++                # FiniteSet contains non-numeric elements
++                # Filter out numeric elements that are in the interval
++                nums_not_in_self = [m for m in nums if m not in self]
++                remaining = non_nums + nums_not_in_self
++                if not remaining:
++                    return S.EmptySet
++                return Complement(FiniteSet(*remaining), self)
++
+         return Set._complement(self, other)
+ 
+ 

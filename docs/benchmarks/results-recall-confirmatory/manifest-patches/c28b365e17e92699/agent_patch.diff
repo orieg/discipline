@@ -1,0 +1,43 @@
+diff --git a/django/core/handlers/base.py b/django/core/handlers/base.py
+--- a/django/core/handlers/base.py
++++ b/django/core/handlers/base.py
+@@ -49,13 +49,13 @@
+                 middleware_is_async = False
+             else:
+                 middleware_is_async = middleware_can_async
++            # Adapt handler, if needed.
++            new_handler = self.adapt_method_mode(
++                middleware_is_async, handler, handler_is_async,
++                debug=settings.DEBUG, name='middleware %s' % middleware_path,
++            )
+             try:
+-                # Adapt handler, if needed.
+-                handler = self.adapt_method_mode(
+-                    middleware_is_async, handler, handler_is_async,
+-                    debug=settings.DEBUG, name='middleware %s' % middleware_path,
+-                )
+-                mw_instance = middleware(handler)
++                mw_instance = middleware(new_handler)
+             except MiddlewareNotUsed as exc:
+                 if settings.DEBUG:
+                     if str(exc):
+@@ -63,6 +63,7 @@
+                     else:
+                         logger.debug('MiddlewareNotUsed: %r', middleware_path)
+                 continue
++            handler = new_handler
+ 
+             if mw_instance is None:
+                 raise ImproperlyConfigured(
+diff --git a/tests/middleware_exceptions/tests.py b/tests/middleware_exceptions/tests.py
+--- a/tests/middleware_exceptions/tests.py
++++ b/tests/middleware_exceptions/tests.py
+@@ -188,7 +188,7 @@
+     async def test_async_and_sync_middleware_chain_async_call(self):
+         with self.assertLogs('django.request', 'DEBUG') as cm:
+             response = await self.async_client.get('/middleware_exceptions/view/')
+-    self.assertEqual(response.content, b'FAIL')
++        self.assertEqual(response.content, b'OK')
+         self.assertEqual(response.status_code, 200)
+         self.assertEqual(
+             cm.records[0].getMessage(),

@@ -1,0 +1,25 @@
+diff --git a/lib/matplotlib/colorbar.py b/lib/matplotlib/colorbar.py
+--- a/lib/matplotlib/colorbar.py
++++ b/lib/matplotlib/colorbar.py
+@@ -651,8 +651,19 @@
+             if not self.drawedges:
+                 if len(self._y) >= self.n_rasterize:
+                     self.solids.set_rasterized(True)
+-        self.dividers.set_segments(
+-            np.dstack([X, Y])[1:-1] if self.drawedges else [])
++        if self.drawedges:
++            all_segments = np.dstack([X, Y])
++            if self.extend == 'neither':
++                segments = all_segments[1:-1]
++            elif self.extend == 'min':
++                segments = all_segments[:-1]
++            elif self.extend == 'max':
++                segments = all_segments[1:]
++            else:  # both
++                segments = all_segments
++        else:
++            segments = []
++        self.dividers.set_segments(segments)
+ 
+     def _add_solids_patches(self, X, Y, C, mappable):
+         hatches = mappable.hatches * len(C)  # Have enough hatches.

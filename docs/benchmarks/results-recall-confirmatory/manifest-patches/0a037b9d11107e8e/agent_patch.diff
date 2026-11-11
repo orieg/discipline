@@ -1,0 +1,27 @@
+diff --git a/django/contrib/messages/storage/base.py b/django/contrib/messages/storage/base.py
+--- a/django/contrib/messages/storage/base.py
++++ b/django/contrib/messages/storage/base.py
+@@ -1,7 +1,13 @@
++import sys
++
+ from django.conf import settings
+ from django.contrib.messages import constants, utils
+ 
+-LEVEL_TAGS = utils.get_level_tags()
++
++def __getattr__(name):
++    if name == 'LEVEL_TAGS':
++        return utils.get_level_tags()
++    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+ 
+ 
+ class Message:
+@@ -38,7 +44,7 @@
+ 
+     @property
+     def level_tag(self):
+-        return LEVEL_TAGS.get(self.level, '')
++        return getattr(sys.modules[__name__], 'LEVEL_TAGS').get(self.level, '')
+ 
+ 
+ class BaseStorage:

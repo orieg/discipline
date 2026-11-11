@@ -1,0 +1,66 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -1,5 +1,6 @@
+ import collections
+ import re
++import sys
+ from functools import partial
+ from itertools import chain
+ 
+@@ -57,7 +58,12 @@
+         self.where, self.having = self.query.where.split_having()
+         extra_select = self.get_extra_select(order_by, self.select)
+         self.has_extra_select = bool(extra_select)
+-        group_by = self.get_group_by(self.select + extra_select, order_by)
++        # When Meta.ordering is used, don't include those fields in GROUP BY
++        # (refs #14357)
++        if self._meta_ordering:
++            group_by = self.get_group_by(self.select + extra_select, None)
++        else:
++            group_by = self.get_group_by(self.select + extra_select, order_by)
+         return extra_select, order_by, group_by
+ 
+     def get_group_by(self, select, order_by):
+@@ -125,11 +131,12 @@
+             cols = expr.get_group_by_cols()
+             for col in cols:
+                 expressions.append(col)
+-        for expr, (sql, params, is_ref) in order_by:
+-            # Skip References to the select clause, as all expressions in the
+-            # select clause are already part of the group by.
+-            if not is_ref:
+-                expressions.extend(expr.get_group_by_cols())
++        if order_by:
++            for expr, (sql, params, is_ref) in order_by:
++                # Skip References to the select clause, as all expressions in the
++                # select clause are already part of the group by.
++                if not is_ref:
++                    expressions.extend(expr.get_group_by_cols())
+         having_group_by = self.having.get_group_by_cols() if self.having else ()
+         for expr in having_group_by:
+             expressions.append(expr)
+@@ -1623,3 +1630,23 @@
+             yield rows if col_count is None else [r[:col_count] for r in rows]
+     finally:
+         cursor.close()
++
++
++# DEBUG CODE
++_original_get_group_by = SQLCompiler.get_group_by
++
++def debug_get_group_by(self, select, order_by):
++    result = _original_get_group_by(self, select, order_by)
++    if hasattr(self.query, 'model') and self.query.model:
++        model_name = self.query.model.__name__
++        if model_name == 'Article':
++            print('=== DEBUG get_group_by ===', file=sys.stderr)
++            print('Model:', model_name, file=sys.stderr)
++            print('Meta ordering:', self.query.get_meta().ordering, file=sys.stderr)
++            print('_meta_ordering:', self._meta_ordering, file=sys.stderr)
++            print('order_by passed:', order_by, file=sys.stderr)
++            print('group_by result:', result, file=sys.stderr)
++            print('=== END DEBUG ===', file=sys.stderr)
++    return result
++
++SQLCompiler.get_group_by = debug_get_group_by

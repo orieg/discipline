@@ -1,0 +1,14 @@
+diff --git a/django/db/models/lookups.py b/django/db/models/lookups.py
+--- a/django/db/models/lookups.py
++++ b/django/db/models/lookups.py
+@@ -550,6 +550,10 @@
+         # Avoid the extract operation if the rhs is a direct value to allow
+         # indexes to be used.
+         if self.rhs_is_direct_value():
++            # Don't use the BETWEEN optimization for iso_year since ISO year
++            # boundaries don't align with calendar year boundaries.
++            if getattr(self.lhs, 'lookup_name', None) == 'iso_year':
++                return super().as_sql(compiler, connection)
+             # Skip the extract part by directly using the originating field,
+             # that is self.lhs.lhs.
+             lhs_sql, params = self.process_lhs(compiler, connection, self.lhs.lhs)

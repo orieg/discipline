@@ -1,0 +1,53 @@
+diff --git a/pylint/config/argument.py b/pylint/config/argument.py
+--- a/pylint/config/argument.py
++++ b/pylint/config/argument.py
+@@ -111,10 +111,48 @@
+         raise argparse.ArgumentTypeError(msg) from e
+ 
+ 
++def _regexp_csv_split(value: str) -> Sequence[str]:
++    """Split a comma-separated string of regular expressions.
++
++    Unlike a simple comma split, this function respects curly braces
++    and does not split on commas inside quantifier expressions like {1,3}.
++
++    Args:
++        value: A comma-separated string of regular expressions.
++
++    Returns:
++        A list of stripped regex pattern strings.
++    """
++    patterns: list[str] = []
++    current_pattern: list[str] = []
++    brace_count = 0
++
++    for char in value:
++        if char == "{":
++            brace_count += 1
++            current_pattern.append(char)
++        elif char == "}":
++            brace_count -= 1
++            current_pattern.append(char)
++        elif char == "," and brace_count == 0:
++            # Split on comma only when not inside curly braces
++            if current_pattern:
++                patterns.append("".join(current_pattern).strip())
++                current_pattern = []
++        else:
++            current_pattern.append(char)
++
++    # Don't forget the last pattern
++    if current_pattern:
++        patterns.append("".join(current_pattern).strip())
++
++    return patterns
++
++
+ def _regexp_csv_transfomer(value: str) -> Sequence[Pattern[str]]:
+     """Transforms a comma separated list of regular expressions."""
+     patterns: list[Pattern[str]] = []
+-    for pattern in _csv_transformer(value):
++    for pattern in _regexp_csv_split(value):
+         patterns.append(_regex_transformer(pattern))
+     return patterns
+ 

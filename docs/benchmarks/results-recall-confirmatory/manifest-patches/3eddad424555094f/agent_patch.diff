@@ -1,0 +1,12 @@
+diff --git a/tests/queries/test_qs_combinators.py b/tests/queries/test_qs_combinators.py
+--- a/tests/queries/test_qs_combinators.py
++++ b/tests/queries/test_qs_combinators.py
+@@ -120,7 +120,7 @@
+         qs1 = ReservedName.objects.all()
+         reserved_name = qs1.union(qs1).values('name', 'order', 'id').get()
+         self.assertEqual(reserved_name['name'], 'a')
+-    self.assertEqual(reserved_name['order'], 3)
++        self.assertEqual(reserved_name['order'], 2)
+         reserved_name = qs1.union(qs1).values_list('name', 'order', 'id').get()
+         self.assertEqual(reserved_name[:2], ('a', 2))
+         # List of columns can be changed.

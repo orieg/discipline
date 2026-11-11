@@ -1,0 +1,42 @@
+diff --git a/sympy/printing/codeprinter.py b/sympy/printing/codeprinter.py
+--- a/sympy/printing/codeprinter.py
++++ b/sympy/printing/codeprinter.py
+@@ -2,7 +2,7 @@
+ 
+ from functools import wraps
+ 
+-from sympy.core import Add, Expr, Mul, Pow, S, sympify, Float
++from sympy.core import Add, Expr, Mod, Mul, Pow, S, sympify, Float
+ from sympy.core.basic import Basic
+ from sympy.core.compatibility import default_sort_key
+ from sympy.core.function import Lambda
+@@ -496,11 +496,26 @@
+                 b_str[b.index(item.base)] = "(%s)" % b_str[b.index(item.base)]
+ 
+         if not b:
+-            return sign + '*'.join(a_str)
++            result = '*'.join(a_str)
++            if sign:
++                # When multiplying by a negative coefficient and the expression
++                # contains a Mod (which is printed as %), we need to wrap in
++                # parentheses because in Python -x % y is parsed as (-x) % y,
++                # not -(x % y).
++                if any(isinstance(x, Mod) for x in a):
++                    return sign + '(' + result + ')'
++                return sign + result
++            return result
+         elif len(b) == 1:
+-            return sign + '*'.join(a_str) + "/" + b_str[0]
++            result = '*'.join(a_str) + "/" + b_str[0]
++            if sign:
++                return sign + '(' + result + ')'
++            return result
+         else:
+-            return sign + '*'.join(a_str) + "/(%s)" % '*'.join(b_str)
++            result = '*'.join(a_str) + "/(%s)" % '*'.join(b_str)
++            if sign:
++                return sign + '(' + result + ')'
++            return result
+ 
+     def _print_not_supported(self, expr):
+         try:

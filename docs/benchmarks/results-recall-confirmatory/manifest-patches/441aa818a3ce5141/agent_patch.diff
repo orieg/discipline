@@ -1,0 +1,13 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -515,6 +515,9 @@
+     def __init__(self, lhs, rhs):
+         super().__init__(lhs, self.SUB, rhs)
+ 
++    def _resolve_output_field(self):
++        return self.__class__.output_field
++
+     def as_sql(self, compiler, connection):
+         connection.ops.check_expression_support(self)
+         lhs = compiler.compile(self.lhs)

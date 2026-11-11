@@ -1,0 +1,14 @@
+diff --git a/xarray/core/variable.py b/xarray/core/variable.py
+--- a/xarray/core/variable.py
++++ b/xarray/core/variable.py
+@@ -2881,7 +2881,9 @@
+ 
+     def to_index_variable(self):
+         """Return this variable as an xarray.IndexVariable"""
+-        return self
++        return IndexVariable(
++            self.dims, self._data, self._attrs, encoding=self._encoding, fastpath=True
++        )
+ 
+     to_coord = utils.alias(to_index_variable, "to_coord")
+ 

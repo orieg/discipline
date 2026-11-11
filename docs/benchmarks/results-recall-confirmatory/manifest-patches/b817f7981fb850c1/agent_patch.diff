@@ -1,0 +1,50 @@
+diff --git a/django/db/models/fields/related_descriptors.py b/django/db/models/fields/related_descriptors.py
+--- a/django/db/models/fields/related_descriptors.py
++++ b/django/db/models/fields/related_descriptors.py
+@@ -72,6 +72,37 @@
+ from django.utils.functional import cached_property
+ 
+ 
++def _prefetch_related_queryset_filter(queryset, filter_kwargs):
++    """
++    Filter the queryset, handling the case where it has been sliced.
++    
++    When a queryset is sliced (e.g., queryset[:5] or queryset[2:]), Django
++    prevents further filtering because the SQL LIMIT/OFFSET has already been
++    applied. This helper function handles sliced querysets by:
++    1. Extracting the slice limits (offset and limit)
++    2. Applying the filter to a fresh queryset clone
++    3. Re-applying the slice limits
++    
++    This allows Prefetch objects to work with sliced querysets.
++    """
++    if filter_kwargs and queryset is not None and queryset.query.is_sliced:
++        # Extract the slice information
++        low_mark = queryset.query.low_mark
++        high_mark = queryset.query.high_mark
++        
++        # Clear the slice to allow filtering
++        queryset.query.clear_limits()
++        
++        # Apply the filter
++        queryset = queryset.filter(**filter_kwargs)
++        
++        # Re-apply the slice
++        queryset.query.set_limits(low_mark, high_mark)
++    elif filter_kwargs:
++        queryset = queryset.filter(**filter_kwargs)
++    return queryset
++
++
+ class ForeignKeyDeferredAttribute(DeferredAttribute):
+     def __set__(self, instance, value):
+         if instance.__dict__.get(self.field.attname) != value and self.field.is_cached(
+@@ -145,7 +176,7 @@
+             }
+         else:
+             query = {"%s__in" % self.field.related_query_name(): instances}
+-        queryset = queryset.filter(**query)
++        queryset = _prefetch_related_queryset_filter(queryset, query)
+ 
+         # Since we're going to assign directly in the cache,
+         # we must manage the reverse relation cache manually.

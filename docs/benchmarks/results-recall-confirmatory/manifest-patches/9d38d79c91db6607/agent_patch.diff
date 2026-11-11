@@ -1,0 +1,42 @@
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+@@ -136,11 +136,28 @@
+     )
+     if match:
+         kw = match.groupdict()
++        # Check if 'days' key is present before popping
++        has_days = kw.get('days') is not None
+         days = datetime.timedelta(float(kw.pop('days', 0) or 0))
+         sign = -1 if kw.pop('sign', '+') == '-' else 1
+         if kw.get('microseconds'):
+             kw['microseconds'] = kw['microseconds'].ljust(6, '0')
+         if kw.get('seconds') and kw.get('microseconds') and kw['seconds'].startswith('-'):
+             kw['microseconds'] = '-' + kw['microseconds']
+-        kw = {k: float(v) for k, v in kw.items() if v is not None}
++        # Handle negative durations for standard_duration_re
++        # When days component is present, only days is negative
++        # When no days component, all time components should be negative
++        # But only if there's exactly one negative time component (the first one)
++        # Note: we skip checking microseconds since it may be negated along with seconds
++        if value.startswith('-') and not has_days:
++            # Count negative components (excluding microseconds as it follows seconds' sign)
++            negative_count = sum(1 for k, v in kw.items()
++                               if v is not None and v.startswith('-') and k != 'microseconds')
++            if negative_count > 1:
++                return None
++            sign = -sign
++            # Make all components positive so sign can be applied uniformly
++            kw = {k: abs(float(v)) for k, v in kw.items() if v is not None}
++        else:
++            kw = {k: float(v) for k, v in kw.items() if v is not None}
+         return days + sign * datetime.timedelta(**kw)

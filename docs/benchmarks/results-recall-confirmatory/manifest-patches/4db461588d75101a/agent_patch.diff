@@ -1,0 +1,15 @@
+diff --git a/django/db/models/fields/related_descriptors.py b/django/db/models/fields/related_descriptors.py
+--- a/django/db/models/fields/related_descriptors.py
++++ b/django/db/models/fields/related_descriptors.py
+@@ -145,6 +145,11 @@
+             }
+         else:
+             query = {"%s__in" % self.field.related_query_name(): instances}
++        # When a queryset is passed with a slice, we need to handle it specially
++        # because filtering a sliced queryset raises an error. We clear the
++        # slice, apply the filter, then re-apply the slice.
++        if queryset.query.is_sliced:
++            queryset = self._copy_query_with_limits(queryset)
+         queryset = queryset.filter(**query)
+ 
+         # Since we're going to assign directly in the cache,

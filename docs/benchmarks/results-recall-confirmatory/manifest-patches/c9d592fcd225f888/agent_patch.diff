@@ -1,0 +1,21 @@
+diff --git a/sympy/core/add.py b/sympy/core/add.py
+--- a/sympy/core/add.py
++++ b/sympy/core/add.py
+@@ -561,7 +561,16 @@
+             if not im_or_z and not im:
+                 return True
+             if im and not im_or_z:
+-                return False
++                # Purely imaginary terms. Check if they sum to zero.
++                im_args = [a for a in self.args if a.is_imaginary]
++                if im_args:
++                    # Factor out I and check if the coefficients sum to zero
++                    imag_sum = Add(*(a / S.ImaginaryUnit for a in im_args))
++                    if imag_sum.is_zero:
++                        return True
++                    elif imag_sum.is_zero is False:
++                        return False
++                return None
+         if b.is_zero is False:
+             return False
+ 

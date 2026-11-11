@@ -1,0 +1,67 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -1225,6 +1225,10 @@
+         if self.query.extra_order_by or self.query.order_by:
+             return True
+         elif self.query.default_ordering and self.query.get_meta().ordering:
++            # When there's a GROUP BY clause, default ordering won't be
++            # preserved in the resulting SQL, so return False.
++            if self.query.group_by is not None:
++                return False
+             return True
+         else:
+             return False
+diff --git a/tests/debug_test.py b/tests/debug_test.py
+new file mode 100644
+--- /dev/null
++++ b/tests/debug_test.py
+@@ -0,0 +1,48 @@
++import os
++import sys
++
++# Setup Django settings
++os.environ['DJANGO_SETTINGS_MODULE'] = 'test_sqlite'
++
++from django.conf import settings
++
++# Import from the tests directory
++import django
++
++# Get installed apps from runtests setup
++from runtests import ALWAYS_INSTALLED_APPS, get_test_modules
++
++# Setup Django
++django.setup()
++
++from queries.models import Tag
++from django.db.models import Count
++
++# Test 1: Tag with annotation
++qs = Tag.objects.annotate(num_notes=Count('pk'))
++print('Test 1: Tag.objects.annotate(num_notes=Count("pk"))')
++print('  ordered:', qs.ordered)
++print('  query.order_by:', qs.query.order_by)
++print('  query.default_ordering:', qs.query.default_ordering)
++print('  query.group_by:', qs.query.group_by)
++print('  query.extra_order_by:', qs.query.extra_order_by)
++print()
++
++# Test 2: Tag with values and annotation
++qs2 = Tag.objects.values('name').annotate(num_notes=Count('pk'))
++print('Test 2: Tag.objects.values("name").annotate(num_notes=Count("pk"))')
++print('  ordered:', qs2.ordered)
++print('  query.order_by:', qs2.query.order_by)
++print('  query.default_ordering:', qs2.query.default_ordering)
++print('  query.group_by:', qs2.query.group_by)
++print('  query.extra_order_by:', qs2.query.extra_order_by)
++print()
++
++# Test 3: Tag without annotation
++qs3 = Tag.objects.all()
++print('Test 3: Tag.objects.all()')
++print('  ordered:', qs3.ordered)
++print('  query.order_by:', qs3.query.order_by)
++print('  query.default_ordering:', qs3.query.default_ordering)
++print('  query.group_by:', qs3.query.group_by)
++print('  query.extra_order_by:', qs3.query.extra_order_by)

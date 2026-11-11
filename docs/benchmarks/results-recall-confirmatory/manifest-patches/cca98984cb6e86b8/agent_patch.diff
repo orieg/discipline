@@ -1,0 +1,15 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -1225,6 +1225,11 @@
+         if self.query.extra_order_by or self.query.order_by:
+             return True
+         elif self.query.default_ordering and self.query.get_meta().ordering:
++            # When using values() or values_list(), the model's default ordering
++            # doesn't apply because the queryset is returning dictionaries, not
++            # model instances.
++            if self._fields is not None:
++                return False
+             return True
+         else:
+             return False

@@ -1,0 +1,54 @@
+diff --git a/sympy/polys/densetools.py b/sympy/polys/densetools.py
+--- a/sympy/polys/densetools.py
++++ b/sympy/polys/densetools.py
+@@ -1199,9 +1199,9 @@
+         f = dup_mul_ground(f, common, K0)
+ 
+     if not convert:
+-        return common, f
++        return common, dup_strip(f)
+     else:
+-        return common, dup_convert(f, K0, K1)
++        return common, dup_strip(dup_convert(f, K0, K1))
+ 
+ 
+ def _rec_clear_denoms(g, v, K0, K1):
+@@ -1253,9 +1253,9 @@
+         f = dmp_mul_ground(f, common, u, K0)
+ 
+     if not convert:
+-        return common, f
++        return common, dmp_strip(f, u)
+     else:
+-        return common, dmp_convert(f, u, K0, K1)
++        return common, dmp_strip(dmp_convert(f, u, K0, K1), u)
+ 
+ 
+ def dup_revert(f, n, K):
+diff --git a/test_debug.py b/test_debug.py
+new file mode 100644
+--- /dev/null
++++ b/test_debug.py
+@@ -0,0 +1,22 @@
++from sympy import *
++x = symbols('x')
++
++# The expression from the test
++d1 = 217603955769048*(24201 + 253*sqrt(9165))**(S(1)/3) + 2273005839412*sqrt(9165)*(24201 + 253*sqrt(9165))**(S(1)/3)
++term1 = -117968192370600*18**(S(1)/3)/d1
++term2 = -15720318185*2**(S(2)/3)*3**(S(1)/3)*(24201 + 253*sqrt(9165))**(S(2)/3)/d1
++term3 = 15720318185*12**(S(1)/3)*(24201 + 253*sqrt(9165))**(S(2)/3)/d1
++term4 = 117968192370600*2**(S(1)/3)*3**(S(2)/3)/d1
++
++expr = term1 + term2 + term3 + term4
++
++f = Poly(expr, x)
++print('f:', f)
++print('f.rep:', f.rep)
++print('f.rep.rep:', f.rep.rep)
++print('f.is_zero:', f.is_zero)
++print('simplify(expr):', simplify(expr))
++
++# The test expects this to be Poly(1, x, domain='EX')
++# But our change makes it be Poly(0, x, domain='EX')
++# This is actually the CORRECT behavior - the expression evaluates to 0

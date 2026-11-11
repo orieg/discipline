@@ -1,0 +1,14 @@
+diff --git a/sympy/printing/latex.py b/sympy/printing/latex.py
+--- a/sympy/printing/latex.py
++++ b/sympy/printing/latex.py
+@@ -673,6 +673,10 @@
+             and base.endswith(r'\right)')):
+             # don't use parentheses around dotted derivative
+             base = base[6: -7]  # remove outermost added parens
++        # issue: if base contains ^ (superscript), it needs to be wrapped
++        # in braces to avoid invalid LaTeX like x^y^z
++        if "^" in base:
++            base = "{{{}}}".format(base)
+         return template % (base, exp)
+ 
+     def _print_UnevaluatedExpr(self, expr):

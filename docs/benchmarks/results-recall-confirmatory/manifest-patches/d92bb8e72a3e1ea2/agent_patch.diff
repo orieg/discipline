@@ -1,0 +1,21 @@
+diff --git a/pylint/checkers/similar.py b/pylint/checkers/similar.py
+--- a/pylint/checkers/similar.py
++++ b/pylint/checkers/similar.py
+@@ -436,12 +436,16 @@
+     ) -> None:
+         """Display computed similarities on stdout"""
+         report = self._get_similarity_report(similarities)
+-        print(report)
++        if report:
++            print(report)
+ 
+     def _get_similarity_report(
+         self, similarities: List[Tuple[int, Set[LinesChunkLimits_T]]]
+     ) -> str:
+         """Create a report from similarities"""
++        # When min_lines is 0, no output should be produced (check is disabled)
++        if self.min_lines == 0:
++            return ""
+         report: str = ""
+         duplicated_line_number: int = 0
+         for number, couples in similarities:

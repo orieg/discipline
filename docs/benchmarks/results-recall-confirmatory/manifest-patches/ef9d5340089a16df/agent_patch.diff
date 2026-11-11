@@ -1,0 +1,66 @@
+diff --git a/django/views/generic/base.py b/django/views/generic/base.py
+--- a/django/views/generic/base.py
++++ b/django/views/generic/base.py
+@@ -27,9 +27,31 @@
+         kwargs.setdefault('view', self)
+         if self.extra_context is not None:
+             kwargs.update(self.extra_context)
++        # Wrap URL kwargs for deprecation warning
++        for key, value in kwargs.items():
++            if hasattr(self, 'kwargs') and key in self.kwargs:
++                kwargs[key] = _wrap_url_kwarg_with_deprecation_warning(key, value)
+         return kwargs
+ 
+ 
++def _wrap_url_kwarg_with_deprecation_warning(key, value):
++    """
++    Wrap a URL kwarg value in a SimpleLazyObject to trigger a deprecation
++    warning when the value is accessed.
++    """
++    # Bind into function closure.
++    @SimpleLazyObject
++    def access_value(key=key, value=value):
++        warnings.warn(
++            'TemplateView passing URL kwargs to the context is '
++            'deprecated. Reference %s in your template through '
++            'view.kwargs instead.' % key,
++            RemovedInDjango40Warning, stacklevel=3,
++        )
++        return value
++    return access_value
++
++
+ class View:
+     """
+     Intentionally simple parent class for all views. Only implements
+@@ -159,29 +181,10 @@
+     def get(self, request, *args, **kwargs):
+         # RemovedInDjango40Warning: when the deprecation ends, replace with:
+         #   context = self.get_context_data()
+-        context_kwargs = _wrap_url_kwargs_with_deprecation_warning(kwargs)
+-        context = self.get_context_data(**context_kwargs)
++        context = self.get_context_data(*args, **kwargs)
+         return self.render_to_response(context)
+ 
+ 
+-# RemovedInDjango40Warning
+-def _wrap_url_kwargs_with_deprecation_warning(url_kwargs):
+-    context_kwargs = {}
+-    for key, value in url_kwargs.items():
+-        # Bind into function closure.
+-        @SimpleLazyObject
+-        def access_value(key=key, value=value):
+-            warnings.warn(
+-                'TemplateView passing URL kwargs to the context is '
+-                'deprecated. Reference %s in your template through '
+-                'view.kwargs instead.' % key,
+-                RemovedInDjango40Warning, stacklevel=2,
+-            )
+-            return value
+-        context_kwargs[key] = access_value
+-    return context_kwargs
+-
+-
+ class RedirectView(View):
+     """Provide a redirect on any GET request."""
+     permanent = False

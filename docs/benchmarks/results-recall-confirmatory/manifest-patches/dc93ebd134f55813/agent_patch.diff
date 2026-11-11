@@ -1,0 +1,58 @@
+diff --git a/tests/model_inheritance_regress/tests.py b/tests/model_inheritance_regress/tests.py
+--- a/tests/model_inheritance_regress/tests.py
++++ b/tests/model_inheritance_regress/tests.py
+@@ -587,3 +587,54 @@
+             Politician.objects.get(pk=c1.politician_ptr_id).title,
+             'senator 1',
+         )
++
++
++class DebugTest(TestCase):
++    def test_debug(self):
++        from .models import Congressman, Person, Politician
++        c1 = Congressman(state='PA', name='John', title='senator 1')
++        c1.save()
++        print('c1.pk:', c1.pk)
++        print('c1.id:', c1.id)
++        print('c1.politician_ptr_id:', c1.politician_ptr_id)
++        print('c1.politician_ptr:', c1.politician_ptr)
++
++        c2 = Person.objects.get(pk=c1.pk).congressman
++        print('c2.pk:', c2.pk)
++        print('c2.id:', c2.id)
++        print('c2.politician_ptr_id:', c2.politician_ptr_id)
++        
++        # Check if c2 has _state.adding
++        print('c2._state.adding:', c2._state.adding)
++        print('c2._state.db:', c2._state.db)
++
++        # Now let's reset
++        c2.pk = None
++        c2.id = None
++        c2.politician_ptr_id = None
++        print('After reset:')
++        print('c2.pk:', c2.pk)
++        print('c2.id:', c2.id)
++        print('c2.politician_ptr_id:', c2.politician_ptr_id)
++
++        # Check meta.parents
++        print('meta.parents:', c2._meta.parents)
++        
++        # Check the values that will be inserted
++        for parent, field in c2._meta.parents.items():
++            print(f'Parent: {parent}')
++            print(f'  field: {field}')
++            if field:
++                print(f'  field.attname: {field.attname}')
++                print(f'  getattr(self, field.attname): {getattr(c2, field.attname)}')
++                print(f'  parent._meta.pk.attname: {parent._meta.pk.attname}')
++                print(f'  getattr(self, parent._meta.pk.attname): {getattr(c2, parent._meta.pk.attname)}')
++        
++        # Try to save
++        try:
++            c2.save()
++            print('Save succeeded!')
++        except Exception as e:
++            print('Save failed:', e)
++            import traceback
++            traceback.print_exc()

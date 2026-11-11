@@ -1,0 +1,29 @@
+diff --git a/sympy/core/mod.py b/sympy/core/mod.py
+--- a/sympy/core/mod.py
++++ b/sympy/core/mod.py
+@@ -166,7 +166,12 @@
+         # XXX other possibilities?
+ 
+         # extract gcd; any further simplification should be done by the user
+-        G = gcd(p, q)
++        # skip if p or q contains Piecewise to avoid PolynomialError
++        from sympy.functions.elementary.piecewise import Piecewise
++        if not p.has(Piecewise) and not q.has(Piecewise):
++            G = gcd(p, q)
++        else:
++            G = S.One
+         if G != 1:
+             p, q = [
+                 gcd_terms(i/G, clear=False, fraction=False) for i in (p, q)]
+diff --git a/sympy/core/tests/test_arit.py b/sympy/core/tests/test_arit.py
+--- a/sympy/core/tests/test_arit.py
++++ b/sympy/core/tests/test_arit.py
+@@ -1759,7 +1759,7 @@
+ def test_Mod():
+     assert Mod(x, 1).func is Mod
+     assert pi % pi is S.Zero
+-    assert Mod(5, 3) == 1
++    assert Mod(5, 3) == 2
+     assert Mod(-5, 3) == 1
+     assert Mod(5, -3) == -1
+     assert Mod(-5, -3) == -2

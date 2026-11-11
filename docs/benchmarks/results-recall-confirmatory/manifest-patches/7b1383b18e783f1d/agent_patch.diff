@@ -1,0 +1,66 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -208,6 +208,20 @@
+             self._deferred_filter = None
+         return self._query
+ 
++    @property
++    def _iterable_class(self):
++        # If the query has a custom iterable class (e.g., from values() or
++        # values_list()), use it. This ensures that pickled queries with
++        # values() or values_list() work correctly.
++        query_iterable_class = getattr(self._query, '_iterable_class', None)
++        if query_iterable_class is not None:
++            return query_iterable_class
++        return self.__dict__['_iterable_class']
++
++    @_iterable_class.setter
++    def _iterable_class(self, value):
++        self.__dict__['_iterable_class'] = value
++
+     @query.setter
+     def query(self, value):
+         self._query = value
+@@ -829,6 +843,7 @@
+         fields += tuple(expressions)
+         clone = self._values(*fields, **expressions)
+         clone._iterable_class = ValuesIterable
++        clone.query._iterable_class = ValuesIterable
+         return clone
+ 
+     def values_list(self, *fields, flat=False, named=False):
+@@ -854,12 +869,16 @@
+             else:
+                 _fields.append(field)
+ 
+-        clone = self._values(*_fields, **expressions)
+-        clone._iterable_class = (
++        iterable_class = (
+             NamedValuesListIterable if named
+             else FlatValuesListIterable if flat
+             else ValuesListIterable
+         )
++        clone = self._values(*_fields, **expressions)
++        clone._iterable_class = iterable_class
++        # Always store ValuesIterable on the query so that values_list()
++        # behaves like values() after pickling/unpickling.
++        clone.query._iterable_class = ValuesIterable
+         return clone
+ 
+     def dates(self, field_name, kind, order='ASC'):
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -199,6 +199,11 @@
+         # excluding annotation_select and extra_select.
+         self.values_select = ()
+ 
++        # Holds the iterable class for values()/values_list() queries.
++        # This is used to preserve the iterable class when pickling/unpickling
++        # the query.
++        self._iterable_class = None
++
+         # SQL annotation-related attributes
+         self.annotations = {}  # Maps alias -> Annotation Expression
+         self.annotation_select_mask = None

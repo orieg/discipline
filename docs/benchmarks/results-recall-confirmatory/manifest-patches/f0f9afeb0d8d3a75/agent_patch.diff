@@ -1,0 +1,21 @@
+diff --git a/sympy/core/relational.py b/sympy/core/relational.py
+--- a/sympy/core/relational.py
++++ b/sympy/core/relational.py
+@@ -388,11 +388,16 @@
+ 
+     def _eval_as_set(self):
+         # self is univariate and periodicity(self, x) in (0, None)
++        from sympy.sets import Reals
++        from sympy.sets.conditionset import ConditionSet
+         from sympy.solvers.inequalities import solve_univariate_inequality
+         syms = self.free_symbols
+         assert len(syms) == 1
+         x = syms.pop()
+-        return solve_univariate_inequality(self, x, relational=False)
++        try:
++            return solve_univariate_inequality(self, x, relational=False)
++        except NotImplementedError:
++            return ConditionSet(x, self, Reals)
+ 
+     @property
+     def binary_symbols(self):

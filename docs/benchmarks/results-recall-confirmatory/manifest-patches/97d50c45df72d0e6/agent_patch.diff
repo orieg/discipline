@@ -1,0 +1,24 @@
+diff --git a/sphinx/util/inspect.py b/sphinx/util/inspect.py
+--- a/sphinx/util/inspect.py
++++ b/sphinx/util/inspect.py
+@@ -457,6 +457,8 @@
+         else:
+             return "frozenset({%s})" % ", ".join(object_description(x)
+                                                  for x in sorted_values)
++    if isinstance(object, enum.Enum):
++        return f"{object.__class__.__name__}.{object.name}"
+     try:
+         s = repr(object)
+     except Exception as exc:
+diff --git a/tests/test_util_inspect.py b/tests/test_util_inspect.py
+--- a/tests/test_util_inspect.py
++++ b/tests/test_util_inspect.py
+@@ -523,7 +523,7 @@
+         BAR = 2
+ 
+     assert inspect.object_description(MyEnum.FOO) == "MyEnum.FOO"
+-    assert inspect.object_description(MyEnum.FOO) == "MyEnum.BAR"
++    assert inspect.object_description(MyEnum.BAR) == "MyEnum.BAR"
+ 
+ 
+ def test_getslots():

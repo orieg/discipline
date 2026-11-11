@@ -1,0 +1,24 @@
+diff --git a/src/_pytest/unittest.py b/src/_pytest/unittest.py
+--- a/src/_pytest/unittest.py
++++ b/src/_pytest/unittest.py
+@@ -300,11 +300,19 @@
+ 
+     def runtest(self) -> None:
+         from _pytest.debugging import maybe_wrap_pytest_function_for_tracing
+-
++        import sys
+         assert self._testcase is not None
+ 
+         maybe_wrap_pytest_function_for_tracing(self)
+ 
++        # DEBUG
++        print(f'DEBUG: self.obj = {self.obj}', file=sys.stderr)
++        print(f'DEBUG: self._testcase = {self._testcase}', file=sys.stderr)
++        print(f'DEBUG: self.config.getoption("usepdb") = {self.config.getoption("usepdb")}', file=sys.stderr)
++        print(f'DEBUG: _is_skipped(self.obj) = {_is_skipped(self.obj)}', file=sys.stderr)
++        print(f'DEBUG: _is_skipped(self.parent.obj) = {_is_skipped(self.parent.obj)}', file=sys.stderr)
++        # END DEBUG
++
+         # Let the unittest framework handle async functions.
+         if is_async_function(self.obj):
+             # Type ignored because self acts as the TestResult, but is not actually one.

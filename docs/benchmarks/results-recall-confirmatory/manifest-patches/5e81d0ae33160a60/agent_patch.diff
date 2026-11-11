@@ -1,0 +1,86 @@
+diff --git a/django/contrib/messages/storage/base.py b/django/contrib/messages/storage/base.py
+--- a/django/contrib/messages/storage/base.py
++++ b/django/contrib/messages/storage/base.py
+@@ -1,7 +1,7 @@
+ from django.conf import settings
+ from django.contrib.messages import constants, utils
+ 
+-LEVEL_TAGS = utils.get_level_tags()
++LEVEL_TAGS = utils.LEVEL_TAGS
+ 
+ 
+ class Message:
+diff --git a/django/contrib/messages/utils.py b/django/contrib/messages/utils.py
+--- a/django/contrib/messages/utils.py
++++ b/django/contrib/messages/utils.py
+@@ -1,7 +1,70 @@
++from collections.abc import MutableMapping
++
+ from django.conf import settings
+ from django.contrib.messages import constants
+ 
+ 
++class LevelTags(MutableMapping):
++    """
++    A lazy dict-like class that reads from settings on each access.
++    This ensures that changes to MESSAGE_TAGS via @override_settings are reflected.
++    """
++    def __init__(self):
++        self._data = {}
++
++    def _update(self):
++        """Update the internal dict from current settings."""
++        self._data.clear()
++        self._data.update(constants.DEFAULT_TAGS)
++        self._data.update(getattr(settings, 'MESSAGE_TAGS', {}))
++
++    def __getitem__(self, key):
++        self._update()
++        return self._data[key]
++
++    def __setitem__(self, key, value):
++        self._data[key] = value
++
++    def __delitem__(self, key):
++        del self._data[key]
++
++    def __iter__(self):
++        self._update()
++        return iter(self._data)
++
++    def __len__(self):
++        self._update()
++        return len(self._data)
++
++    def __eq__(self, other):
++        self._update()
++        if isinstance(other, LevelTags):
++            return self._data == other._data
++        return self._data == other
++
++    def get(self, key, default=None):
++        try:
++            return self[key]
++        except KeyError:
++            return default
++
++    def keys(self):
++        self._update()
++        return self._data.keys()
++
++    def values(self):
++        self._update()
++        return self._data.values()
++
++    def items(self):
++        self._update()
++        return self._data.items()
++
++
++# Create a LevelTags instance that will be lazily updated
++LEVEL_TAGS = LevelTags()
++
++
+ def get_level_tags():
+     """
+     Return the message level tags.

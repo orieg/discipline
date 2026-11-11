@@ -1,0 +1,103 @@
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -234,7 +234,10 @@
+ @hookimpl(tryfirst=True)
+ def pytest_runtest_setup(item: Item) -> None:
+     skipped = evaluate_skip_marks(item)
+-    if skipped:
++    # When --pdb is used, don't skip here so that fixtures (like setUp for unittest)
++    # can run first. The skip will be handled in the fixtures.
++    # See https://github.com/pytest-dev/pytest/issues/10060
++    if skipped and not item.config.getvalue("usepdb"):
+         raise skip.Exception(skipped.reason, _use_item_location=True)
+ 
+     item.stash[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+diff --git a/src/_pytest/unittest.py b/src/_pytest/unittest.py
+--- a/src/_pytest/unittest.py
++++ b/src/_pytest/unittest.py
+@@ -70,9 +70,11 @@
+             return
+ 
+         skipped = _is_skipped(cls)
++        # Always inject the setup/teardown fixture so we can handle --pdb correctly
++        # See https://github.com/pytest-dev/pytest/issues/10060
+         if not skipped:
+-            self._inject_setup_teardown_fixtures(cls)
+             self._inject_setup_class_fixture()
++        self._inject_setup_teardown_fixtures(cls)
+ 
+         self.session._fixturemanager.parsefactories(self, unittest=True)
+         loader = TestLoader()
+@@ -126,7 +128,7 @@
+     cleanup_name: Optional[str],
+     scope: Scope,
+     pass_self: bool,
+-):
++) -> Optional[Callable]:
+     setup = getattr(obj, setup_name, None)
+     teardown = getattr(obj, teardown_name, None)
+     if setup is None and teardown is None:
+@@ -146,9 +148,60 @@
+         name=f"_unittest_{setup_name}_fixture_{obj.__qualname__}",
+     )
+     def fixture(self, request: FixtureRequest) -> Generator[None, None, None]:
+-        if _is_skipped(self):
+-            reason = self.__unittest_skip_why__
++        # Check if the test is skipped via @unittest.skip (class or method level)
++        skipped_by_unittest = _is_skipped(self)
++        # Check if the test is skipped via @pytest.mark.skip
++        # We need to distinguish between class-level and function-level skips:
++        # - Class-level skip: setUp should be called when --pdb is used
++        # - Function-level skip: setUp should NOT be called
++        skipped_by_mark = request.node.get_closest_marker("skip") is not None
++        # Check if the CLASS (not the function) is marked with @pytest.mark.skip
++        cls = request.node.getparent(Class)
++        class_marked = (
++            cls is not None and cls.get_closest_marker("skip") is not None
++        )
++        # If function-level skip (not inherited from class), don't call setUp
++        function_level_skip = skipped_by_mark and not class_marked
++
++        if skipped_by_unittest or skipped_by_mark:
++            reason = self.__unittest_skip_why__ if skipped_by_unittest else None
++            if reason is None:
++                marker = request.node.get_closest_marker("skip")
++                if marker:
++                    if marker.args:
++                        reason = marker.args[0]
++                    elif marker.kwargs.get("reason"):
++                        reason = marker.kwargs["reason"]
++            if reason is None:
++                reason = "skipped"
++
++            # When --pdb is enabled and the skip is class-level,
++            # we still call setUp but not tearDown,
++            # so that the user can inspect the state before teardown.
++            # For function-level skips, don't call setUp at all.
++            # See https://github.com/pytest-dev/pytest/issues/10060
++            if request.config.getoption("usepdb") and not function_level_skip:
++                if setup is not None:
++                    try:
++                        if pass_self:
++                            setup(self, request.function)
++                        else:
++                            setup()
++                    # unittest does not call the cleanup function for every BaseException, so we
++                    # follow this here.
++                    except Exception:
++                        if pass_self:
++                            cleanup(self)
++                        else:
++                            cleanup()
++
++                        raise
++                # Don't yield, so the test method doesn't run and tearDown is not called
++                raise pytest.skip.Exception(reason, _use_item_location=True)
++
++            # Normal skip behavior: don't call setUp or tearDown
+             raise pytest.skip.Exception(reason, _use_item_location=True)
++
+         if setup is not None:
+             try:
+                 if pass_self:

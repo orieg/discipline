@@ -1,0 +1,59 @@
+diff --git a/xarray/core/computation.py b/xarray/core/computation.py
+--- a/xarray/core/computation.py
++++ b/xarray/core/computation.py
+@@ -1918,30 +1918,49 @@
+ 
+ 
+ def _ensure_numeric(data: T_Xarray) -> T_Xarray:
+-    """Converts all datetime64 variables to float64
++    """Converts all datetime64/timedelta64 variables and coordinates to float64
+ 
+     Parameters
+     ----------
+     data : DataArray or Dataset
+-        Variables with possible datetime dtypes.
++        Variables with possible datetime/timedelta dtypes.
+ 
+     Returns
+     -------
+     DataArray or Dataset
+-        Variables with datetime64 dtypes converted to float64.
++        Variables with datetime64/timedelta64 dtypes converted to float64.
+     """
+     from .dataset import Dataset
+ 
+     def to_floatable(x: DataArray) -> DataArray:
+-        if x.dtype.kind in "mM":
+-            return x.copy(
++        converted = x
++
++        # Convert the main data
++        if x.dtype.kind == "M":  # datetime64
++            converted = converted.copy(
+                 data=datetime_to_numeric(
+                     x.data,
+                     offset=np.datetime64("1970-01-01"),
+                     datetime_unit="ns",
+                 ),
+             )
+-        return x
++        elif x.dtype.kind == "m":  # timedelta64
++            converted = converted.copy(data=x.data.astype(float))
++
++        # Convert any datetime64/timedelta64 coordinates
++        for name, coord in x.coords.items():
++            if coord.dtype.kind in "mM":
++                if coord.dtype.kind == "m":  # timedelta64
++                    new_coord_data = coord.values.astype(float)
++                else:  # datetime64
++                    new_coord_data = datetime_to_numeric(
++                        coord.values,
++                        offset=np.datetime64("1970-01-01"),
++                        datetime_unit="ns",
++                    )
++                converted = converted.assign_coords({name: new_coord_data})
++
++        return converted
+ 
+     if isinstance(data, Dataset):
+         return data.map(to_floatable)

@@ -1,0 +1,19 @@
+diff --git a/seaborn/_core/scales.py b/seaborn/_core/scales.py
+--- a/seaborn/_core/scales.py
++++ b/seaborn/_core/scales.py
+@@ -378,7 +378,14 @@
+             axis.set_view_interval(vmin, vmax)
+             locs = axis.major.locator()
+             locs = locs[(vmin <= locs) & (locs <= vmax)]
+-            labels = axis.major.formatter.format_ticks(locs)
++            formatter = axis.major.formatter
++            # When ScalarFormatter uses an offset, the labels returned by
++            # format_ticks will be in the offset scale, not the data scale.
++            # To get labels in the data scale, we need to disable the offset.
++            if hasattr(formatter, "set_useOffset"):
++                formatter = copy(formatter)
++                formatter.set_useOffset(False)
++            labels = formatter.format_ticks(locs)
+             new._legend = list(locs), list(labels)
+ 
+         return new

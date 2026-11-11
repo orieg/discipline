@@ -1,0 +1,38 @@
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+@@ -138,6 +138,25 @@
+         kw = match.groupdict()
+         days = datetime.timedelta(float(kw.pop('days', 0) or 0))
+         sign = -1 if kw.pop('sign', '+') == '-' else 1
++        # For standard_duration_re (no 'sign' group), detect negative duration
++        # and handle all components consistently
++        if 'sign' not in kw:
++            # Check if duration is negative (first component has minus sign)
++            is_negative = False
++            first_negative = True
++            for key in ('days', 'hours', 'minutes', 'seconds'):
++                if kw.get(key) is not None and kw[key].startswith('-'):
++                    if first_negative:
++                        is_negative = True
++                        first_negative = False
++                    else:
++                        # Multiple negative signs in the time portion is invalid
++                        return None
++            if is_negative:
++                # Make all components negative (the sign multiplier will be applied)
++                for key in ('days', 'hours', 'minutes', 'seconds'):
++                    if kw.get(key) is not None and not kw[key].startswith('-'):
++                        kw[key] = '-' + kw[key]
+         if kw.get('microseconds'):
+             kw['microseconds'] = kw['microseconds'].ljust(6, '0')
+         if kw.get('seconds') and kw.get('microseconds') and kw['seconds'].startswith('-'):

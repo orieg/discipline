@@ -1,0 +1,61 @@
+diff --git a/sympy/sets/handlers/intersection.py b/sympy/sets/handlers/intersection.py
+--- a/sympy/sets/handlers/intersection.py
++++ b/sympy/sets/handlers/intersection.py
+@@ -304,22 +304,42 @@
+             return None
+         else:
+             # univarite imaginary part in same variable
+-            x, xis = zip(*[solve_linear(i, 0) for i in Mul.make_args(im) if n in i.free_symbols])
+-            if x and all(i == n for i in x):
+-                base_set -= FiniteSet(xis)
++            # Find roots where im = 0 - these are the values of n that make
++            # the expression real
++            solns = []
++            for i in Mul.make_args(im):
++                if n in i.free_symbols:
++                    sol = solve_linear(i, 0)
++                    if sol is not None and len(sol) == 2:
++                        var, val = sol
++                        if var == n:
++                            solns.append(val)
++
++            if solns:
++                # Filter roots based on the base_set and exclude values that make denominators 0
++                denom_exclusions = set()
++                for d in denoms(f):
++                    if d.has(n):
++                        sol = solve_linear(d, 0)
++                        if sol is not None and len(sol) == 2:
++                            var, val = sol
++                            if var == n:
++                                denom_exclusions.add(val)
++
++                # Keep only roots in the base_set
++                valid_roots = []
++                for s in solns:
++                    if s not in denom_exclusions and s in base_set:
++                        valid_roots.append(s)
++
++                if valid_roots:
++                    # Return the real part evaluated at the valid roots
++                    return FiniteSet(*(re.subs(n, r) for r in valid_roots))
++                return S.EmptySet
+             else:
+-                base_set -= ConditionSet(n, Eq(im, 0), S.Integers)
+-        # exclude values that make denominators 0
+-        for i in denoms(f):
+-            if i.has(n):
+-                sol = list(zip(*[solve_linear(i, 0) for i in Mul.make_args(im) if n in i.free_symbols]))
+-                if sol != []:
+-                    x, xis = sol
+-                    if x and all(i == n for i in x):
+-                        base_set -= FiniteSet(xis)
+-                else:
+-                    base_set -= ConditionSet(n, Eq(i, 0), S.Integers)
+-        return imageset(lam, base_set)
++                # The imaginary part cannot be factored into linear terms
++                # Return an ImageSet with base_set restricted to where im = 0
++                return imageset(lam, ConditionSet(n, Eq(im, 0), base_set))
+ 
+     elif isinstance(other, Interval):
+         from sympy.solvers.solveset import (invert_real, invert_complex,

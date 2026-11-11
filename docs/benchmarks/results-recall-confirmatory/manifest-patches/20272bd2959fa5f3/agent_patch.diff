@@ -1,0 +1,92 @@
+diff --git a/django/utils/html.py b/django/utils/html.py
+--- a/django/utils/html.py
++++ b/django/utils/html.py
+@@ -30,6 +30,55 @@
+ )
+ 
+ 
++def _find_html_entity_end(s, start):
++    """
++    Find the end position of an HTML entity starting at position `start` in string `s`.
++    Returns the position after the entity if found, or -1 if not an entity.
++    Handles both named entities (e.g., '&lt;', '&amp') and numeric entities
++    (e.g., '&#60;', '&#x3C;').
++    """
++    if start < 0 or start >= len(s) or s[start] != '&':
++        return -1
++
++    # Check for numeric entities: &#DDD; or &#xHHH;
++    if start + 1 < len(s) and s[start + 1] == '#':
++        if start + 2 < len(s) and s[start + 2] == 'x':
++            # Hex numeric entity &#xHHH...
++            end = start + 3
++            while end < len(s) and s[end] in '0123456789abcdefABCDEF':
++                end += 1
++            if end < len(s) and s[end] == ';':
++                return end + 1
++            return end
++        else:
++            # Decimal numeric entity &#DDD...
++            end = start + 2
++            while end < len(s) and s[end].isdigit():
++                end += 1
++            if end < len(s) and s[end] == ';':
++                return end + 1
++            return end
++    else:
++        # Named entity: try to find the entity name
++        # Entity names are alphanumeric, optionally followed by ;
++        end = start + 1
++        while end < len(s) and s[end].isalnum():
++            end += 1
++
++        # Check with semicolon
++        if end < len(s) and s[end] == ';':
++            entity_name = s[start + 1:end]
++            if entity_name in html.entities.name2codepoint:
++                return end + 1
++            # Try without semicolon - maybe it's the end of entity name
++
++        # Check without semicolon
++        entity_name = s[start + 1:end]
++        if entity_name in html.entities.name2codepoint:
++            return end
++        return -1
++
++
+ @keep_lazy(str, SafeString)
+ def escape(text):
+     """
+@@ -283,8 +332,30 @@
+             middle_unescaped = html.unescape(middle)
+             stripped = middle_unescaped.rstrip(TRAILING_PUNCTUATION_CHARS)
+             if middle_unescaped != stripped:
+-                trail = middle[len(stripped):] + trail
+-                middle = middle[:len(stripped) - len(middle_unescaped)]
++                # Calculate the end position in the original `middle` string
++                # corresponding to the end of `stripped` in the unescaped string.
++                # This is needed because HTML entities (e.g., '&lt;') have different
++                # lengths than their unescaped equivalents.
++                stripped_len = len(stripped)
++                i = 0
++                unescaped_count = 0
++                while i < len(middle) and unescaped_count < stripped_len:
++                    if middle[i] == '&':
++                        # Find entity end position
++                        entity_end = _find_html_entity_end(middle, i)
++                        if entity_end > i:
++                            # Found a valid HTML entity
++                            unescaped_count += 1
++                            i = entity_end
++                        else:
++                            # Not an entity, just a regular character
++                            unescaped_count += 1
++                            i += 1
++                    else:
++                        unescaped_count += 1
++                        i += 1
++                trail = middle[i:] + trail
++                middle = middle[:i]
+                 trimmed_something = True
+         return lead, middle, trail
+ 

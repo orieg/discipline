@@ -1,0 +1,16 @@
+diff --git a/django/forms/widgets.py b/django/forms/widgets.py
+--- a/django/forms/widgets.py
++++ b/django/forms/widgets.py
+@@ -387,6 +387,12 @@
+     def value_omitted_from_data(self, data, files, name):
+         return name not in files
+ 
++    def use_required_attribute(self, initial):
++        # FileInput doesn't render a value, so when initial data exists,
++        # the input is left blank to keep the existing, initial value.
++        # In this case, don't use the 'required' attribute.
++        return not initial
++
+ 
+ FILE_INPUT_CONTRADICTION = object()
+ 

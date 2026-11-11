@@ -1,0 +1,65 @@
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -1000,8 +1000,22 @@
+ 
+         if isinstance(other, FiniteSet):
+             nums = [m for m in other.args if m.is_number]
++            syms = [m for m in other.args if m.is_Symbol]
++
+             if nums == []:
+-                return None
++                if syms != []:
++                    return None
++                return S.EmptySet
++
++            # Filter out numbers that are in the interval
++            out_nums = [m for m in nums if m not in self]
++
++            if out_nums == [] and syms == []:
++                return S.EmptySet
++
++            if syms != [] or out_nums != []:
++                return Complement(FiniteSet(*(out_nums + syms), evaluate=False),
++                                  self, evaluate=False)
+ 
+         return Set._complement(self, other)
+ 
+@@ -1933,8 +1947,9 @@
+     def _complement(self, other):
+         if isinstance(other, Interval):
+             nums = sorted(m for m in self.args if m.is_number)
++            syms = [m for m in self.args if m.is_Symbol]
++
+             if other == S.Reals and nums != []:
+-                syms = [m for m in self.args if m.is_Symbol]
+                 # Reals cannot contain elements other than numbers and symbols.
+ 
+                 intervals = []  # Build up a list of intervals between the elements
+@@ -1948,6 +1963,26 @@
+                             FiniteSet(*syms), evaluate=False)
+                 else:
+                     return Union(intervals, evaluate=False)
++
++            if syms != []:
++                # For symbols, we need to check if they're in the interval
++                # Since we don't know, we need to keep them with interval complement
++                # First, filter out numbers that are in the interval
++                result_syms = []
++                for m in syms:
++                    c = sympify(other.contains(m))
++                    if c is not S.true:
++                        result_syms.append(m)
++
++                # Filter numbers that are outside the interval
++                out_nums = [m for m in nums if m not in other]
++
++                if not result_syms and not out_nums:
++                    return S.EmptySet
++
++                result_elements = list(out_nums) + result_syms
++                return Complement(FiniteSet(*result_elements, evaluate=False), other)
++
+             elif nums == []:
+                 return None
+ 

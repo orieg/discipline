@@ -1,0 +1,58 @@
+diff --git a/django/utils/html.py b/django/utils/html.py
+--- a/django/utils/html.py
++++ b/django/utils/html.py
+@@ -283,8 +283,52 @@
+             middle_unescaped = html.unescape(middle)
+             stripped = middle_unescaped.rstrip(TRAILING_PUNCTUATION_CHARS)
+             if middle_unescaped != stripped:
+-                trail = middle[len(stripped):] + trail
+-                middle = middle[:len(stripped) - len(middle_unescaped)]
++                # Find the position in middle that corresponds to len(stripped)
++                # in the unescaped string. HTML entities can have different
++                # lengths in the original and unescaped forms.
++                pos = 0
++                unescaped_pos = 0
++                while unescaped_pos < len(stripped) and pos < len(middle):
++                    if middle[pos] == '&':
++                        # Try to find an entity
++                        if pos + 1 < len(middle) and middle[pos + 1] == '#':
++                            # Numeric entity: &#123; or &#x1F;
++                            # Numeric entities end at ; or non-digit, non-x character
++                            entity_end = pos + 2
++                            while entity_end < len(middle) and (
++                                middle[entity_end].isdigit() or
++                                middle[entity_end] in ('x', 'X')
++                            ):
++                                entity_end += 1
++                            # If we hit an x or X, skip it and continue with hex digits
++                            if entity_end < len(middle) and middle[entity_end] in ('x', 'X'):
++                                entity_end += 1
++                                while entity_end < len(middle) and middle[entity_end] in '0123456789abcdefABCDEF':
++                                    entity_end += 1
++                            # Skip optional semicolon
++                            if entity_end < len(middle) and middle[entity_end] == ';':
++                                entity_end += 1
++                        else:
++                            # Named entity
++                            end_char = middle.find(';', pos + 1)
++                            if end_char != -1:
++                                entity_end = end_char + 1
++                            else:
++                                # No semicolon, consume alphanumeric chars
++                                for j in range(pos + 1, len(middle)):
++                                    if not middle[j].isalnum():
++                                        entity_end = j
++                                        break
++                                else:
++                                    entity_end = len(middle)
++                        unescaped_len = len(html.unescape(middle[pos:entity_end]))
++                        pos = entity_end
++                        unescaped_pos += unescaped_len
++                    else:
++                        pos += 1
++                        unescaped_pos += 1
++                trail = middle[pos:] + trail
++                middle = middle[:pos]
+                 trimmed_something = True
+         return lead, middle, trail
+ 

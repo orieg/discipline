@@ -1,0 +1,20 @@
+diff --git a/django/core/management/commands/loaddata.py b/django/core/management/commands/loaddata.py
+--- a/django/core/management/commands/loaddata.py
++++ b/django/core/management/commands/loaddata.py
+@@ -362,12 +362,14 @@
+         """
+         dirs = []
+         fixture_dirs = settings.FIXTURE_DIRS
+-        if len(fixture_dirs) != len(set(fixture_dirs)):
++        # Normalize paths to strings for comparison, handling both str and PathLike.
++        normalized_fixture_dirs = [os.path.realpath(os.fspath(d)) for d in fixture_dirs]
++        if len(normalized_fixture_dirs) != len(set(normalized_fixture_dirs)):
+             raise ImproperlyConfigured("settings.FIXTURE_DIRS contains duplicates.")
+         for app_config in apps.get_app_configs():
+             app_label = app_config.label
+             app_dir = os.path.join(app_config.path, "fixtures")
+-            if app_dir in fixture_dirs:
++            if os.path.realpath(app_dir) in normalized_fixture_dirs:
+                 raise ImproperlyConfigured(
+                     "'%s' is a default fixture directory for the '%s' app "
+                     "and cannot be listed in settings.FIXTURE_DIRS."

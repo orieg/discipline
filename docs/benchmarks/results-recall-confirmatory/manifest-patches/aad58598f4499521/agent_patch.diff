@@ -1,0 +1,32 @@
+diff --git a/django/views/generic/base.py b/django/views/generic/base.py
+--- a/django/views/generic/base.py
++++ b/django/views/generic/base.py
+@@ -139,7 +139,14 @@
+             )
+         else:
+             handler = self.http_method_not_allowed
+-        return handler(request, *args, **kwargs)
++        response = handler(request, *args, **kwargs)
++        if asyncio.iscoroutine(response):
++            # For sync views, run the coroutine synchronously
++            if not self.view_is_async:
++                from asgiref.sync import async_to_sync
++                return async_to_sync(lambda: response)()
++            return response
++        return response
+ 
+     def http_method_not_allowed(self, request, *args, **kwargs):
+         logger.warning(
+@@ -148,7 +155,11 @@
+             request.path,
+             extra={"status_code": 405, "request": request},
+         )
+-        return HttpResponseNotAllowed(self._allowed_methods())
++
++        async def func():
++            return HttpResponseNotAllowed(self._allowed_methods())
++
++        return func()
+ 
+     def options(self, request, *args, **kwargs):
+         """Handle responding to requests for the OPTIONS HTTP verb."""

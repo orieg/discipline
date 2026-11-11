@@ -1,0 +1,17 @@
+diff --git a/src/_pytest/unittest.py b/src/_pytest/unittest.py
+--- a/src/_pytest/unittest.py
++++ b/src/_pytest/unittest.py
+@@ -99,6 +99,13 @@
+                 setup()
+         yield
+         if teardown is not None:
++            # If the test was skipped (by unittest or pytest), don't call
++            # teardown to avoid running code that might have been skipped.
++            # This is especially important when --pdb is used, as the unittest
++            # framework's tearDown is replaced with a no-op, so the fixture's
++            # teardown is the only place where user's tearDown gets called.
++            if request.node._store.get(skipped_by_mark_key, False):
++                return
+             if pass_self:
+                 teardown(self, request.function)
+             else:

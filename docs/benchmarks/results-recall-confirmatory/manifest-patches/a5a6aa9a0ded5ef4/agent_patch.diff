@@ -1,0 +1,39 @@
+diff --git a/django/db/models/fields/related_descriptors.py b/django/db/models/fields/related_descriptors.py
+--- a/django/db/models/fields/related_descriptors.py
++++ b/django/db/models/fields/related_descriptors.py
+@@ -72,6 +72,35 @@
+ from django.utils.functional import cached_property
+ 
+ 
++def _get_prefetch_queryset_with_limits(queryset, **filters):
++    """
++    Filter a queryset and handle the case where the queryset has been sliced.
++
++    When a sliced queryset is passed to Prefetch(), we need to:
++    1. Store the slice limits
++    2. Clear the limits (to allow filtering)
++    3. Apply the filter
++    4. Reapply the slice limits
++
++    This allows users to pass sliced querysets to Prefetch() as in:
++        Prefetch('posts', queryset=Post.objects.all()[:3])
++    """
++    # Check if the queryset is sliced
++    if queryset.query.is_sliced:
++        # Store the slice limits
++        low_mark = queryset.query.low_mark
++        high_mark = queryset.query.high_mark
++        # Clear the limits to allow filtering
++        queryset.query.clear_limits()
++        # Apply the filter
++        queryset = queryset.filter(**filters)
++        # Reapply the slice limits
++        queryset.query.set_limits(low_mark, high_mark)
++    else:
++        queryset = queryset.filter(**filters)
++    return queryset
++
++
+ class ForeignKeyDeferredAttribute(DeferredAttribute):
+     def __set__(self, instance, value):
+         if instance.__dict__.get(self.field.attname) != value and self.field.is_cached(

@@ -1,0 +1,42 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -434,8 +434,16 @@
+                 getattr(annotation, "contains_aggregate", True)
+                 for annotation in self.annotations.values()
+             )
++            or any(
++                getattr(annotation, "contains_over_clause", False)
++                for annotation in self.annotations.values()
++            )
+             or having
+         )
++        # DEBUG
++        import sys
++        print("DEBUG: annotations =", list(self.annotations.keys()), file=sys.stderr)
++        print("DEBUG: has_existing_aggregation =", has_existing_aggregation, file=sys.stderr)
+         # Decide if we need to use a subquery.
+         #
+         # Existing aggregations would cause incorrect results as
+@@ -488,7 +496,10 @@
+                         for expr in self.group_by:
+                             annotation_mask |= expr.get_refs()
+                     for aggregate in aggregates.values():
+-                        annotation_mask |= aggregate.get_refs()
++                        refs = aggregate.get_refs()
++                        print(f"DEBUG: aggregate refs = {refs}", file=sys.stderr)
++                        annotation_mask |= refs
++                    print(f"DEBUG: annotation_mask = {annotation_mask}", file=sys.stderr)
+                     inner_query.set_annotation_mask(annotation_mask)
+ 
+             # Add aggregates to the outer AggregateQuery. This requires making
+@@ -553,6 +564,9 @@
+         outer_query.select_for_update = False
+         outer_query.select_related = False
+         compiler = outer_query.get_compiler(using, elide_empty=elide_empty)
++        sql, params = compiler.as_sql()
++        print(f"DEBUG: SQL = {sql}", file=sys.stderr)
++        print(f"DEBUG: params = {params}", file=sys.stderr)
+         result = compiler.execute_sql(SINGLE)
+         if result is None:
+             result = empty_set_result

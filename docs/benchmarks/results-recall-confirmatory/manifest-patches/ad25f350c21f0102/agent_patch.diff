@@ -1,0 +1,45 @@
+diff --git a/sympy/utilities/codegen.py b/sympy/utilities/codegen.py
+--- a/sympy/utilities/codegen.py
++++ b/sympy/utilities/codegen.py
+@@ -722,8 +722,23 @@
+             for arg in argument_sequence:
+                 if isinstance(arg, IndexedBase):
+                     new_sequence.append(arg.label)
++                    # Make sure array_symbols contains this indexed base's label
++                    # Only add if we have shape information (from an actual
++                    # Indexed expression in the output)
++                    if arg.label not in array_symbols and arg.shape is not None:
++                        # Create a synthetic indexed expression for dimension
++                        # calculation (we just need the shape info)
++                        from sympy import Tuple as sym_Tuple
++                        dims = tuple([(S.Zero, dim - 1) for dim in arg.shape])
++                        array_symbols[arg.label] = type('SyntheticArray', (),
++                            {'shape': arg.shape})()
+                 else:
+                     new_sequence.append(arg)
++                    # If the arg is a MatrixSymbol that doesn't appear in the
++                    # expression but is in argument_sequence, we need to
++                    # record its dimensions
++                    if isinstance(arg, MatrixSymbol) and arg not in array_symbols:
++                        array_symbols[arg] = arg
+             argument_sequence = new_sequence
+ 
+             missing = [x for x in arg_list if x.name not in argument_sequence]
+@@ -739,7 +754,16 @@
+                 try:
+                     new_args.append(name_arg_dict[symbol])
+                 except KeyError:
+-                    new_args.append(InputArgument(symbol))
++                    # symbol is not in arg_list, create it with array dimensions
++                    # if it's an array type
++                    if symbol in array_symbols:
++                        dims = []
++                        array = array_symbols[symbol]
++                        for dim in array.shape:
++                            dims.append((S.Zero, dim - 1))
++                        new_args.append(InputArgument(symbol, dimensions=dims))
++                    else:
++                        new_args.append(InputArgument(symbol))
+             arg_list = new_args
+ 
+         return Routine(name, arg_list, return_val, local_vars, global_vars)

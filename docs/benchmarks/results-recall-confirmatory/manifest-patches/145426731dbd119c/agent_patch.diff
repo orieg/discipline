@@ -1,0 +1,34 @@
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -999,10 +999,29 @@
+             return Union(a, b)
+ 
+         if isinstance(other, FiniteSet):
++            # Separate elements into numbers and symbols
+             nums = [m for m in other.args if m.is_number]
+-            if nums == []:
++            syms = [m for m in other.args if not m.is_number]
++
++            if syms and nums:
++                # Mixture of symbols and numbers
++                # Filter numbers based on membership in self
++                not_in_self = [m for m in nums if self.contains(m) != True]
++                # Return Complement for symbols combined with numbers not in self
++                # Use evaluate=False to prevent infinite recursion
++                return Complement(FiniteSet(*syms + not_in_self), self, evaluate=False)
++
++            if syms and not nums:
++                # Only symbols with unknown membership, fall back to parent
+                 return None
+ 
++            if not syms:
++                # Only numbers, filter based on membership
++                not_in_self = [m for m in nums if self.contains(m) != True]
++                if not not_in_self:
++                    return S.EmptySet
++                return FiniteSet(*not_in_self)
++
+         return Set._complement(self, other)
+ 
+ 

@@ -1,0 +1,84 @@
+diff --git a/pylint/config/callback_actions.py b/pylint/config/callback_actions.py
+--- a/pylint/config/callback_actions.py
++++ b/pylint/config/callback_actions.py
+@@ -45,6 +45,32 @@
+     without erroring when they are then processed again by argparse.
+     """
+ 
++    def __init__(
++        self,
++        option_strings: Sequence[str],
++        dest: str,
++        nargs: int = 0,
++        const: None = None,
++        default: None = None,
++        type: None = None,
++        choices: None = None,
++        required: bool = False,
++        help: str = "",
++        metavar: str = "",
++    ) -> None:
++        super().__init__(
++            option_strings,
++            dest,
++            nargs,
++            const,
++            default,
++            type,
++            choices,
++            required,
++            help,
++            metavar,
++        )
++
+     def __call__(
+         self,
+         parser: argparse.ArgumentParser,
+diff --git a/pylint/config/utils.py b/pylint/config/utils.py
+--- a/pylint/config/utils.py
++++ b/pylint/config/utils.py
+@@ -203,10 +203,13 @@
+     str, tuple[bool, Callable[[Run, str | None], None]]
+ ] = {  # pylint: disable=consider-using-namedtuple-or-dataclass
+     "--init-hook": (True, _init_hook),
++    "-i": (True, _init_hook),
+     "--rcfile": (True, _set_rcfile),
++    "-o": (True, _set_output),
+     "--output": (True, _set_output),
+     "--load-plugins": (True, _add_plugins),
+     "--verbose": (False, _set_verbose_mode),
++    "-v": (False, _set_verbose_mode),
+     "--enable-all-extensions": (False, _enable_all_extensions),
+ }
+ 
+@@ -218,15 +221,25 @@
+     i = 0
+     while i < len(args):
+         argument = args[i]
+-        if not argument.startswith("--"):
++        # Check for both long options (--option) and short options (-o)
++        if not (argument.startswith("--") or argument.startswith("-")):
+             processed_args.append(argument)
+             i += 1
+             continue
+ 
+-        try:
+-            option, value = argument.split("=", 1)
+-        except ValueError:
+-            option, value = argument, None
++        # Short options don't support the = value syntax
++        if argument.startswith("--"):
++            try:
++                option, value = argument.split("=", 1)
++            except ValueError:
++                option, value = argument, None
++        else:
++            # For short options, check if there's an = sign for value
++            if "=" in argument:
++                option, value = argument.split("=", 1)
++            else:
++                option = argument
++                value = None
+ 
+         if option not in PREPROCESSABLE_OPTIONS:
+             processed_args.append(argument)

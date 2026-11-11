@@ -1,0 +1,20 @@
+diff --git a/lib/matplotlib/dates.py b/lib/matplotlib/dates.py
+--- a/lib/matplotlib/dates.py
++++ b/lib/matplotlib/dates.py
+@@ -798,7 +798,15 @@
+         for level in range(5, -1, -1):
+             if len(np.unique(tickdate[:, level])) > 1:
+                 if level < 2:
+-                    show_offset = False
++                    # Year or month level - we don't need an offset because the
++                    # year is already shown on the ticks (at least one tick is
++                    # in January or year varies). But if level is 1 (months
++                    # vary), check if January is among the ticks - if not, we
++                    # need the offset to show the year.
++                    if level == 1 and 1 not in tickdate[:, level]:
++                        pass  # keep show_offset as is
++                    else:
++                        show_offset = False
+                 break
+             elif level == 0:
+                 # all tickdate are the same, so only micros might be different

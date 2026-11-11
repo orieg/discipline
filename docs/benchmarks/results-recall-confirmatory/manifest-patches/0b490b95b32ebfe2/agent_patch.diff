@@ -1,0 +1,36 @@
+diff --git a/django/db/backends/base/client.py b/django/db/backends/base/client.py
+--- a/django/db/backends/base/client.py
++++ b/django/db/backends/base/client.py
+@@ -23,4 +23,6 @@
+         args, env = self.settings_to_cmd_args_env(self.connection.settings_dict, parameters)
+         if env:
+             env = {**os.environ, **env}
++        else:
++            env = None
+         subprocess.run(args, env=env, check=True)
+diff --git a/django/db/backends/postgresql/client.py b/django/db/backends/postgresql/client.py
+--- a/django/db/backends/postgresql/client.py
++++ b/django/db/backends/postgresql/client.py
+@@ -36,9 +36,11 @@
+             args += [dbname]
+         args.extend(parameters)
+ 
+-        env = {}
++        env = None
+         if passwd:
+-            env['PGPASSWORD'] = str(passwd)
++            env = {'PGPASSWORD': str(passwd)}
++        else:
++            env = {}
+         if service:
+             env['PGSERVICE'] = str(service)
+         if sslmode:
+@@ -51,7 +53,7 @@
+             env['PGSSLKEY'] = str(sslkey)
+         if passfile:
+             env['PGPASSFILE'] = str(passfile)
+-        return args, env
++        return args, env if env else None
+ 
+     def runshell(self, parameters):
+         sigint_handler = signal.getsignal(signal.SIGINT)

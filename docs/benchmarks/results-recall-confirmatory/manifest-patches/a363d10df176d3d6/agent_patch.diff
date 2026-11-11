@@ -1,0 +1,33 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -563,6 +563,13 @@
+                 if isinstance(base, str) and "." in base:
+                     base_app_label, base_name = base.split(".", 1)
+                     dependencies.append((base_app_label, base_name, None, True))
++                    # Also depend on removal of any field from the base model
++                    # that has the same name as a field in the new model (#21890)
++                    for field in model_opts.local_fields:
++                        if (base_app_label, base_name, field.name) in (
++                            self.old_field_keys - self.new_field_keys
++                        ):
++                            dependencies.append((base_app_label, base_name, field.name, False))
+             # Depend on the other end of the primary key if it's a relation
+             if primary_key_rel:
+                 dependencies.append((
+diff --git a/test_settings.py b/test_settings.py
+new file mode 100644
+--- /dev/null
++++ b/test_settings.py
+@@ -0,0 +1,11 @@
++
++INSTALLED_APPS = [
++    'django.contrib.contenttypes',
++    'django.contrib.auth',
++]
++DATABASES = {
++    'default': {
++        'ENGINE': 'django.db.backends.sqlite3',
++        'NAME': ':memory:',
++    }
++}

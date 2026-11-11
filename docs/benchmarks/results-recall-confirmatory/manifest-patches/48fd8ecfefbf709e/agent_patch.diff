@@ -1,0 +1,34 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -558,11 +558,19 @@
+             dependencies = [
+                 (app_label, model_name, None, False),
+             ]
+-            # Depend on all bases
++            # Depend on all bases and any fields that might clash
+             for base in model_state.bases:
+                 if isinstance(base, str) and "." in base:
+                     base_app_label, base_name = base.split(".", 1)
+                     dependencies.append((base_app_label, base_name, None, True))
++                    # Depend on any removed fields from base models that might
++                    # clash with fields being added to this new model
++                    for field_name in model_state.fields:
++                        if field_name in related_fields:
++                            continue
++                        if (base_app_label, base_name, field_name) in (
++                                self.old_field_keys - self.new_field_keys):
++                            dependencies.append((base_app_label, base_name, field_name, False))
+             # Depend on the other end of the primary key if it's a relation
+             if primary_key_rel:
+                 dependencies.append((
+diff --git a/tests/migrations/test_autodetector.py b/tests/migrations/test_autodetector.py
+--- a/tests/migrations/test_autodetector.py
++++ b/tests/migrations/test_autodetector.py
+@@ -2477,6 +2477,5 @@
+         changes = self.get_changes(before, after)
+         self.assertNumberMigrations(changes, 'app', 1)
+         self.assertOperationTypes(changes, 'app', 0, ['RemoveField', 'CreateModel'])
+-    self.assertNumberMigrations(changes, 'app', 2)
+         self.assertOperationAttributes(changes, 'app', 0, 0, name='title', model_name='readable')
+         self.assertOperationAttributes(changes, 'app', 0, 1, name='book')

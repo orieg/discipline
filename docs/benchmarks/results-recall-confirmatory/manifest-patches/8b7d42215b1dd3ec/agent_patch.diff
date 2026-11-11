@@ -1,0 +1,49 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -35,6 +35,31 @@
+     return False
+ 
+ 
++def _split_argtype_argname(fieldarg: str) -> Tuple[str, str]:
++    """Split the field argument into argtype and argname.
++    
++    This function handles type annotations that may contain spaces inside
++    brackets/parens (e.g., "Dict[str, str] param_name" or "dict(str, str) param_name").
++    
++    Returns:
++        A tuple of (argtype, argname) if successful, or (None, None) if not.
++    """
++    brackets = {'(': ')', '[': ']', '{': '}'}
++    depth = 0
++    for i, char in enumerate(fieldarg):
++        if char in brackets:
++            depth += 1
++        elif char in brackets.values():
++            depth -= 1
++        elif char.isspace() and depth == 0:
++            # Found whitespace outside of brackets
++            argname = fieldarg[i + 1:].lstrip()
++            if argname:
++                return fieldarg[:i].rstrip(), argname
++    
++    return None, None
++
++
+ class Field:
+     """A doc field that is never grouped.  It can have an argument or not, the
+     argument can be linked using a specified *rolename*.  Field should be used
+@@ -297,11 +322,8 @@
+ 
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+-                try:
+-                    argtype, argname = fieldarg.split(None, 1)
+-                except ValueError:
+-                    pass
+-                else:
++                argtype, argname = _split_argtype_argname(fieldarg)
++                if argtype is not None:
+                     types.setdefault(typename, {})[argname] = \
+                         [nodes.Text(argtype)]
+                     fieldarg = argname

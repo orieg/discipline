@@ -1,0 +1,32 @@
+diff --git a/astropy/io/fits/card.py b/astropy/io/fits/card.py
+--- a/astropy/io/fits/card.py
++++ b/astropy/io/fits/card.py
+@@ -1299,13 +1299,22 @@
+ 
+ def _format_float(value):
+     """Format a floating number to make sure it gets the decimal point."""
+-    value_str = f"{value:.16G}"
+-    if "." not in value_str and "E" not in value_str:
++    # Use str(value) which gives the shortest round-trippable representation,
++    # then apply necessary formatting for FITS compatibility.
++    value_str = str(value)
++
++    # Ensure there's always a decimal point in the value string.
++    # Check for both 'E' and 'e' in scientific notation.
++    if "." not in value_str and "E" not in value_str.upper():
+         value_str += ".0"
+-    elif "E" in value_str:
+-        # On some Windows builds of Python (and possibly other platforms?) the
+-        # exponent is zero-padded out to, it seems, three digits.  Normalize
+-        # the format to pad only to two digits.
++
++    # Normalize exponent format to use exactly 2 digits.
++    # On some Windows builds of Python (and possibly other platforms?) the
++    # exponent may be zero-padded out to three digits.
++    if "E" in value_str or "e" in value_str:
++        # Normalize to uppercase E
++        if "e" in value_str:
++            value_str = value_str.replace("e", "E")
+         significand, exponent = value_str.split("E")
+         if exponent[0] in ("+", "-"):
+             sign = exponent[0]

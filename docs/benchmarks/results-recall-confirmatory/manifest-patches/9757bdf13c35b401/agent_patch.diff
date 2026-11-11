@@ -1,0 +1,33 @@
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+@@ -142,5 +142,20 @@
+             kw['microseconds'] = kw['microseconds'].ljust(6, '0')
+         if kw.get('seconds') and kw.get('microseconds') and kw['seconds'].startswith('-'):
+             kw['microseconds'] = '-' + kw['microseconds']
++        if sign == 1:
++            # Check if any component is negative (for standard_duration_re)
++            negative = False
++            for key in ('hours', 'minutes', 'seconds'):
++                if kw.get(key) and kw[key].startswith('-'):
++                    negative = True
++                    break
++            if negative:
++                # All components should be negative
++                for key in ('hours', 'minutes', 'seconds'):
++                    if kw.get(key):
++                        if not kw[key].startswith('-'):
++                            kw[key] = '-' + kw[key]
++                if kw.get('microseconds') and not kw['microseconds'].startswith('-'):
++                    kw['microseconds'] = '-' + kw['microseconds']
+         kw = {k: float(v) for k, v in kw.items() if v is not None}
+         return days + sign * datetime.timedelta(**kw)

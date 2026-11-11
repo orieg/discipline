@@ -1,0 +1,117 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -1836,7 +1836,21 @@
+         query.clear_ordering(force=True)
+         query.extra = {}
+         query.select = []
+-        query.add_fields([query.get_meta().pk.name])
++        # Build list of fields to select:
++        # - The child model's primary key (for the main query)
++        # - Each ancestor model's primary key (for ancestor updates)
++        fields_to_select = [query.get_meta().pk.name]
++        # For each ancestor model in related_updates, add its PK to the select
++        # via the parent link chain.
++        ancestor_pk_fields = []
++        for ancestor_model in self.query.related_updates:
++            if ancestor_model is not query.model:
++                # Get the path to the ancestor's PK through the inheritance chain
++                pk_path = self._get_ancestor_pk_path(query, ancestor_model)
++                if pk_path:
++                    fields_to_select.extend(pk_path)
++                    ancestor_pk_fields.append((ancestor_model, pk_path[-1]))
++        query.add_fields(fields_to_select)
+         super().pre_sql_setup()
+ 
+         must_pre_select = (
+@@ -1851,8 +1865,21 @@
+             # don't want them to change), or the db backend doesn't support
+             # selecting from the updating table (e.g. MySQL).
+             idents = []
++            # Map field index to (ancestor_model or None) for each selected field
++            # Index 0 is always the child's PK
++            field_to_ancestor = {0: None}
++            for i, (ancestor_model, pk_field) in enumerate(
++                ancestor_pk_fields, start=1
++            ):
++                field_to_ancestor[i] = ancestor_model
+             for rows in query.get_compiler(self.using).execute_sql(MULTI):
+-                idents.extend(r[0] for r in rows)
++                idents.append(rows[0])
++                # Store ancestor PK values separately
++                for field_idx, ancestor_model in field_to_ancestor.items():
++                    if field_idx > 0 and ancestor_model is not None:
++                        self.query.ancestor_related_ids.setdefault(
++                            ancestor_model, []
++                        ).append(rows[field_idx])
+             self.query.add_filter("pk__in", idents)
+             self.query.related_ids = idents
+         else:
+@@ -1860,6 +1887,34 @@
+             self.query.add_filter("pk__in", query)
+         self.query.reset_refcounts(refcounts_before)
+ 
++    def _get_ancestor_pk_path(self, query, ancestor_model):
++        """
++        Get the path to select an ancestor model's PK from the query's model.
++        Returns a list of field names for use with add_fields().
++        """
++        model = query.model
++        # Find the path from the current model to the ancestor
++        # by traversing the inheritance chain
++        if ancestor_model not in model._meta.get_parent_list():
++            return []
++        # Get the base chain from current model to ancestor
++        base_chain = model._meta.get_base_chain(ancestor_model)
++        if not base_chain:
++            return []
++        # Get the link fields along the chain
++        link_fields = []
++        current_opts = model._meta
++        for parent_model in base_chain:
++            link_field = current_opts.parents.get(parent_model)
++            if link_field is None:
++                link_field = current_opts.get_ancestor_link(parent_model)
++            if link_field:
++                link_fields.append(link_field.name)
++                current_opts = parent_model._meta
++        # Append the ancestor's PK field name
++        link_fields.append(ancestor_model._meta.pk.name)
++        return link_fields
++
+ 
+ class SQLAggregateCompiler(SQLCompiler):
+     def as_sql(self):
+diff --git a/django/db/models/sql/subqueries.py b/django/db/models/sql/subqueries.py
+--- a/django/db/models/sql/subqueries.py
++++ b/django/db/models/sql/subqueries.py
+@@ -62,10 +62,12 @@
+         self.values = []
+         self.related_ids = None
+         self.related_updates = {}
++        self.ancestor_related_ids = {}
+ 
+     def clone(self):
+         obj = super().clone()
+         obj.related_updates = self.related_updates.copy()
++        obj.ancestor_related_ids = self.ancestor_related_ids.copy()
+         return obj
+ 
+     def update_batch(self, pk_list, values, using):
+@@ -133,8 +135,14 @@
+         for model, values in self.related_updates.items():
+             query = UpdateQuery(model)
+             query.values = values
+-            if self.related_ids is not None:
+-                query.add_filter("pk__in", self.related_ids)
++            # Use the correct primary key values for each ancestor model.
++            # ancestor_related_ids stores {ancestor_model: [pk_values]}
++            # where pk_values are the PK values from the ancestor table.
++            related_ids = self.ancestor_related_ids.get(
++                model, self.related_ids
++            )
++            if related_ids is not None:
++                query.add_filter("pk__in", related_ids)
+             result.append(query)
+         return result
+ 

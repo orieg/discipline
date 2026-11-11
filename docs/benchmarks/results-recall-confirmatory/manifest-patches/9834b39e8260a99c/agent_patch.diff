@@ -1,0 +1,24 @@
+diff --git a/src/_pytest/pastebin.py b/src/_pytest/pastebin.py
+--- a/src/_pytest/pastebin.py
++++ b/src/_pytest/pastebin.py
+@@ -79,7 +79,7 @@
+ 
+     params = {
+         "code": contents,
+-        "lexer": "python3" if sys.version_info[0] >= 3 else "python",
++        "lexer": "text",
+         "expiry": "1week",
+     }
+     url = "https://bpaste.net"
+diff --git a/testing/test_pastebin.py b/testing/test_pastebin.py
+--- a/testing/test_pastebin.py
++++ b/testing/test_pastebin.py
+@@ -106,7 +106,7 @@
+             class DummyFile(object):
+                 def read(self):
+                     # part of html of a normal response
+-                    return b'View <a href="/raw/3c0c6750bd">raw</a>.'
++                    return b'View <a href="/raw/4c0c6750bd">raw</a>.'
+ 
+             return DummyFile()
+ 

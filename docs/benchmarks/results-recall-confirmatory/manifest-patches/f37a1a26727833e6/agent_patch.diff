@@ -1,0 +1,57 @@
+diff --git a/sklearn/utils/_set_output.py b/sklearn/utils/_set_output.py
+--- a/sklearn/utils/_set_output.py
++++ b/sklearn/utils/_set_output.py
+@@ -12,6 +12,7 @@
+     *,
+     columns,
+     index=None,
++    dtypes=None,
+ ):
+     """Create a Pandas DataFrame.
+ 
+@@ -36,6 +37,10 @@
+     index : array-like, default=None
+         Index for data.
+ 
++    dtypes : dict, default=None
++        A dictionary of {column name: dtype} pairs to set the dtypes of the
++        output DataFrame. If None, the dtypes are inferred from the data.
++
+     Returns
+     -------
+     dataframe : DataFrame
+@@ -59,7 +64,12 @@
+             data_to_wrap.index = index
+         return data_to_wrap
+ 
+-    return pd.DataFrame(data_to_wrap, index=index, columns=columns)
++    df = pd.DataFrame(data_to_wrap, index=index, columns=columns)
++
++    if dtypes is not None:
++        df = df.astype(dtypes, copy=False)
++
++    return df
+ 
+ 
+ def _get_output_config(method, estimator=None):
+@@ -127,10 +137,20 @@
+         return data_to_wrap
+ 
+     # dense_config == "pandas"
++    # Get dtypes from original input if it's a DataFrame
++    if hasattr(original_input, "dtypes"):
++        # Get the feature names for the selected columns
++        feature_names = estimator.get_feature_names_out()
++        # Create a dict of column dtypes for the selected columns
++        dtypes = {name: original_input.dtypes[name] for name in feature_names}
++    else:
++        dtypes = None
++
+     return _wrap_in_pandas_container(
+         data_to_wrap=data_to_wrap,
+         index=getattr(original_input, "index", None),
+         columns=estimator.get_feature_names_out,
++        dtypes=dtypes,
+     )
+ 
+ 

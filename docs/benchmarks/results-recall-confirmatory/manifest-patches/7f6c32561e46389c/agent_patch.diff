@@ -1,0 +1,63 @@
+diff --git a/django/db/models/__init__.py b/django/db/models/__init__.py
+--- a/django/db/models/__init__.py
++++ b/django/db/models/__init__.py
+@@ -12,8 +12,8 @@
+ from django.db.models.enums import __all__ as enums_all
+ from django.db.models.expressions import (
+     Case, Exists, Expression, ExpressionList, ExpressionWrapper, F, Func,
+-    OrderBy, OuterRef, RowRange, Subquery, Value, ValueRange, When, Window,
+-    WindowFrame,
++    OrderBy, OuterRef, RowRange, Subquery, Value, ValueExpression,
++    ValueRange, When, Window, WindowFrame,
+ )
+ from django.db.models.fields import *  # NOQA
+ from django.db.models.fields import __all__ as fields_all
+@@ -42,7 +42,7 @@
+     'SET_NULL', 'ProtectedError', 'RestrictedError',
+     'Case', 'Exists', 'Expression', 'ExpressionList', 'ExpressionWrapper', 'F',
+     'Func', 'OrderBy', 'OuterRef', 'RowRange', 'Subquery', 'Value',
+-    'ValueRange', 'When',
++    'ValueExpression', 'ValueRange', 'When',
+     'Window', 'WindowFrame',
+     'FileField', 'ImageField', 'JSONField', 'OrderWrt', 'Lookup', 'Transform',
+     'Manager', 'Prefetch', 'Q', 'QuerySet', 'prefetch_related_objects',
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -731,6 +731,7 @@
+         return copy
+ 
+ 
++@deconstructible(path='django.db.models.Value')
+ class Value(SQLiteNumericMixin, Expression):
+     """Represent a wrapped value as a node within an expression."""
+     # Provide a default value for `for_save` in order to allow unresolved
+@@ -807,6 +808,28 @@
+         return self.value
+ 
+ 
++@deconstructible(path='django.db.models.ValueExpression')
++class ValueExpression(Value):
++    """
++    A Value expression without an output_field.
++
++    Use this class when you need a Value expression that doesn't specify an
++    output_field. It will be automatically converted to the appropriate
++    field type during query evaluation.
++    """
++    pass
++
++
++# Set up Value.__new__ to return ValueExpression when output_field is None.
++# This must be done after ValueExpression is defined.
++_Value_new = Value.__new__
++def Value_new(cls, value, output_field=None):
++    if output_field is None:
++        return ValueExpression(value)
++    return _Value_new(cls, value, output_field=output_field)
++Value.__new__ = staticmethod(Value_new)
++
++
+ class RawSQL(Expression):
+     def __init__(self, sql, params, output_field=None):
+         if output_field is None:

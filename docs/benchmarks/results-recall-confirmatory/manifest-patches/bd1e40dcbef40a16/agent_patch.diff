@@ -1,0 +1,198 @@
+diff --git a/pylint/pyreverse/utils.py b/pylint/pyreverse/utils.py
+--- a/pylint/pyreverse/utils.py
++++ b/pylint/pyreverse/utils.py
+@@ -20,6 +20,8 @@
+ import re
+ import sys
+ 
++import astroid
++
+ RCFILE = ".pyreverserc"
+ 
+ 
+@@ -113,6 +115,185 @@
+ }
+ 
+ 
++def _is_none_node(node):
++    """Check if node represents None value."""
++    if node is None:
++        return True
++    if isinstance(node, astroid.Const) and node.name == "NoneType":
++        return True
++    return False
++
++
++def _get_annotation_str(annotation_node):
++    """Convert an annotation AST node to a string representation."""
++    if annotation_node is None:
++        return None
++    if isinstance(annotation_node, astroid.Subscript):
++        # For types like Optional[str], List[int], etc.
++        return annotation_node.as_string()
++    if isinstance(annotation_node, astroid.Name):
++        return annotation_node.name
++    if isinstance(annotation_node, astroid.Const):
++        # For string annotations like 'Optional[str]'
++        return str(annotation_node.value)
++    return annotation_node.as_string()
++
++
++def _is_optional_annotation(annotation_node):
++    """Check if the annotation is already Optional[...]."""
++    if annotation_node is None:
++        return False
++    if isinstance(annotation_node, astroid.Subscript):
++        if isinstance(annotation_node.value, astroid.Name):
++            if annotation_node.value.name == "Optional":
++                return True
++    return False
++
++
++def get_annotation(node):
++    """Get the type annotation for a node.
++
++    For AnnAssign nodes (accessed via node.value), extracts the annotation
++    from the parent AnnAssign.
++
++    For AssignAttr nodes (like self.x = x in __init__), looks up the
++    annotation from the method signature.
++
++    Returns an object with a .name attribute containing the type string,
++    or None if no annotation is found.
++    """
++    # Check if this is a value of an AnnAssign (parent is AnnAssign)
++    if isinstance(node.parent, astroid.AnnAssign):
++        ann_assign = node.parent
++        annotation = ann_assign.annotation
++        value = ann_assign.value
++        ann_str = _get_annotation_str(annotation)
++        if ann_str is None:
++            return None
++        # Check if default value is None
++        if not _is_optional_annotation(annotation) and _is_none_node(value):
++            return _OptionalAnnotation(ann_str)
++        return _SimpleAnnotation(ann_str)
++
++    # Check if this is an AssignAttr (like self.x = x)
++    if isinstance(node, astroid.AssignAttr):
++        # Find the parent FunctionDef
++        parent = node.parent
++        while parent is not None:
++            if isinstance(parent, astroid.FunctionDef):
++                break
++            parent = parent.parent
++
++        if parent is None:
++            return None
++
++        # Find the parameter matching attrname
++        attrname = node.attrname
++        args = parent.args
++        annotations = args.annotations
++
++        # Build a mapping from arg names to their annotations
++        arg_names = []
++        if hasattr(args, 'posonlyargs'):
++            arg_names.extend(args.posonlyargs)
++        arg_names.extend(args.args)
++        arg_names.extend(args.kwonlyargs)
++
++        # Find the index of the matching argument
++        param_idx = None
++        for i, arg in enumerate(arg_names):
++            if hasattr(arg, 'name') and arg.name == attrname:
++                param_idx = i
++                break
++
++        if param_idx is None or param_idx >= len(annotations):
++            return None
++
++        annotation = annotations[param_idx]
++
++        # Check if there's a default value
++        defaults = []
++        if hasattr(args, 'posonlyargs_defaults'):
++            defaults.extend(args.posonlyargs_defaults)
++        defaults.extend(args.defaults)
++        defaults.extend(args.kw_defaults)
++
++        # Calculate how many defaults we have for this parameter
++        # Defaults are right-aligned with parameters
++        num_defaults = len(defaults)
++        num_params = len(arg_names)
++        # Check if this parameter has a default
++        has_default = (num_defaults > 0 and
++                       (param_idx >= num_params - num_defaults))
++
++        ann_str = _get_annotation_str(annotation)
++        if ann_str is None:
++            return None
++
++        # Check if default is None
++        if has_default:
++            # Get the default value for this parameter
++            # Defaults are right-aligned: last N params have defaults
++            default_idx = param_idx - (num_params - num_defaults)
++            if 0 <= default_idx < len(defaults):
++                if _is_none_node(defaults[default_idx]):
++                    if not _is_optional_annotation(annotation):
++                        return _OptionalAnnotation(ann_str)
++                    return _SimpleAnnotation(ann_str)
++
++        return _SimpleAnnotation(ann_str)
++
++    return None
++
++
++def _has_none_default(node):
++    """Check if a node has a None default value."""
++    if isinstance(node, astroid.Assign):
++        # For self.x = None, check if the value is None
++        if isinstance(node.value, astroid.Const) and node.value.name == "NoneType":
++            return True
++        if isinstance(node.value, astroid.Name) and node.value.name == "None":
++            return True
++    return False
++
++
++class _SimpleAnnotation:
++    """Wrapper for a simple type annotation."""
++
++    def __init__(self, name):
++        self.name = name
++
++    def __str__(self):
++        return self.name
++
++
++class _OptionalAnnotation:
++    """Wrapper for an Optional type annotation."""
++
++    def __init__(self, type_name):
++        self.name = f"Optional[{type_name}]"
++
++    def __str__(self):
++        return self.name
++
++
++def infer_node(node):
++    """Infer the type of a node.
++
++    First tries to get the annotation using get_annotation().
++    If no annotation is found, tries to infer the type from the node.
++
++    Returns a set of inferred types.
++    """
++    annotation = get_annotation(node)
++    if annotation is not None:
++        return {annotation}
++    try:
++        return set(node.infer())
++    except astroid.InferenceError:
++        return set()
++
++
+ class FilterMixIn:
+     """filter nodes according to a mode and nodes' visibility"""
+ 

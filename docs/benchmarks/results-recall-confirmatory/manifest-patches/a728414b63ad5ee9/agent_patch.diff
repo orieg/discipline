@@ -1,0 +1,23 @@
+diff --git a/django/db/migrations/operations/models.py b/django/db/migrations/operations/models.py
+--- a/django/db/migrations/operations/models.py
++++ b/django/db/migrations/operations/models.py
+@@ -480,6 +480,19 @@
+     def option_value(self):
+         return getattr(self, self.option_name)
+ 
++    def reduce(self, operation, app_label):
++        # Handle reducing with other AlterTogetherOptionOperation for the same model.
++        if (isinstance(operation, AlterTogetherOptionOperation) and
++                self.name_lower == operation.name_lower and
++                not isinstance(operation, self.__class__)):
++            # If either operation has an empty value, it's a clearing operation.
++            # We can skip the other operation (either clearing or setting) because
++            # they affect different constraint types and don't conflict.
++            if (self.option_value is None or self.option_value == set() or
++                    operation.option_value is None or operation.option_value == set()):
++                return True
++        return super().reduce(operation, app_label)
++
+     def deconstruct(self):
+         kwargs = {
+             'name': self.name,

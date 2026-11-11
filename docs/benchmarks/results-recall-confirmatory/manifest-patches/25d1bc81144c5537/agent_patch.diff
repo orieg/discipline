@@ -1,0 +1,15 @@
+diff --git a/lib/matplotlib/dates.py b/lib/matplotlib/dates.py
+--- a/lib/matplotlib/dates.py
++++ b/lib/matplotlib/dates.py
+@@ -799,6 +799,11 @@
+             if len(np.unique(tickdate[:, level])) > 1:
+                 if level < 2:
+                     show_offset = False
++                # At level 1 (month), if no tick is in January (month 1),
++                # the year would not be shown in any tick label, so we need
++                # to show it in the offset.
++                if level == 1 and 1 not in tickdate[:, 1]:
++                    show_offset = True
+                 break
+             elif level == 0:
+                 # all tickdate are the same, so only micros might be different

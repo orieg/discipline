@@ -1,0 +1,24 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -954,6 +954,10 @@
+                 if both_m2m or neither_m2m:
+                     # Either both fields are m2m or neither is
+                     preserve_default = True
++                    # Fields that are foreignkeys/m2ms depend on stuff
++                    dependencies = []
++                    if new_field.remote_field and new_field.remote_field.model:
++                        dependencies.extend(self._get_dependencies_for_foreign_key(new_field))
+                     if (old_field.null and not new_field.null and not new_field.has_default() and
+                             not new_field.many_to_many):
+                         field = new_field.clone()
+@@ -970,7 +974,8 @@
+                             name=field_name,
+                             field=field,
+                             preserve_default=preserve_default,
+-                        )
++                        ),
++                        dependencies=dependencies,
+                     )
+                 else:
+                     # We cannot alter between m2m and concrete fields

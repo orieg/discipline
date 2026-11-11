@@ -1,0 +1,44 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -442,6 +442,29 @@
+     def set_source_expressions(self, exprs):
+         self.lhs, self.rhs = exprs
+ 
++    def _resolve_output_field(self):
++        # Handle temporal subtraction - when subtracting two datetime fields,
++        # the result is a DurationField
++        if (
++            self.connector == self.SUB and
++            hasattr(self.lhs, 'output_field') and
++            hasattr(self.rhs, 'output_field')
++        ):
++            try:
++                lhs_type = self.lhs.output_field.get_internal_type()
++                rhs_type = self.rhs.output_field.get_internal_type()
++            except FieldError:
++                pass
++            else:
++                datetime_fields = {'DateField', 'DateTimeField', 'TimeField'}
++                if (
++                    lhs_type in datetime_fields and
++                    rhs_type in datetime_fields and
++                    lhs_type == rhs_type
++                ):
++                    return fields.DurationField()
++        return super()._resolve_output_field()
++
+     def as_sql(self, compiler, connection):
+         try:
+             lhs_type = self.lhs.output_field.get_internal_type()
+diff --git a/tests/expressions/tests.py b/tests/expressions/tests.py
+--- a/tests/expressions/tests.py
++++ b/tests/expressions/tests.py
+@@ -1538,7 +1538,6 @@
+             difference=F('date_case') - F('completed_value'),
+         ).filter(difference=datetime.timedelta())
+         self.assertEqual(queryset.get(), self.e0)
+-    self.assertEqual(queryset.get(), None)
+ 
+     @skipUnlessDBFeature('supports_temporal_subtraction')
+     def test_time_subtraction(self):

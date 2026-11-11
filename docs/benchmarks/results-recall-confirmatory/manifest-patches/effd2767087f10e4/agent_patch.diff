@@ -1,0 +1,40 @@
+diff --git a/xarray/core/rolling.py b/xarray/core/rolling.py
+--- a/xarray/core/rolling.py
++++ b/xarray/core/rolling.py
+@@ -270,9 +270,21 @@
+     def __iter__(self) -> Iterator[tuple[RollingKey, DataArray]]:
+         if self.ndim > 1:
+             raise ValueError("__iter__ is only supported for 1d-rolling")
+-        stops = np.arange(1, len(self.window_labels) + 1)
+-        starts = stops - int(self.window[0])
+-        starts[: int(self.window[0])] = 0
++
++        center = self.center[0]
++        window_size = int(self.window[0])
++        n = len(self.window_labels)
++
++        if center:
++            half = window_size // 2
++            starts = np.arange(n) - half
++            starts = np.maximum(0, starts)
++            stops = np.minimum(np.arange(n) + half + 1, n)
++        else:
++            stops = np.arange(1, n + 1)
++            starts = stops - window_size
++            starts[:window_size] = 0
++
+         for (label, start, stop) in zip(self.window_labels, starts, stops):
+             window = self.obj.isel({self.dim[0]: slice(start, stop)})
+ 
+diff --git a/xarray/tests/test_rolling.py b/xarray/tests/test_rolling.py
+--- a/xarray/tests/test_rolling.py
++++ b/xarray/tests/test_rolling.py
+@@ -33,7 +33,7 @@
+         rolling_obj = da.rolling(time=size, center=center)
+         rolling_obj_mean = rolling_obj.mean()
+ 
+-    assert len(rolling_obj.window_labels) == len(da["time"]) + 1
++        assert len(rolling_obj.window_labels) == len(da["time"])
+         assert_identical(rolling_obj.window_labels, da["time"])
+ 
+         for i, (label, window_da) in enumerate(rolling_obj):

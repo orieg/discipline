@@ -1,0 +1,64 @@
+diff --git a/django/db/backends/postgresql/operations.py b/django/db/backends/postgresql/operations.py
+--- a/django/db/backends/postgresql/operations.py
++++ b/django/db/backends/postgresql/operations.py
+@@ -44,10 +44,18 @@
+         return "DATE_TRUNC('%s', %s)" % (lookup_type, field_name)
+ 
+     def _prepare_tzname_delta(self, tzname):
+-        if '+' in tzname:
+-            return tzname.replace('+', '-')
+-        elif '-' in tzname:
+-            return tzname.replace('-', '+')
++        # Handle Etc/GMT* timezones where the sign is inverted in the name.
++        # The IANA timezone database convention is inverted: Etc/GMT-10 is
++        # 10 hours EAST of UTC (UTC+10), while Etc/GMT+10 is UTC-10.
++        # PostgreSQL's AT TIME ZONE uses the standard convention, so we need
++        # to flip the sign for Etc/GMT names. However, offset strings like
++        # '+10' should not be modified.
++        import re
++        if re.match(r'^Etc/GMT([+-])(\d{1,2})$', tzname):
++            sign, hours = re.match(r'^Etc/GMT([+-])(\d{1,2})$', tzname).groups()
++            # Invert the sign because Etc/GMT uses opposite convention
++            offset_sign = '-' if sign == '+' else '+'
++            return f'Etc/GMT{offset_sign}{hours}'
+         return tzname
+ 
+     def _convert_field_to_tz(self, field_name, tzname):
+diff --git a/django/utils/timezone.py b/django/utils/timezone.py
+--- a/django/utils/timezone.py
++++ b/django/utils/timezone.py
+@@ -71,9 +71,31 @@
+     return _get_timezone_name(get_current_timezone())
+ 
+ 
+-def _get_timezone_name(timezone):
+-    """Return the name of ``timezone``."""
+-    return str(timezone)
++def _get_timezone_name(tzinfo):
++    """
++    Return the name of ``tzinfo``.
++
++    For fixed offset timezones from pytz and zoneinfo, this returns the
++    offset (e.g. '+10' for 'Etc/GMT-10') for usage with Trunc DB functions.
++    The Etc/GMT timezone naming convention is inverted: 'Etc/GMT-10' is
++    10 hours EAST of UTC (UTC+10).
++    """
++    import re
++    tzname = str(tzinfo)
++    # datetime.timezone instances should return their string representation
++    # (which may be a custom name like 'Etc/GMT-10' or 'UTC+10:00')
++    if isinstance(tzinfo, timezone):
++        return tzname
++    # Handle Etc/GMT* timezones from pytz and zoneinfo
++    # The IANA timezone database inverts the sign: Etc/GMT-10 is UTC+10
++    if tzname.startswith('Etc/GMT'):
++        match = re.match(r'^Etc/GMT([+-])(\d{1,2})$', tzname)
++        if match:
++            sign, hours = match.groups()
++            # Invert the sign because Etc/GMT uses opposite convention
++            offset_sign = '-' if sign == '+' else '+'
++            return f'{offset_sign}{hours}'
++    return tzname
+ 
+ # Timezone selection functions.
+ 

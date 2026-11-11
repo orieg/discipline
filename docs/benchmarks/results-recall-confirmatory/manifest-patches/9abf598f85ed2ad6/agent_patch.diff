@@ -1,0 +1,43 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -1160,6 +1160,19 @@
+         clone.negated = not self.negated
+         return clone
+ 
++    def __rand__(self, other):
++        if getattr(other, 'conditional', False):
++            from django.db.models.sql.where import ExtraWhere
++            from django.db.models import Q
++            return Q(other) & Q(self)
++        return NotImplemented
++
++    def __ror__(self, other):
++        if getattr(other, 'conditional', False):
++            from django.db.models import Q
++            return Q(other) | Q(self)
++        return NotImplemented
++
+     def as_sql(self, compiler, connection, template=None, **extra_context):
+         query = self.query.exists(using=connection.alias)
+         sql, params = super().as_sql(
+diff --git a/django/db/models/query_utils.py b/django/db/models/query_utils.py
+--- a/django/db/models/query_utils.py
++++ b/django/db/models/query_utils.py
+@@ -41,14 +41,13 @@
+ 
+     def _combine(self, other, conn):
+         if not isinstance(other, Q):
+-            raise TypeError(other)
+-
++            return NotImplemented
+         # If the other Q() is empty, ignore it and just use `self`.
+         if not other:
+             _, args, kwargs = self.deconstruct()
+             return type(self)(*args, **kwargs)
+         # Or if this Q is empty, ignore it and just use `other`.
+-        elif not self:
++        if not self:
+             _, args, kwargs = other.deconstruct()
+             return type(other)(*args, **kwargs)
+ 

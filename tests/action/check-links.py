@@ -14,6 +14,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 FORBIDDEN_TOKEN = "P" + "RD"
+# A whole word only: a random identifier such as a run id can hold these letters.
+FORBIDDEN_RE = re.compile(r"\b" + FORBIDDEN_TOKEN + r"\b")
 
 
 def check_no_prd_references():
@@ -45,7 +47,7 @@ def check_no_prd_references():
             try:
                 with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
                     for lno, line in enumerate(f, 1):
-                        if FORBIDDEN_TOKEN in line:
+                        if FORBIDDEN_RE.search(line):
                             violations.append(f"{fpath.relative_to(ROOT)}:{lno}: {line.strip()}")
             except Exception as e:
                 print(f"Warning: could not read {fpath}: {e}", file=sys.stderr)

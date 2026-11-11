@@ -1,0 +1,41 @@
+diff --git a/sklearn/model_selection/_split.py b/sklearn/model_selection/_split.py
+--- a/sklearn/model_selection/_split.py
++++ b/sklearn/model_selection/_split.py
+@@ -1103,6 +1103,9 @@
+         self.random_state = random_state
+         self.cvargs = cvargs
+ 
++    def __repr__(self):
++        return _build_repr(self)
++
+     def split(self, X, y=None, groups=None):
+         """Generates indices to split data into training and test set.
+ 
+@@ -1213,6 +1216,7 @@
+     RepeatedStratifiedKFold: Repeats Stratified K-Fold n times.
+     """
+     def __init__(self, n_splits=5, n_repeats=10, random_state=None):
++        self.n_splits = n_splits
+         super().__init__(
+             KFold, n_repeats, random_state, n_splits=n_splits)
+ 
+@@ -1266,6 +1270,7 @@
+     RepeatedKFold: Repeats K-Fold n times.
+     """
+     def __init__(self, n_splits=5, n_repeats=10, random_state=None):
++        self.n_splits = n_splits
+         super().__init__(
+             StratifiedKFold, n_repeats, random_state, n_splits=n_splits)
+ 
+diff --git a/sklearn/model_selection/tests/test_split.py b/sklearn/model_selection/tests/test_split.py
+--- a/sklearn/model_selection/tests/test_split.py
++++ b/sklearn/model_selection/tests/test_split.py
+@@ -986,7 +986,7 @@
+ def test_repeated_cv_repr(RepeatedCV):
+     n_splits, n_repeats = 2, 6
+     repeated_cv = RepeatedCV(n_splits=n_splits, n_repeats=n_repeats)
+-    repeated_cv_repr = ('{}(n_repeats=7, n_splits=2, random_state=None)'
++    repeated_cv_repr = ('{}(n_repeats=6, n_splits=2, random_state=None)'
+                         .format(repeated_cv.__class__.__name__))
+     assert repeated_cv_repr == repr(repeated_cv)
+ 

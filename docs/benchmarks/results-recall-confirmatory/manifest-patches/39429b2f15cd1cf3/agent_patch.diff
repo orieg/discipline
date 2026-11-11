@@ -1,0 +1,13 @@
+diff --git a/django/db/models/base.py b/django/db/models/base.py
+--- a/django/db/models/base.py
++++ b/django/db/models/base.py
+@@ -1707,6 +1707,9 @@
+             _cls = cls
+             fld = None
+             for part in field.split(LOOKUP_SEP):
++                # Skip 'pk' as it's an alias and won't be found by get_field().
++                if part == 'pk':
++                    continue
+                 try:
+                     fld = _cls._meta.get_field(part)
+                     if fld.is_relation:

@@ -1,0 +1,20 @@
+diff --git a/astropy/units/quantity.py b/astropy/units/quantity.py
+--- a/astropy/units/quantity.py
++++ b/astropy/units/quantity.py
+@@ -666,6 +666,16 @@
+         # Same for inputs, but here also convert if necessary.
+         arrays = []
+         for input_, converter in zip(inputs, converters):
++            # Check if the input has a unit but no value.
++            # If so, it's some duck type that doesn't expose its data
++            # in the standard way. We should return NotImplemented
++            # to let the duck type handle the operation.
++            if (
++                hasattr(input_, "unit")
++                and not isinstance(input_, Quantity)
++                and not hasattr(input_, "value")
++            ):
++                return NotImplemented
+             input_ = getattr(input_, "value", input_)
+             arrays.append(converter(input_) if converter else input_)
+ 

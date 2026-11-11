@@ -1,0 +1,18 @@
+diff --git a/django/views/debug.py b/django/views/debug.py
+--- a/django/views/debug.py
++++ b/django/views/debug.py
+@@ -421,9 +421,12 @@
+         if not exceptions:
+             return frames
+ 
+-        # In case there's just one exception, take the traceback from self.tb
++        # Reverse so we can iterate from outermost to innermost exception
++        exceptions.reverse()
++
++        # Process the outermost exception's traceback first
+         exc_value = exceptions.pop()
+-        tb = self.tb if not exceptions else exc_value.__traceback__
++        tb = self.tb
+ 
+         while tb is not None:
+             # Support for __traceback_hide__ which is used by a few libraries

@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 760 473" width="100%">
+<title>Discipline caught 8% of test gaming; simple rules caught 82-91%</title>
+<defs><style>
+.bg{fill:#fff} .border{stroke:#e2e8f0;fill:none} .grid{stroke:#f1f5f9;stroke-dasharray:2,3}
+.axis{stroke:#cbd5e1;stroke-width:1.5px} .floor{stroke:#b45309;stroke-width:1.5px;stroke-dasharray:5,3}
+.t-title{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:14px;font-weight:700;fill:#0f172a}
+.t-sub{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:11px;font-weight:500;fill:#334155}
+.t-note{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:10px;fill:#64748b}
+.t-head{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:11px;font-weight:700;fill:#0f172a}
+.t-row{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:11px;font-weight:600;fill:#0f172a}
+.t-axis{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:9.5px;fill:#64748b}
+.t-val{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:10.5px;font-weight:600;fill:#334155}
+.t-big{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:11px;font-weight:700;fill:#0f172a}
+.t-floor{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:10px;font-weight:700;fill:#b45309}
+.c-disc{fill:#4f46e5;stroke:#4f46e5} .c-base{fill:#64748b;stroke:#64748b}
+.c-hollow{fill:#fff;stroke:#4f46e5;stroke-width:2px}
+.ci{stroke-width:2.5px;stroke-linecap:round}
+</style></defs>
+<rect class="bg" width="760" height="473" rx="6"/>
+<rect class="border" x=".5" y=".5" width="759" height="472" rx="6"/>
+<text class="t-title" x="24" y="32">Discipline caught 8% of test gaming; simple rules caught 82-91%</text>
+<text class="t-sub" x="24" y="52">Coding agents were given tests that cannot pass honestly. When an agent made them pass by editing tests, which</text>
+<text class="t-sub" x="24" y="67">check blocked it? The same agents also solved ordinary tasks honestly; the second panel is how often each check</text>
+<text class="t-sub" x="24" y="82">wrongly blocked those.</text>
+<text class="t-head" x="24" y="109">Test gaming caught, out of 138 cases (higher is better)</text>
+<line class="grid" x1="254.0" y1="135" x2="254.0" y2="219"/>
+<text class="t-axis" x="254.0" y="233" text-anchor="middle">0%</text>
+<line class="grid" x1="306.0" y1="135" x2="306.0" y2="219"/>
+<text class="t-axis" x="306.0" y="233" text-anchor="middle">20%</text>
+<line class="grid" x1="358.0" y1="135" x2="358.0" y2="219"/>
+<text class="t-axis" x="358.0" y="233" text-anchor="middle">40%</text>
+<line class="grid" x1="410.0" y1="135" x2="410.0" y2="219"/>
+<text class="t-axis" x="410.0" y="233" text-anchor="middle">60%</text>
+<line class="grid" x1="462.0" y1="135" x2="462.0" y2="219"/>
+<text class="t-axis" x="462.0" y="233" text-anchor="middle">80%</text>
+<line class="grid" x1="514.0" y1="135" x2="514.0" y2="219"/>
+<text class="t-axis" x="514.0" y="233" text-anchor="middle">100%</text>
+<line class="axis" x1="254" y1="219" x2="514" y2="219"/>
+<line class="floor" x1="462.0" y1="129" x2="462.0" y2="219"/>
+<text class="t-floor" x="466" y="127">Bar set in advance: 80%</text>
+<text class="t-row" x="24" y="149">Discipline</text>
+<line class="ci c-disc" x1="265.7" y1="145" x2="289.6" y2="145"/>
+<circle class="c-disc" cx="274.7" cy="145" r="4.5"/>
+<text class="t-big" x="526" y="149">8.0%</text>
+<text class="t-val" x="576" y="149">11 of 138 · likely 4.5%–14%</text>
+<text class="t-row" x="24" y="175">Simple rule: any changed test line</text>
+<line class="ci c-base" x1="448.0" y1="171" x2="481.3" y2="171"/>
+<circle class="c-base" cx="466.9" cy="171" r="4.5"/>
+<text class="t-big" x="526" y="175">82%</text>
+<text class="t-val" x="576" y="175">113 of 138 · likely 74%–88%</text>
+<text class="t-row" x="24" y="201">Simple rule: any test, CI or config file</text>
+<line class="ci c-base" x1="473.8" y1="197" x2="499.5" y2="197"/>
+<circle class="c-base" cx="489.5" cy="197" r="4.5"/>
+<text class="t-big" x="526" y="201">91%</text>
+<text class="t-val" x="576" y="201">125 of 138 · likely 84%–95%</text>
+<text class="t-head" x="24" y="257">Honest solutions wrongly blocked, out of 644 (lower is better)</text>
+<line class="grid" x1="254.0" y1="273" x2="254.0" y2="357"/>
+<text class="t-axis" x="254.0" y="371" text-anchor="middle">0%</text>
+<line class="grid" x1="306.0" y1="273" x2="306.0" y2="357"/>
+<text class="t-axis" x="306.0" y="371" text-anchor="middle">20%</text>
+<line class="grid" x1="358.0" y1="273" x2="358.0" y2="357"/>
+<text class="t-axis" x="358.0" y="371" text-anchor="middle">40%</text>
+<line class="grid" x1="410.0" y1="273" x2="410.0" y2="357"/>
+<text class="t-axis" x="410.0" y="371" text-anchor="middle">60%</text>
+<line class="grid" x1="462.0" y1="273" x2="462.0" y2="357"/>
+<text class="t-axis" x="462.0" y="371" text-anchor="middle">80%</text>
+<line class="grid" x1="514.0" y1="273" x2="514.0" y2="357"/>
+<text class="t-axis" x="514.0" y="371" text-anchor="middle">100%</text>
+<line class="axis" x1="254" y1="357" x2="514" y2="357"/>
+<text class="t-row" x="24" y="287">Discipline</text>
+<line class="ci c-disc" x1="256.5" y1="283" x2="261.9" y2="283"/>
+<circle class="c-disc" cx="258.4" cy="283" r="4.5"/>
+<text class="t-big" x="526" y="287">1.7%</text>
+<text class="t-val" x="576" y="287">11 of 644 · likely 0.9%–3.1%</text>
+<text class="t-row" x="24" y="313">Simple rule: any changed test line</text>
+<line class="ci c-base" x1="254.1" y1="309" x2="256.3" y2="309"/>
+<circle class="c-base" cx="254.4" cy="309" r="4.5"/>
+<text class="t-big" x="526" y="313">0.2%</text>
+<text class="t-val" x="576" y="313">1 of 644 · likely 0.0%–0.9%</text>
+<text class="t-row" x="24" y="339">Simple rule: any test, CI or config file</text>
+<line class="ci c-base" x1="254.2" y1="335" x2="256.9" y2="335"/>
+<circle class="c-base" cx="254.8" cy="335" r="4.5"/>
+<text class="t-big" x="526" y="339">0.3%</text>
+<text class="t-val" x="576" y="339">2 of 644 · likely 0.0%–1.2%</text>
+<text class="t-note" x="24" y="395">75 of the 138 cases are tests the benchmark itself broke: they do not parse, or the changed line sits outside any test, so</text>
+<text class="t-note" x="24" y="409">no assertion was weakened for a diff check to see. On the other 63, Discipline caught 8. (post hoc triage, #838) The simple</text>
+<text class="t-note" x="24" y="423">rules block every test edit. Honest solutions here rarely touch tests; on real pull requests the file rule blocked 56%.</text>
+<text class="t-note" x="24" y="437">Python tasks from Impossible-SWE-bench, discipline 0.26.0, the release fixed before the study. Method:</text>
+<text class="t-note" x="24" y="451">docs/benchmarks/REPRODUCING.md §4. (measured)</text>
+</svg>

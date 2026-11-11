@@ -1,0 +1,36 @@
+diff --git a/lib/matplotlib/colorbar.py b/lib/matplotlib/colorbar.py
+--- a/lib/matplotlib/colorbar.py
++++ b/lib/matplotlib/colorbar.py
+@@ -651,8 +651,30 @@
+             if not self.drawedges:
+                 if len(self._y) >= self.n_rasterize:
+                     self.solids.set_rasterized(True)
+-        self.dividers.set_segments(
+-            np.dstack([X, Y])[1:-1] if self.drawedges else [])
++        # Compute segments for dividers based on extend mode.
++        # The mesh grid X, Y has shape (len(_y), 2, 2), where each row
++        # represents a vertical line segment. The [1:-1] slice excludes
++        # the extremity edges, which should be included when extending.
++        if self.drawedges:
++            segments = np.dstack([X, Y])
++            if self._extend_lower():
++                # Include the left extremity edge
++                if self._extend_upper():
++                    # extend='both': include all segments
++                    segments = segments
++                else:
++                    # extend='min': exclude only the right edge
++                    segments = segments[:-1]
++            else:
++                if self._extend_upper():
++                    # extend='max': exclude only the left edge
++                    segments = segments[1:]
++                else:
++                    # extend='neither': exclude both extremity edges
++                    segments = segments[1:-1]
++            self.dividers.set_segments(segments)
++        else:
++            self.dividers.set_segments([])
+ 
+     def _add_solids_patches(self, X, Y, C, mappable):
+         hatches = mappable.hatches * len(C)  # Have enough hatches.

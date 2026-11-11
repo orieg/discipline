@@ -1,0 +1,53 @@
+diff --git a/sympy/sets/handlers/intersection.py b/sympy/sets/handlers/intersection.py
+--- a/sympy/sets/handlers/intersection.py
++++ b/sympy/sets/handlers/intersection.py
+@@ -280,6 +280,7 @@
+         from sympy.core.function import expand_complex
+         from sympy.solvers.solvers import denoms, solve_linear
+         from sympy.core.relational import Eq
++        from sympy.polys.polytools import factor
+         f = self.lamda.expr
+         n = self.lamda.variables[0]
+ 
+@@ -304,21 +305,30 @@
+             return None
+         else:
+             # univarite imaginary part in same variable
+-            x, xis = zip(*[solve_linear(i, 0) for i in Mul.make_args(im) if n in i.free_symbols])
+-            if x and all(i == n for i in x):
+-                base_set -= FiniteSet(xis)
++            # Handle rational functions by getting numerator and denominator
++            # The equation im = 0 is equivalent to numerator(im) = 0 AND denominator(im) != 0
++            im_num, im_den = im.as_numer_denom()
++            # Find candidate solutions from numerator
++            sol_candidates = []
++            for i in Mul.make_args(im_num):
++                if n in i.free_symbols:
++                    sol = solve_linear(i, 0)
++                    if sol and sol[0] == n:
++                        sol_candidates.append(sol[1])
++            if sol_candidates:
++                base_set &= FiniteSet(*sol_candidates)
+             else:
+-                base_set -= ConditionSet(n, Eq(im, 0), S.Integers)
++                base_set &= ConditionSet(n, Eq(im, 0), S.Integers)
+         # exclude values that make denominators 0
+         for i in denoms(f):
+             if i.has(n):
+-                sol = list(zip(*[solve_linear(i, 0) for i in Mul.make_args(im) if n in i.free_symbols]))
+-                if sol != []:
+-                    x, xis = sol
+-                    if x and all(i == n for i in x):
+-                        base_set -= FiniteSet(xis)
+-                else:
+-                    base_set -= ConditionSet(n, Eq(i, 0), S.Integers)
++                # Factor the denominator to get linear factors
++                i_factored = factor(i)
++                for j in Mul.make_args(i_factored):
++                    if n in j.free_symbols:
++                        sol = solve_linear(j, 0)
++                        if sol and sol[0] == n:
++                            base_set -= FiniteSet(sol[1])
+         return imageset(lam, base_set)
+ 
+     elif isinstance(other, Interval):

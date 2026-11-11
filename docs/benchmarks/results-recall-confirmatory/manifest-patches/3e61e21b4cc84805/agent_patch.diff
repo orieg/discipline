@@ -1,0 +1,27 @@
+diff --git a/astropy/wcs/wcsapi/wrappers/sliced_wcs.py b/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
+--- a/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
++++ b/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
+@@ -242,6 +242,14 @@
+ 
+         return world_arrays
+ 
++    @lazyproperty
++    def _world_values_slice(self):
++        # Compute the world coordinate values at the slice positions.
++        # This is used when world_to_pixel_values is called to provide
++        # the correct values for world dimensions that correspond to
++        # sliced-out pixel dimensions.
++        return self._pixel_to_world_values_all(*[0] * self.pixel_n_dim)
++
+     def world_to_pixel_values(self, *world_arrays):
+         world_arrays = tuple(map(np.asanyarray, world_arrays))
+         world_arrays_new = []
+@@ -251,7 +259,7 @@
+                 iworld_curr += 1
+                 world_arrays_new.append(world_arrays[iworld_curr])
+             else:
+-                world_arrays_new.append(1.)
++                world_arrays_new.append(self._world_values_slice[iworld])
+ 
+         world_arrays_new = np.broadcast_arrays(*world_arrays_new)
+         pixel_arrays = list(self._wcs.world_to_pixel_values(*world_arrays_new))

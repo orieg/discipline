@@ -1,0 +1,42 @@
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -291,6 +291,38 @@
+             else:
+                 rep.outcome = "passed"
+                 rep.wasxfail = xfailed.reason
++    elif not rep.skipped and xfailed is None:
++        # Check if there's an xfail marker that was added dynamically
++        # after the initial xfailed evaluation (e.g., via add_marker during the test)
++        # We use get_closest_marker to check if there's an xfail marker
++        # that was added dynamically (not from the original collection-time evaluation)
++        for mark in item.iter_markers(name="xfail"):
++            # Only evaluate if the stored xfailed is None but we have xfail markers
++            # This handles the case where xfail was added via add_marker during test
++            try:
++                xfailed = evaluate_xfail_marks(item)
++            except fail.Exception:
++                # If evaluating xfail marks fails (e.g., invalid condition),
++                # we should not mask the original error
++                break
++            if xfailed is not None:
++                if call.excinfo:
++                    raises = xfailed.raises
++                    if raises is not None and not isinstance(
++                        call.excinfo.value, raises
++                    ):
++                        rep.outcome = "failed"
++                    else:
++                        rep.outcome = "skipped"
++                        rep.wasxfail = xfailed.reason
++                elif call.when == "call":
++                    if xfailed.strict:
++                        rep.outcome = "failed"
++                        rep.longrepr = "[XPASS(strict)] " + xfailed.reason
++                    else:
++                        rep.outcome = "passed"
++                        rep.wasxfail = xfailed.reason
++                break
+ 
+     if (
+         item._store.get(skipped_by_mark_key, True)

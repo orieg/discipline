@@ -1,0 +1,41 @@
+diff --git a/src/_pytest/logging.py b/src/_pytest/logging.py
+--- a/src/_pytest/logging.py
++++ b/src/_pytest/logging.py
+@@ -335,6 +335,7 @@
+         """Create a new log handler."""
+         super().__init__(StringIO())
+         self.records: List[logging.LogRecord] = []
++        self._when: Optional[str] = None
+ 
+     def emit(self, record: logging.LogRecord) -> None:
+         """Keep the log records in a list in addition to the log text."""
+@@ -345,6 +346,10 @@
+         self.records = []
+         self.stream = StringIO()
+ 
++    def set_when(self, when: str) -> None:
++        """Set the current test phase."""
++        self._when = when
++
+     def handleError(self, record: logging.LogRecord) -> None:
+         if logging.raiseExceptions:
+             # Fail the test if the log message is bad (emit failed).
+@@ -441,6 +446,10 @@
+     def clear(self) -> None:
+         """Reset the list of log records and the captured log text."""
+         self.handler.reset()
++        # Only update the entry for the current phase
++        when = self.handler._when
++        if when is not None:
++            self._item.stash[caplog_records_key][when] = self.handler.records
+ 
+     def set_level(self, level: Union[int, str], logger: Optional[str] = None) -> None:
+         """Set the level of a logger for the duration of a test.
+@@ -695,6 +704,7 @@
+             level=self.log_level,
+         ) as report_handler:
+             caplog_handler.reset()
++            caplog_handler.set_when(when)
+             report_handler.reset()
+             item.stash[caplog_records_key][when] = caplog_handler.records
+             item.stash[caplog_handler_key] = caplog_handler

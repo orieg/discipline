@@ -1,0 +1,24 @@
+diff --git a/sphinx/util/inspect.py b/sphinx/util/inspect.py
+--- a/sphinx/util/inspect.py
++++ b/sphinx/util/inspect.py
+@@ -432,6 +432,8 @@
+ 
+ def object_description(object: Any) -> str:
+     """A repr() implementation that returns text safe to use in reST context."""
++    if isinstance(object, enum.Enum):
++        return str(object)
+     if isinstance(object, dict):
+         try:
+             sorted_keys = sorted(object)
+diff --git a/tests/test_util_inspect.py b/tests/test_util_inspect.py
+--- a/tests/test_util_inspect.py
++++ b/tests/test_util_inspect.py
+@@ -523,7 +523,7 @@
+         BAR = 2
+ 
+     assert inspect.object_description(MyEnum.FOO) == "MyEnum.FOO"
+-    assert inspect.object_description(MyEnum.FOO) == "MyEnum.BAR"
++    assert inspect.object_description(MyEnum.BAR) == "MyEnum.BAR"
+ 
+ 
+ def test_getslots():

@@ -1,0 +1,29 @@
+diff --git a/xarray/core/nanops.py b/xarray/core/nanops.py
+--- a/xarray/core/nanops.py
++++ b/xarray/core/nanops.py
+@@ -26,19 +26,18 @@
+     """
+     xarray version of pandas.core.nanops._maybe_null_out
+     """
+-    if hasattr(axis, "__len__"):  # if tuple or list
+-        raise ValueError(
+-            "min_count is not available for reduction with more than one dimensions."
+-        )
+-
+     if axis is not None and getattr(result, "ndim", False):
+-        null_mask = (mask.shape[axis] - mask.sum(axis) - min_count) < 0
++        # Convert axis to tuple if it's not already (for numpy compatibility)
++        if not isinstance(axis, tuple):
++            axis = tuple(axis)
++        # Use np.take to handle both single and multiple axes
++        null_mask = (np.take(mask.shape, axis).prod() - mask.sum(axis) - min_count) < 0
+         if null_mask.any():
+             dtype, fill_value = dtypes.maybe_promote(result.dtype)
+             result = result.astype(dtype)
+             result[null_mask] = fill_value
+ 
+-    elif getattr(result, "dtype", None) not in dtypes.NAT_TYPES:
++    if getattr(result, "dtype", None) not in dtypes.NAT_TYPES:
+         null_mask = mask.size - mask.sum()
+         if null_mask < min_count:
+             result = np.nan

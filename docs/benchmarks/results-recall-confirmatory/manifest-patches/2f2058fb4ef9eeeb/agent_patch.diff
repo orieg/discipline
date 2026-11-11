@@ -1,0 +1,27 @@
+diff --git a/django/urls/base.py b/django/urls/base.py
+--- a/django/urls/base.py
++++ b/django/urls/base.py
+@@ -172,7 +172,11 @@
+         to_be_reversed = "%s:%s" % (match.namespace, match.url_name) if match.namespace else match.url_name
+         with override(lang_code):
+             try:
+-                url = reverse(to_be_reversed, args=match.args, kwargs=match.kwargs)
++                url = reverse(
++                    to_be_reversed,
++                    args=match.args,
++                    kwargs={k: v for k, v in match.kwargs.items() if v is not None},
++                )
+             except NoReverseMatch:
+                 pass
+             else:
+diff --git a/tests/i18n/patterns/locale/nl/LC_MESSAGES/django.po b/tests/i18n/patterns/locale/nl/LC_MESSAGES/django.po
+--- a/tests/i18n/patterns/locale/nl/LC_MESSAGES/django.po
++++ b/tests/i18n/patterns/locale/nl/LC_MESSAGES/django.po
+@@ -40,3 +40,7 @@
+ #: urls/namespace.py:12
+ msgid "register-as-path/"
+ msgstr "registreren-als-pad/"
++
++#: urls/default.py:18
++msgid "^with-arguments/(?P<argument>[\\w-]+)/(?:(?P<optional>[\\w-]+).html)?$"
++msgstr "^with-arguments/(?P<argument>[\\w-]+)/(?:(?P<optional>[\\w-]+).htm)?$"

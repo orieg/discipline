@@ -1,0 +1,12 @@
+diff --git a/tests/forms_tests/field_tests/test_multivaluefield.py b/tests/forms_tests/field_tests/test_multivaluefield.py
+--- a/tests/forms_tests/field_tests/test_multivaluefield.py
++++ b/tests/forms_tests/field_tests/test_multivaluefield.py
+@@ -192,6 +192,7 @@
+         self.assertTrue(form.is_valid())
+         self.assertInHTML('<input type="text" name="f_0" value="Hello" required id="id_f_0">', form.as_p())
+         self.assertInHTML('<input type="text" name="f_1" id="id_f_1">', form.as_p())
+-    self.assertFalse(form.is_valid())
++
++    def test_multivaluefield_required_subfield(self):
+         form = PartiallyRequiredForm({'f_0': '', 'f_1': ''})
+         self.assertFalse(form.is_valid())

@@ -1,0 +1,169 @@
+diff --git a/classes_No_Name.dot b/classes_No_Name.dot
+new file mode 100644
+--- /dev/null
++++ b/classes_No_Name.dot
+@@ -0,0 +1,9 @@
++digraph "classes_No_Name" {
++charset="utf-8"
++rankdir=BT
++"0" [label="{Ancestor|attr : str\lcls_member\l|get_value()\lset_value(value)\l}", shape="record"];
++"1" [label="{DoNothing|\l|}", shape="record"];
++"2" [label="{Interface|\l|get_value()\lset_value(value)\l}", shape="record"];
++"3" [label="{Specialization|TYPE : str\lrelation\ltop : str\l|}", shape="record"];
++"3" -> "0" [arrowhead="empty", arrowtail="none"];
++}
+diff --git a/packages_No_Name.dot b/packages_No_Name.dot
+new file mode 100644
+--- /dev/null
++++ b/packages_No_Name.dot
+@@ -0,0 +1,7 @@
++digraph "packages_No_Name" {
++charset="utf-8"
++rankdir=BT
++"0" [label="/testbed/tests/data/__init__.py", shape="box"];
++"1" [label="/testbed/tests/data/clientmodule_test.py", shape="box"];
++"2" [label="/testbed/tests/data/suppliermodule_test.py", shape="box"];
++}
+diff --git a/pylint/pyreverse/utils.py b/pylint/pyreverse/utils.py
+--- a/pylint/pyreverse/utils.py
++++ b/pylint/pyreverse/utils.py
+@@ -16,6 +16,7 @@
+ # For details: https://github.com/PyCQA/pylint/blob/master/LICENSE
+ 
+ """Generic classes/functions for pyreverse core/extensions. """
++import astroid
+ import os
+ import re
+ import sys
+@@ -213,3 +214,131 @@
+         if methods[1] is not None:
+             return methods[1](node)
+         return None
++
++
++# Type hint utilities #########################################################
++
++class Annotation:
++    """Wrapper class for type annotations."""
++
++    def __init__(self, name):
++        self.name = name
++
++
++def _get_annotation_name(node):
++    """Get the annotation name from an astroid node.
++
++    Args:
++        node: An astroid node (Name, Subscript, etc.)
++
++    Returns:
++        A string representation of the type, or None if not determinable.
++    """
++    if isinstance(node, astroid.Name):
++        return node.name
++    elif isinstance(node, astroid.Subscript):
++        # For Subscript like Optional[str]
++        base_name = _get_annotation_name(node.value)
++        slice_name = _get_annotation_name(node.slice)
++        return f"{base_name}[{slice_name}]"
++    return None
++
++
++def _is_none_value(node):
++    """Check if the node represents a None constant."""
++    return isinstance(node, astroid.Const) and node.value is None
++
++
++def get_annotation(node):
++    """Get the type annotation from a node.
++
++    For AnnAssign nodes, called with node.value (the RHS):
++        - Get annotation from parent AnnAssign
++        - Format the annotation
++        - If default value is None and type is not Optional, wrap in Optional
++
++    For AssignAttr nodes (like self.x in __init__):
++        - Find parent FunctionDef
++        - Find the argument with matching name
++        - Get the annotation from that argument
++        - Check if the argument has None as default value
++
++    Args:
++        node: An astroid node (AnnAssign value or AssignAttr)
++
++    Returns:
++        An Annotation object with a 'name' attribute, or None if no annotation found.
++    """
++    # Check if node is AnnAssign value (node.value in a: str = None)
++    parent = node.parent
++    if isinstance(parent, astroid.AnnAssign):
++        annotation = parent.annotation
++        if annotation is not None:
++            ann_name = _get_annotation_name(annotation)
++            if ann_name is not None:
++                # Check if default value is None
++                if parent.value is not None and _is_none_value(parent.value):
++                    # Wrap in Optional if not already Optional
++                    if not ann_name.startswith("Optional["):
++                        ann_name = f"Optional[{ann_name}]"
++                return Annotation(ann_name)
++
++    # Check if node is an AssignAttr (like self.x)
++    if isinstance(node, astroid.AssignAttr):
++        # Find the parent FunctionDef
++        current = node
++        while current is not None:
++            if isinstance(current, astroid.FunctionDef):
++                # Find the argument with matching name
++                args = current.args.args
++                defaults = current.args.defaults
++                annotations = current.args.annotations
++                num_defaults = len(defaults)
++                num_args = len(args)
++
++                for i, arg in enumerate(args):
++                    if arg.name == node.attrname:
++                        annotation = annotations[i]
++                        if annotation is not None:
++                            ann_name = _get_annotation_name(annotation)
++                            if ann_name is not None:
++                                # Check if this argument has None as default
++                                if i >= num_args - num_defaults:
++                                    # This argument has a default
++                                    default_idx = i - (num_args - num_defaults)
++                                    default = defaults[default_idx]
++                                    if _is_none_value(default):
++                                        if not ann_name.startswith("Optional["):
++                                            ann_name = f"Optional[{ann_name}]"
++                                return Annotation(ann_name)
++                break
++            current = current.parent
++
++    return None
++
++
++def infer_node(node):
++    """Infer the type of a node.
++
++    First try to get annotation using get_annotation.
++    If no annotation is returned, try to infer using node.infer().
++    If InferenceError is raised, return empty set.
++    Return inferred values as a set.
++
++    Args:
++        node: An astroid node to infer.
++
++    Returns:
++        A set of inferred values.
++    """
++    import astroid as astroid_module
++
++    annotation = get_annotation(node)
++    if annotation is not None:
++        return {annotation}
++
++    try:
++        inferred = set(node.infer())
++        return inferred
++    except astroid_module.InferenceError:
++        return set()

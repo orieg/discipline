@@ -1,0 +1,63 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -567,6 +567,14 @@
+                            summarize=False, for_save=False, simple_col=False):
+         if isinstance(self.name, self.__class__):
+             return self.name
++        if query is not None:
++            try:
++                query.resolve_ref(self.name, allow_joins, reuse, summarize, simple_col)
++            except Exception:
++                # If the query can't resolve the reference, it might be because
++                # the OuterRef references the outer query, not the inner one.
++                # In this case, return the OuterRef as-is to be resolved later.
++                return self
+         return ResolvedOuterRef(self.name)
+ 
+ 
+diff --git a/tests/queries/test_outerref_bug.py b/tests/queries/test_outerref_bug.py
+new file mode 100644
+--- /dev/null
++++ b/tests/queries/test_outerref_bug.py
+@@ -0,0 +1,40 @@
++from django.db import models
++from django.db.models import Exists, OuterRef, Q
++from django.test import TestCase
++
++from .models import Number, Item, Tag, NamedCategory
++
++
++class OuterRefTest(TestCase):
++    @classmethod
++    def setUpTestData(cls):
++        Number.objects.bulk_create(Number(num=i) for i in range(10))
++        nc = NamedCategory.objects.create(name='test')
++        Tag.objects.create(name='tag1', category=nc)
++
++    def test_exists_filter(self):
++        # filter()
++        qs = Number.objects.annotate(
++            foo=Exists(
++                Item.objects.filter(tags__category_id=OuterRef('pk'))
++            )
++        ).filter(foo=True)
++        list(qs)  # Should work
++
++    def test_exists_exclude(self):
++        # exclude()
++        qs = Number.objects.annotate(
++            foo=Exists(
++                Item.objects.exclude(tags__category_id=OuterRef('pk'))
++            )
++        ).filter(foo=True)
++        list(qs)  # Should work
++
++    def test_exists_filter_not_q(self):
++        # filter(~Q())
++        qs = Number.objects.annotate(
++            foo=Exists(
++                Item.objects.filter(~Q(tags__category_id=OuterRef('pk')))
++            )
++        ).filter(foo=True)
++        list(qs)  # Should work

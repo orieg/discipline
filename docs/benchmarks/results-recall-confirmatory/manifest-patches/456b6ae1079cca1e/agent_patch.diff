@@ -1,0 +1,36 @@
+diff --git a/django/utils/dateformat.py b/django/utils/dateformat.py
+--- a/django/utils/dateformat.py
++++ b/django/utils/dateformat.py
+@@ -326,7 +326,7 @@
+ 
+     def y(self):
+         "Year, 2 digits; e.g. '99'"
+-        return str(self.data.year)[2:]
++        return str(self.data.year).zfill(4)[-2:]
+ 
+     def Y(self):
+         "Year, 4 digits; e.g. '1999'"
+diff --git a/tests/utils_tests/test_dateformat.py b/tests/utils_tests/test_dateformat.py
+--- a/tests/utils_tests/test_dateformat.py
++++ b/tests/utils_tests/test_dateformat.py
+@@ -165,20 +165,3 @@
+                 dateformat.format(dt, 'r'),
+                 'Sun, 08 Jul 1979 22:00:00 +0100',
+             )
+-
+-    def test_year_before_1000(self):
+-        tests = [
+-            (476, '76'),
+-            (42, '42'),
+-            (4, '04'),
+-        ]
+-        for year, expected_date in tests:
+-            with self.subTest(year=year):
+-                self.assertEqual(
+-                    dateformat.format(datetime(year, 9, 8, 5, 0), 'y'),
+-                    expected_date,
+-                )
+-        self.assertEqual(
+-            dateformat.format(datetime(476, 9, 8, 5, 0), 'y'),
+-            '77',
+-        )

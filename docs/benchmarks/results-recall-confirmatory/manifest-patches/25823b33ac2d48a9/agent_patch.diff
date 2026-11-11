@@ -1,0 +1,15 @@
+diff --git a/django/core/validators.py b/django/core/validators.py
+--- a/django/core/validators.py
++++ b/django/core/validators.py
+@@ -101,6 +101,11 @@
+     def __call__(self, value):
+         if not isinstance(value, str):
+             raise ValidationError(self.message, code=self.code, params={'value': value})
++        # Reject URLs with whitespace characters (newline, carriage return, tab)
++        # as these are stripped by urlsplit() on Python >= 3.10 (bpo-43882),
++        # bypassing the regex validation.
++        if any(c in value for c in '\n\t\r'):
++            raise ValidationError(self.message, code=self.code, params={'value': value})
+         # Check if the scheme is valid.
+         scheme = value.split('://')[0].lower()
+         if scheme not in self.schemes:

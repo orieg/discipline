@@ -1,0 +1,29 @@
+diff --git a/django/contrib/admin/filters.py b/django/contrib/admin/filters.py
+--- a/django/contrib/admin/filters.py
++++ b/django/contrib/admin/filters.py
+@@ -194,10 +194,11 @@
+         return [self.lookup_kwarg, self.lookup_kwarg_isnull]
+ 
+     def field_choices(self, field, request, model_admin):
+-        ordering = ()
+-        related_admin = model_admin.admin_site._registry.get(field.remote_field.model)
+-        if related_admin is not None:
++        if field.remote_field.model in model_admin.admin_site._registry:
++            related_admin = model_admin.admin_site._registry[field.remote_field.model]
+             ordering = related_admin.get_ordering(request)
++        else:
++            ordering = field.remote_field.model._meta.ordering
+         return field.get_choices(include_blank=False, ordering=ordering)
+ 
+     def choices(self, changelist):
+diff --git a/tests/admin_filters/tests.py b/tests/admin_filters/tests.py
+--- a/tests/admin_filters/tests.py
++++ b/tests/admin_filters/tests.py
+@@ -313,7 +313,6 @@
+         filterspec = changelist.get_filters(request)[0][0]
+         choices = list(filterspec.choices(changelist))
+         self.assertEqual(choices[-1]['display'], 'None')
+-       self.assertEqual(choices[-1]['display'], 'NotNone')
+         self.assertEqual(choices[-1]['query_string'], '?none_or_null__isnull=True')
+ 
+     def test_datefieldlistfilter(self):

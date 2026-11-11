@@ -1,0 +1,199 @@
+diff --git a/pylint/pyreverse/utils.py b/pylint/pyreverse/utils.py
+--- a/pylint/pyreverse/utils.py
++++ b/pylint/pyreverse/utils.py
+@@ -213,3 +213,195 @@
+         if methods[1] is not None:
+             return methods[1](node)
+         return None
++
++
++class _Annotation:
++    """Wrapper for annotation information."""
++
++    def __init__(self, name):
++        self.name = name
++
++
++def get_annotation(node):
++    """Get the annotation from a node.
++
++    Args:
++        node: An astroid node (AnnAssign, AssignAttr, Const, etc.)
++
++    Returns:
++        An _Annotation object with the type name, or None if no annotation found.
++    """
++    import astroid
++
++    # Handle Const nodes that are values of AnnAssign (e.g., node.value from a: str = None)
++    if isinstance(node, astroid.Const):
++        parent = node.parent
++        if isinstance(parent, astroid.AnnAssign):
++            return _process_annassign(parent)
++
++    # Handle AnnAssign nodes directly (e.g., a: str = None)
++    if isinstance(node, astroid.AnnAssign):
++        return _process_annassign(node)
++
++    # Handle AssignAttr nodes (e.g., self.x = x)
++    if isinstance(node, astroid.AssignAttr):
++        return _process_assignattr(node)
++
++    return None
++
++
++def _process_annassign(node):
++    """Process an AnnAssign node and return its annotation."""
++    import astroid
++
++    annotation = node.annotation
++    value = node.value
++    if annotation is None:
++        return None
++    # Get the annotation name
++    ann_name = _get_annotation_name(annotation)
++    if ann_name is None:
++        return None
++    # Check if value is None and annotation is not Optional
++    if value is not None and isinstance(value, astroid.Const) and value.value is None:
++        if not ann_name.startswith("Optional["):
++            ann_name = f"Optional[{ann_name}]"
++    return _Annotation(ann_name)
++
++
++def _process_assignattr(node):
++    """Process an AssignAttr node and return its annotation."""
++    import astroid
++
++    # Find the parent Assign statement
++    parent = node.parent
++    if isinstance(parent, astroid.Assign):
++        # Get the value being assigned (e.g., 'x' in self.x = x)
++        value = parent.value
++        if isinstance(value, astroid.Name):
++            # Find the function containing this assignment
++            func = node.frame()
++            if isinstance(func, astroid.FunctionDef):
++                # Find the annotation for the argument with this name
++                ann = _get_arg_annotation(func, value.name)
++                if ann is not None:
++                    ann_name = _get_annotation_name(ann)
++                    if ann_name is not None:
++                        # Check if we need to wrap with Optional
++                        # Check if there's a default value of None
++                        if _has_none_default(func, value.name):
++                            if not ann_name.startswith("Optional["):
++                                ann_name = f"Optional[{ann_name}]"
++                        return _Annotation(ann_name)
++    return None
++
++
++def _get_annotation_name(annotation):
++    """Extract the annotation name from an annotation node."""
++    import astroid
++
++    if annotation is None:
++        return None
++
++    # Simple name annotation (e.g., str)
++    if isinstance(annotation, astroid.Name):
++        return annotation.name
++
++    # Subscript annotation (e.g., Optional[str])
++    if isinstance(annotation, astroid.Subscript):
++        # Get the subscript value name (e.g., Optional from Optional[str])
++        if hasattr(annotation, "value") and hasattr(annotation.value, "name"):
++            base_name = annotation.value.name
++            # Get the slice (e.g., str from Optional[str])
++            slice_name = _get_annotation_name(annotation.slice)
++            return f"{base_name}[{slice_name}]"
++
++    # Attribute annotation (e.g., typing.Optional)
++    if isinstance(annotation, astroid.Attribute):
++        return annotation.attrname
++
++    return None
++
++
++def _get_arg_annotation(func, arg_name):
++    """Get the annotation for a function argument by name."""
++    import astroid
++
++    if not isinstance(func, astroid.FunctionDef):
++        return None
++
++    args = func.args
++    # Check regular args
++    for arg, ann in zip(args.args, args.annotations):
++        if isinstance(arg, astroid.AssignName) and arg.name == arg_name:
++            return ann
++
++    # Check positional-only args
++    for arg, ann in zip(args.posonlyargs, args.posonlyargs_annotations):
++        if isinstance(arg, astroid.AssignName) and arg.name == arg_name:
++            return ann
++
++    # Check kwonly args
++    for arg, ann in zip(args.kwonlyargs, args.kwonlyargs_annotations):
++        if isinstance(arg, astroid.AssignName) and arg.name == arg_name:
++            return ann
++
++    return None
++
++
++def _has_none_default(func, arg_name):
++    """Check if a function argument has a default value of None."""
++    import astroid
++
++    if not isinstance(func, astroid.FunctionDef):
++        return False
++
++    args = func.args
++
++    # Check regular args defaults
++    # defaults are aligned to the end of the args list
++    num_args = len(args.args)
++    num_defaults = len(args.defaults)
++    if num_defaults > 0:
++        arg_start = num_args - num_defaults
++        for i, arg in enumerate(args.args):
++            if isinstance(arg, astroid.AssignName) and arg.name == arg_name:
++                default_idx = i - arg_start
++                if default_idx >= 0 and default_idx < num_defaults:
++                    default = args.defaults[default_idx]
++                    if isinstance(default, astroid.Const) and default.value is None:
++                        return True
++
++    # Check kwonly args defaults
++    for i, (arg, default) in enumerate(zip(args.kwonlyargs, args.kw_defaults)):
++        if isinstance(arg, astroid.AssignName) and arg.name == arg_name:
++            if isinstance(default, astroid.Const) and default.value is None:
++                return True
++
++    return False
++
++
++def infer_node(node):
++    """Infer the type of a node.
++
++    First tries to get annotation, if not available falls back to inference.
++
++    Args:
++        node: An astroid node
++
++    Returns:
++        A set of inferred types, or empty set if inference fails.
++    """
++    import astroid
++
++    # First try to get annotation
++    annotation = get_annotation(node)
++    if annotation is not None:
++        return {annotation.name}
++
++    # Fall back to inference
++    try:
++        inferred = set(node.infer())
++        return inferred
++    except astroid.InferenceError:
++        return set()

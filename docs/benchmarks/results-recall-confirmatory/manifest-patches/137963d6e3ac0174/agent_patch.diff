@@ -1,0 +1,45 @@
+diff --git a/pylint/config/callback_actions.py b/pylint/config/callback_actions.py
+--- a/pylint/config/callback_actions.py
++++ b/pylint/config/callback_actions.py
+@@ -45,6 +45,19 @@
+     without erroring when they are then processed again by argparse.
+     """
+ 
++    def __init__(
++        self,
++        option_strings: Sequence[str],
++        dest: str,
++        **kwargs: Any,
++    ) -> None:
++        if "Run" in kwargs:
++            self.run: Run | None = kwargs["Run"]
++        else:
++            self.run = None
++        kwargs["nargs"] = 0
++        super().__init__(option_strings, dest, **kwargs)
++
+     def __call__(
+         self,
+         parser: argparse.ArgumentParser,
+@@ -52,6 +65,9 @@
+         values: str | Sequence[Any] | None,
+         option_string: str | None = None,
+     ) -> None:
++        if option_string in {"--verbose", "-v"}:
++            assert self.run is not None
++            self.run.verbose = True
+         return None
+ 
+ 
+diff --git a/pylint/lint/base_options.py b/pylint/lint/base_options.py
+--- a/pylint/lint/base_options.py
++++ b/pylint/lint/base_options.py
+@@ -539,7 +539,7 @@
+             "verbose",
+             {
+                 "action": _DoNothingAction,
+-                "kwargs": {},
++                "kwargs": {"Run": self},
+                 "short": "v",
+                 "help": "In verbose mode, extra non-checker-related info "
+                 "will be displayed.",

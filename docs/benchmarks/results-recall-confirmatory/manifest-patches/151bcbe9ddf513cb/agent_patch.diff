@@ -1,0 +1,51 @@
+diff --git a/django/db/models/fields/related_descriptors.py b/django/db/models/fields/related_descriptors.py
+--- a/django/db/models/fields/related_descriptors.py
++++ b/django/db/models/fields/related_descriptors.py
+@@ -124,6 +124,11 @@
+     def get_prefetch_queryset(self, instances, queryset=None):
+         if queryset is None:
+             queryset = self.get_queryset()
++        elif queryset.query.is_sliced:
++            # If the queryset is sliced, we need to clone it before filtering.
++            # We can't filter a sliced queryset.
++            queryset = queryset._clone()
++            queryset.query.is_sliced = False
+         queryset._add_hints(instance=instances[0])
+ 
+         rel_obj_attr = self.field.get_foreign_related_value
+@@ -398,6 +403,11 @@
+     def get_prefetch_queryset(self, instances, queryset=None):
+         if queryset is None:
+             queryset = self.get_queryset()
++        elif queryset.query.is_sliced:
++            # If the queryset is sliced, we need to clone it before filtering.
++            # We can't filter a sliced queryset.
++            queryset = queryset._clone()
++            queryset.query.is_sliced = False
+         queryset._add_hints(instance=instances[0])
+ 
+         rel_obj_attr = self.related.field.get_local_related_value
+@@ -711,6 +721,11 @@
+         def get_prefetch_queryset(self, instances, queryset=None):
+             if queryset is None:
+                 queryset = super().get_queryset()
++            elif queryset.query.is_sliced:
++                # If the queryset is sliced, we need to clone it before filtering.
++                # We can't filter a sliced queryset.
++                queryset = queryset._clone()
++                queryset.query.is_sliced = False
+ 
+             queryset._add_hints(instance=instances[0])
+             queryset = queryset.using(queryset._db or self._db)
+@@ -1047,6 +1062,11 @@
+         def get_prefetch_queryset(self, instances, queryset=None):
+             if queryset is None:
+                 queryset = super().get_queryset()
++            elif queryset.query.is_sliced:
++                # If the queryset is sliced, we need to clone it before filtering.
++                # We can't filter a sliced queryset.
++                queryset = queryset._clone()
++                queryset.query.is_sliced = False
+ 
+             queryset._add_hints(instance=instances[0])
+             queryset = queryset.using(queryset._db or self._db)

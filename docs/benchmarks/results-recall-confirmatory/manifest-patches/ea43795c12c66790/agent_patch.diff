@@ -1,0 +1,51 @@
+diff --git a/lib/matplotlib/colorbar.py b/lib/matplotlib/colorbar.py
+--- a/lib/matplotlib/colorbar.py
++++ b/lib/matplotlib/colorbar.py
+@@ -186,6 +186,38 @@
+        textwrap.indent(_colormap_kw_doc, "    ")))
+ 
+ 
++def _get_dividers(extend):
++    """
++    Return the slice of mesh rows to use for colorbar divider lines.
++
++    Parameters
++    ----------
++    extend : {'neither', 'min', 'max', 'both'}
++        The colorbar extension type.
++
++    Returns
++    -------
++    slice
++        The slice to select the appropriate mesh rows for divider lines.
++    """
++    # The slice determines which mesh rows to use for drawing divider lines.
++    # - 'neither': no extensions, draw dividers at interior boundaries only
++    # - 'min': extend at minimum, draw dividers from start to second-to-last
++    # - 'max': extend at maximum, draw dividers from second row to end
++    # - 'both': extend at both ends, draw all dividers
++    if extend == 'neither':
++        return slice(1, -1, None)
++    elif extend == 'min':
++        return slice(0, -1, None)
++    elif extend == 'max':
++        return slice(1, None, None)
++    elif extend == 'both':
++        return slice(None, None, None)
++    else:
++        # Default to neither behavior for unknown extend values
++        return slice(1, -1, None)
++
++
+ def _set_ticks_on_axis_warn(*args, **kwargs):
+     # a top level function which gets put in at the axes'
+     # set_xticks and set_yticks by Colorbar.__init__.
+@@ -652,7 +684,7 @@
+                 if len(self._y) >= self.n_rasterize:
+                     self.solids.set_rasterized(True)
+         self.dividers.set_segments(
+-            np.dstack([X, Y])[1:-1] if self.drawedges else [])
++            np.dstack([X, Y])[_get_dividers(self.extend)] if self.drawedges else [])
+ 
+     def _add_solids_patches(self, X, Y, C, mappable):
+         hatches = mappable.hatches * len(C)  # Have enough hatches.

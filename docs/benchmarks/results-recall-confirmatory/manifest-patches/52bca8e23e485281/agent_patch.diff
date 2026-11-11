@@ -1,0 +1,158 @@
+diff --git a/pylint/pyreverse/utils.py b/pylint/pyreverse/utils.py
+--- a/pylint/pyreverse/utils.py
++++ b/pylint/pyreverse/utils.py
+@@ -213,3 +213,154 @@
+         if methods[1] is not None:
+             return methods[1](node)
+         return None
++
++
++def get_annotation(node):
++    """Get the annotation of a node.
++
++    For annotated assignments (e.g., ``a: str = None``), the annotation
++    is extracted from the parent AnnAssign node. If the default value is None
++    and the annotation is not already Optional, the annotation is wrapped
++    with Optional.
++
++    For assign attributes (e.g., ``self.x = x`` in __init__), the annotation
++    is extracted from the corresponding function parameter.
++
++    Returns an object with a ``name`` attribute containing the type string.
++    """
++    import astroid
++
++    # Handle AnnAssign (e.g., ``a: str = None``)
++    if isinstance(node.parent, astroid.AnnAssign):
++        annotation = node.parent.annotation
++        if annotation is None:
++            return None
++        # Check if value is None (Const with value=None)
++        if isinstance(node, astroid.Const) and node.value is None:
++            # Wrap with Optional if not already Optional
++            if not _is_optional(annotation):
++                return _wrap_with_optional(annotation)
++        return Annotation(annotation)
++
++    # Handle AssignAttr (e.g., ``self.x = x`` in __init__)
++    if isinstance(node, astroid.AssignAttr):
++        result = _get_annotation_for_assignattr(node)
++        if result is not None:
++            return Annotation(result)
++        return None
++
++    return None
++
++
++def _get_annotation_for_assignattr(node):
++    """Get the annotation for an AssignAttr node from its function parameter.
++
++    For example, for ``self.x = x`` in ``__init__``, find the annotation
++    of the parameter ``x``.
++    """
++    import astroid
++
++    # Find the __init__ function (parent of the Assign)
++    assign_stmt = node.parent
++    if not isinstance(assign_stmt, astroid.Assign):
++        return None
++
++    # The parent of the Assign is the FunctionDef (__init__)
++    func = assign_stmt.parent
++    if not isinstance(func, astroid.FunctionDef):
++        return None
++
++    # Get the argument name (without self)
++    arg_name = node.attrname
++
++    # Find the corresponding parameter
++    args = func.args
++    for i, arg in enumerate(args.args):
++        if arg.name == arg_name:
++            annotation = args.annotations[i]
++            # Check if there's a default value that is None
++            num_defaults = len(args.defaults)
++            num_args = len(args.args)
++            if i >= num_args - num_defaults:
++                # This arg has a default value
++                default_idx = i - (num_args - num_defaults)
++                default = args.defaults[default_idx]
++                # Check if default is None
++                if isinstance(default, astroid.Const) and default.value is None:
++                    if annotation is not None and not _is_optional(annotation):
++                        return _wrap_with_optional(annotation)
++            # Return the annotation (or None if no annotation)
++            return annotation
++
++    return None
++
++
++class Annotation:
++    """Wrapper class for type annotations that provides a ``name`` attribute.
++
++    The ``name`` attribute returns the type as a string, handling both
++    simple names like ``str`` and complex annotations like ``Optional[str]``.
++    """
++
++    def __init__(self, annotation):
++        self._annotation = annotation
++
++    @property
++    def name(self):
++        return _get_annotation_name(self._annotation)
++
++
++def _is_optional(annotation):
++    """Check if an annotation is already Optional[...] or Union[..., None]."""
++    import astroid
++
++    if isinstance(annotation, astroid.Subscript):
++        # Check for Optional[...], which is Union[..., None] or Optional[...]
++        if hasattr(annotation.value, 'name'):
++            return annotation.value.name in ('Optional', 'Union')
++    return False
++
++
++def _wrap_with_optional(annotation):
++    """Wrap an annotation with Optional[...]."""
++    import astroid
++
++    # Create a Subscript node representing Optional[annotation]
++    # We need to create the AST nodes for Optional[...]
++    # Since we just need to return something with a .name attribute,
++    # we'll create a wrapper that returns the string representation
++
++    class OptionalAnnotation:
++        def __init__(self, inner_annotation):
++            self._inner = inner_annotation
++
++        @property
++        def name(self):
++            inner_name = _get_annotation_name(self._inner)
++            return f"Optional[{inner_name}]"
++
++    return OptionalAnnotation(annotation)
++
++
++def _get_annotation_name(annotation):
++    """Get the name string from an annotation node."""
++    import astroid
++
++    if annotation is None:
++        return ""
++    if hasattr(annotation, 'name'):
++        return annotation.name
++    return annotation.as_string()
++
++
++def infer_node(node):
++    """Infer the type of a node.
++
++    Returns a set of inferred types, or an empty set if inference fails.
++    """
++    import astroid
++
++    try:
++        return set(node.infer())
++    except astroid.InferenceError:
++        return set()

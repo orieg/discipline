@@ -1,0 +1,43 @@
+diff --git a/xarray/core/nanops.py b/xarray/core/nanops.py
+--- a/xarray/core/nanops.py
++++ b/xarray/core/nanops.py
+@@ -26,22 +26,29 @@
+     """
+     xarray version of pandas.core.nanops._maybe_null_out
+     """
+-    if hasattr(axis, "__len__"):  # if tuple or list
+-        raise ValueError(
+-            "min_count is not available for reduction with more than one dimensions."
+-        )
+-
+     if axis is not None and getattr(result, "ndim", False):
+-        null_mask = (mask.shape[axis] - mask.sum(axis) - min_count) < 0
++        # axis is a tuple/list of axes or a single axis
++        if hasattr(axis, "__len__"):
++            # Multiple axes: compute product of shape along axes
++            axis = np.core.numeric.normalize_axis_tuple(axis, mask.ndim)
++            total_count = np.take(mask.shape, axis).prod()
++        else:
++            # Single axis
++            total_count = mask.shape[axis]
++        null_mask = (total_count - mask.sum(axis) - min_count) < 0
+         if null_mask.any():
+             dtype, fill_value = dtypes.maybe_promote(result.dtype)
+             result = result.astype(dtype)
+             result[null_mask] = fill_value
+ 
+-    elif getattr(result, "dtype", None) not in dtypes.NAT_TYPES:
+-        null_mask = mask.size - mask.sum()
+-        if null_mask < min_count:
+-            result = np.nan
++    elif result is not np.nan and getattr(result, "dtype", None) is not None:
++        # Check for NAT types by dtype.kind, not by value comparison
++        # (datetime64('NaT') == dtype returns True for any dtype)
++        dtype = result.dtype
++        if dtype.kind not in ("M", "m"):  # not datetime64 or timedelta64
++            null_mask = mask.size - mask.sum()
++            if null_mask < min_count:
++                result = np.nan
+ 
+     return result
+ 

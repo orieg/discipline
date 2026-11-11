@@ -1,0 +1,19 @@
+diff --git a/sympy/printing/codeprinter.py b/sympy/printing/codeprinter.py
+--- a/sympy/printing/codeprinter.py
++++ b/sympy/printing/codeprinter.py
+@@ -495,6 +495,15 @@
+             if item.base in b:
+                 b_str[b.index(item.base)] = "(%s)" % b_str[b.index(item.base)]
+ 
++        # In Python, unary minus has higher precedence than %, so -a % b is
++        # interpreted as (-a) % b. When we have -Mod(x, y), we need to output
++        # -(x % y) to get the correct semantics.
++        from sympy import Mod
++        has_mod = any(isinstance(item, Mod) for item in a)
++        if sign and has_mod:
++            a_str = ['(%s)' % '*'.join(a_str)]
++            b_str = []
++
+         if not b:
+             return sign + '*'.join(a_str)
+         elif len(b) == 1:

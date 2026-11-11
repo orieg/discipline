@@ -1,0 +1,20 @@
+diff --git a/xarray/core/computation.py b/xarray/core/computation.py
+--- a/xarray/core/computation.py
++++ b/xarray/core/computation.py
+@@ -1860,7 +1860,15 @@
+     if keep_attrs is True:
+         # keep the attributes of x, the second parameter, by default to
+         # be consistent with the `where` method of `DataArray` and `Dataset`
+-        keep_attrs = lambda attrs, context: getattr(x, "attrs", {})
++        x_attrs = getattr(x, "attrs", {})
++        # For data variable/Dataset-level merging, attrs[0] == x_attrs
++        # For coordinate-level merging, attrs[0] is the coordinate's attrs,
++        # which is different from x_attrs
++        keep_attrs = lambda attrs, context: (
++            x_attrs
++            if attrs and attrs[0] == x_attrs
++            else (attrs[0] if attrs else {})
++        )
+ 
+     # alignment for three arguments is complicated, so don't support it yet
+     return apply_ufunc(

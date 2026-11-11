@@ -1,0 +1,40 @@
+diff --git a/django/utils/html.py b/django/utils/html.py
+--- a/django/utils/html.py
++++ b/django/utils/html.py
+@@ -283,8 +283,34 @@
+             middle_unescaped = html.unescape(middle)
+             stripped = middle_unescaped.rstrip(TRAILING_PUNCTUATION_CHARS)
+             if middle_unescaped != stripped:
+-                trail = middle[len(stripped):] + trail
+-                middle = middle[:len(stripped) - len(middle_unescaped)]
++                # Find the index in middle that corresponds to the start of
++                # the trailing punctuation in the unescaped string.
++                # HTML entities can expand/contract, so we need to track
++                # the position mapping between original and unescaped strings.
++                orig_pos = 0
++                unesc_pos = 0
++                while orig_pos < len(middle) and unesc_pos < len(stripped):
++                    if middle[orig_pos] == '&':
++                        semi_pos = middle.find(';', orig_pos)
++                        if semi_pos != -1:
++                            # Entity with semicolon - advances 1 position in unescaped
++                            orig_pos = semi_pos + 1
++                        else:
++                            # Entity without semicolon - find where it ends
++                            for end in range(orig_pos + 2,
++                                             min(orig_pos + 8, len(middle) + 1)):
++                                entity = middle[orig_pos:end]
++                                if html.unescape(entity) != entity:
++                                    orig_pos = end
++                                    break
++                            else:
++                                # Not an entity, just '&'
++                                orig_pos += 1
++                    else:
++                        orig_pos += 1
++                    unesc_pos += 1
++                trail = middle[orig_pos:] + trail
++                middle = middle[:orig_pos]
+                 trimmed_something = True
+         return lead, middle, trail
+ 

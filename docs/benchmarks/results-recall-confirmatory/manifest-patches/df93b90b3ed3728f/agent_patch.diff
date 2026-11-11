@@ -1,0 +1,27 @@
+diff --git a/django/db/migrations/writer.py b/django/db/migrations/writer.py
+--- a/django/db/migrations/writer.py
++++ b/django/db/migrations/writer.py
+@@ -174,8 +174,21 @@
+             imports.add("from django.db import migrations")
+ 
+         # Sort imports by the package / module to be imported (the part after
+-        # "from" in "from ... import ..." or after "import" in "import ...").
+-        sorted_imports = sorted(imports, key=lambda i: i.split()[1])
++        # "from" in "from ... import ..." or after "import" in "import ..."),
++        # but with regular imports (import X) coming before from imports
++        # (from X import Y) to match isort's default behavior and Django's
++        # coding style.
++        def import_sort_key(import_line):
++            if import_line.startswith("from "):
++                # For from imports: type=1 (sorted after regular imports),
++                # module=the module name
++                return (1, import_line.split()[1])
++            else:
++                # For regular imports: type=0 (sorted first),
++                # module=the module name
++                return (0, import_line.split()[1])
++
++        sorted_imports = sorted(imports, key=import_sort_key)
+         items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+         if migration_imports:
+             items["imports"] += (

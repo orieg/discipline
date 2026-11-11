@@ -1,0 +1,14 @@
+diff --git a/django/db/migrations/operations/models.py b/django/db/migrations/operations/models.py
+--- a/django/db/migrations/operations/models.py
++++ b/django/db/migrations/operations/models.py
+@@ -953,6 +953,10 @@
+                         ", ".join(columns),
+                     )
+                 )
++            # The index may already have the new name (e.g., when the operation
++            # is re-applied after a backward operation that was a no-op).
++            if matching_index_name[0] == self.new_name:
++                return
+             old_index = models.Index(
+                 fields=self.old_fields,
+                 name=matching_index_name[0],

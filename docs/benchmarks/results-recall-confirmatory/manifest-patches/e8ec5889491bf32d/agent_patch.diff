@@ -1,0 +1,36 @@
+diff --git a/pylint/config/callback_actions.py b/pylint/config/callback_actions.py
+--- a/pylint/config/callback_actions.py
++++ b/pylint/config/callback_actions.py
+@@ -45,6 +45,32 @@
+     without erroring when they are then processed again by argparse.
+     """
+ 
++    def __init__(
++        self,
++        option_strings: Sequence[str],
++        dest: str,
++        nargs: int | None = None,
++        const: None = None,
++        default: None = None,
++        type: None = None,
++        choices: None = None,
++        required: bool = False,
++        help: str | None = None,
++        metavar: str | None = None,
++    ) -> None:
++        super().__init__(
++            option_strings,
++            dest,
++            0,
++            const,
++            default,
++            type,
++            choices,
++            required,
++            help,
++            metavar,
++        )
++
+     def __call__(
+         self,
+         parser: argparse.ArgumentParser,

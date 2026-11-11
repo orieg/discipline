@@ -1,0 +1,52 @@
+diff --git a/django/views/debug.py b/django/views/debug.py
+--- a/django/views/debug.py
++++ b/django/views/debug.py
+@@ -421,11 +421,30 @@
+         if not exceptions:
+             return frames
+ 
+-        # In case there's just one exception, take the traceback from self.tb
++        # In case there's just one exception, take the traceback from self.tb.
++        # Also use self.tb if the innermost exception doesn't have a traceback.
+         exc_value = exceptions.pop()
+         tb = self.tb if not exceptions else exc_value.__traceback__
+ 
++        # If the innermost exception has no traceback, use the next exception's
++        # traceback (or self.tb as fallback).
++        while tb is None and exceptions:
++            exc_value = exceptions.pop()
++            tb = exc_value.__traceback__
++
++        if tb is None:
++            tb = self.tb
++
++        # Track which tracebacks we've already processed to avoid duplicates.
++        # This can happen when an exception's __traceback__ is the same as
++        # self.tb (e.g., when re-raising an exception with a modified context).
++        processed_tracebacks = set()
++
+         while tb is not None:
++            # Skip if we've already processed this traceback.
++            if id(tb) in processed_tracebacks:
++                break
++
+             # Support for __traceback_hide__ which is used by a few libraries
+             # to hide internal frames.
+             if tb.tb_frame.f_locals.get('__traceback_hide__'):
+@@ -459,12 +478,16 @@
+                 'post_context': post_context,
+                 'pre_context_lineno': pre_context_lineno + 1,
+             })
++            processed_tracebacks.add(id(tb))
+ 
+             # If the traceback for current exception is consumed, try the
+             # other exception.
+             if not tb.tb_next and exceptions:
+                 exc_value = exceptions.pop()
+                 tb = exc_value.__traceback__
++                # If the exception has no traceback, use self.tb as a fallback.
++                if tb is None:
++                    tb = self.tb
+             else:
+                 tb = tb.tb_next
+ 

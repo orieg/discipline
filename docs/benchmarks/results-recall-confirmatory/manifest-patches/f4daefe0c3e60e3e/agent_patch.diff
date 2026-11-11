@@ -1,0 +1,34 @@
+diff --git a/django/contrib/messages/storage/base.py b/django/contrib/messages/storage/base.py
+--- a/django/contrib/messages/storage/base.py
++++ b/django/contrib/messages/storage/base.py
+@@ -1,7 +1,29 @@
+ from django.conf import settings
+ from django.contrib.messages import constants, utils
+ 
+-LEVEL_TAGS = utils.get_level_tags()
++
++class LevelTags:
++    """
++    A dict-like object that returns the current value of MESSAGE_TAGS from
++    settings when accessed.
++    """
++    def __get__(self, instance, owner=None):
++        return self._as_dict()
++
++    def _as_dict(self):
++        return utils.get_level_tags()
++
++    def get(self, key, default=None):
++        return self._as_dict().get(key, default)
++
++    def __eq__(self, other):
++        return self._as_dict() == other
++
++    def __repr__(self):
++        return repr(self._as_dict())
++
++
++LEVEL_TAGS = LevelTags()
+ 
+ 
+ class Message:

@@ -1,0 +1,65 @@
+diff --git a/pylint/config/callback_actions.py b/pylint/config/callback_actions.py
+--- a/pylint/config/callback_actions.py
++++ b/pylint/config/callback_actions.py
+@@ -45,6 +45,19 @@
+     without erroring when they are then processed again by argparse.
+     """
+ 
++    def __init__(
++        self,
++        option_strings: Sequence[str],
++        dest: str,
++        **kwargs: Any,
++    ) -> None:
++        super().__init__(
++            option_strings,
++            dest,
++            nargs=0,
++            **kwargs,
++        )
++
+     def __call__(
+         self,
+         parser: argparse.ArgumentParser,
+@@ -119,6 +132,19 @@
+         raise NotImplementedError  # pragma: no cover
+ 
+ 
++class _VerboseAction(_AccessRunObjectAction):
++    """Action for setting the verbose mode."""
++
++    def __call__(
++        self,
++        parser: argparse.ArgumentParser,
++        namespace: argparse.Namespace,
++        values: str | Sequence[Any] | None,
++        option_string: str | None = "--verbose",
++    ) -> None:
++        self.run.verbose = True
++
++
+ class _MessageHelpAction(_CallbackAction):
+     """Display the help message of a message."""
+ 
+diff --git a/pylint/lint/base_options.py b/pylint/lint/base_options.py
+--- a/pylint/lint/base_options.py
++++ b/pylint/lint/base_options.py
+@@ -27,6 +27,7 @@
+     _LongHelpAction,
+     _MessageHelpAction,
+     _OutputFormatAction,
++    _VerboseAction,
+ )
+ from pylint.typing import Options
+ 
+@@ -538,8 +539,8 @@
+         (
+             "verbose",
+             {
+-                "action": _DoNothingAction,
+-                "kwargs": {},
++                "action": _VerboseAction,
++                "kwargs": {"Run": self},
+                 "short": "v",
+                 "help": "In verbose mode, extra non-checker-related info "
+                 "will be displayed.",

@@ -1,0 +1,23 @@
+diff --git a/sklearn/model_selection/_split.py b/sklearn/model_selection/_split.py
+--- a/sklearn/model_selection/_split.py
++++ b/sklearn/model_selection/_split.py
+@@ -1163,6 +1163,19 @@
+                      **self.cvargs)
+         return cv.get_n_splits(X, y, groups) * self.n_repeats
+ 
++    def __repr__(self):
++        class_name = self.__class__.__name__
++        return '%s(%s)' % (class_name,
++                           _pprint(self._get_params, offset=len(class_name)))
++
++    @property
++    def _get_params(self):
++        return {
++            'n_repeats': self.n_repeats,
++            'n_splits': self.cvargs.get('n_splits', None),
++            'random_state': self.random_state,
++        }
++
+ 
+ class RepeatedKFold(_RepeatedSplits):
+     """Repeated K-Fold cross validator.

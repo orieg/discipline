@@ -1,0 +1,40 @@
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+@@ -129,6 +129,22 @@
+     Also supports ISO 8601 representation and PostgreSQL's day-time interval
+     format.
+     """
++    # Handle negative durations in standard format where the leading '-'
++    # applies to all components (e.g., '-1:15:30' means -1 hour -15 min -30 sec)
++    # This must be checked before the standard regex match because the standard
++    # regex can match negative values but only for the first component
++    if value.startswith('-') and ' ' not in value:
++        value_stripped = value[1:]
++        if '-' not in value_stripped:
++            match = standard_duration_re.match(value_stripped)
++            if match:
++                kw = match.groupdict()
++                if kw.get('microseconds'):
++                    kw['microseconds'] = kw['microseconds'].ljust(6, '0')
++                kw = {k: float(v) for k, v in kw.items() if v is not None}
++                return -datetime.timedelta(**kw)
++        return None
++
+     match = (
+         standard_duration_re.match(value) or
+         iso8601_duration_re.match(value) or
+@@ -144,3 +160,4 @@
+             kw['microseconds'] = '-' + kw['microseconds']
+         kw = {k: float(v) for k, v in kw.items() if v is not None}
+         return days + sign * datetime.timedelta(**kw)
++    return None

@@ -1,0 +1,38 @@
+diff --git a/django/db/models/fields/related_descriptors.py b/django/db/models/fields/related_descriptors.py
+--- a/django/db/models/fields/related_descriptors.py
++++ b/django/db/models/fields/related_descriptors.py
+@@ -72,6 +72,34 @@
+ from django.utils.functional import cached_property
+ 
+ 
++def _filter_prefetch_queryset(queryset, filter_kwargs):
++    """
++    Filter the queryset with the given filter_kwargs, handling the case
++    where the queryset has already been sliced.
++
++    When a sliced queryset is passed to Prefetch, we need to:
++    1. Clone the queryset without the slice
++    2. Apply the filter
++    3. Re-apply the slice
++
++    This allows sliced querysets to work with Prefetch.
++    """
++    if queryset.query.is_sliced:
++        # Save the slice limits
++        low_mark = queryset.query.low_mark
++        high_mark = queryset.query.high_mark
++        # Clone the queryset and clear the slice
++        queryset = queryset._chain()
++        queryset.query.clear_limits()
++        # Apply the filter
++        queryset = queryset.filter(**filter_kwargs)
++        # Re-apply the slice
++        queryset.query.set_limits(low=low_mark, high=high_mark)
++    else:
++        queryset = queryset.filter(**filter_kwargs)
++    return queryset
++
++
+ class ForeignKeyDeferredAttribute(DeferredAttribute):
+     def __set__(self, instance, value):
+         if instance.__dict__.get(self.field.attname) != value and self.field.is_cached(

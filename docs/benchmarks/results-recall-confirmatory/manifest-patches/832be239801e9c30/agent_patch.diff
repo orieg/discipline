@@ -1,0 +1,24 @@
+diff --git a/sympy/functions/elementary/hyperbolic.py b/sympy/functions/elementary/hyperbolic.py
+--- a/sympy/functions/elementary/hyperbolic.py
++++ b/sympy/functions/elementary/hyperbolic.py
+@@ -561,10 +561,8 @@
+         if arg.is_Number:
+             if arg is S.NaN:
+                 return S.NaN
+-            elif arg is S.Infinity:
++            elif arg in (S.Infinity, S.NegativeInfinity):
+                 return S.One
+-            elif arg is S.NegativeInfinity:
+-                return S.NegativeOne
+             elif arg is S.Zero:
+                 return S.ComplexInfinity
+             elif arg.is_negative:
+@@ -587,7 +585,7 @@
+                 x, m = _peeloff_ipi(arg)
+                 if m:
+                     cothm = coth(m)
+-                    if cotm is S.ComplexInfinity:
++                    if cothm is S.ComplexInfinity:
+                         return coth(x)
+                     else: # cothm == 0
+                         return tanh(x)

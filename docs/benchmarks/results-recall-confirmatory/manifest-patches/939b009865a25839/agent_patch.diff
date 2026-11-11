@@ -1,0 +1,36 @@
+diff --git a/sklearn/linear_model/logistic.py b/sklearn/linear_model/logistic.py
+--- a/sklearn/linear_model/logistic.py
++++ b/sklearn/linear_model/logistic.py
+@@ -1977,6 +1977,8 @@
+ 
+             l1_ratios_ = [None]
+ 
++        l1_ratios_ = np.asarray(l1_ratios_)
++
+         if self.penalty == 'none':
+             raise ValueError(
+                 "penalty='none' is not useful and not supported by "
+@@ -2170,7 +2172,7 @@
+                 # Take the best scores across every fold and the average of
+                 # all coefficients corresponding to the best scores.
+                 best_indices = np.argmax(scores, axis=1)
+-                if self.multi_class == 'ovr':
++                if multi_class == 'ovr':
+                     w = np.mean([coefs_paths[i, best_indices[i], :]
+                                  for i in range(len(folds))], axis=0)
+                 else:
+@@ -2181,7 +2183,13 @@
+                 self.C_.append(np.mean(self.Cs_[best_indices_C]))
+ 
+                 best_indices_l1 = best_indices // len(self.Cs_)
+-                self.l1_ratio_.append(np.mean(l1_ratios_[best_indices_l1]))
++                l1_ratios_best = l1_ratios_[best_indices_l1]
++                # When l1_ratios_ is [None] (no l1_ratios specified),
++                # we should just store None
++                if any(val is None for val in l1_ratios_best):
++                    self.l1_ratio_.append(None)
++                else:
++                    self.l1_ratio_.append(np.mean(l1_ratios_best))
+ 
+             if multi_class == 'multinomial':
+                 self.C_ = np.tile(self.C_, n_classes)

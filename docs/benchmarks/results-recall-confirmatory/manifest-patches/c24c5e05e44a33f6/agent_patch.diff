@@ -1,0 +1,54 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -1160,6 +1160,20 @@
+         clone.negated = not self.negated
+         return clone
+ 
++    def __rand__(self, other):
++        if getattr(other, 'conditional', False):
++            return Q(other) & Q(self)
++        raise NotImplementedError(
++            "Use .bitand() and .bitor() for bitwise logical operations."
++        )
++
++    def __ror__(self, other):
++        if getattr(other, 'conditional', False):
++            return Q(other) | Q(self)
++        raise NotImplementedError(
++            "Use .bitand() and .bitor() for bitwise logical operations."
++        )
++
+     def as_sql(self, compiler, connection, template=None, **extra_context):
+         query = self.query.exists(using=connection.alias)
+         sql, params = super().as_sql(
+diff --git a/django/db/models/query_utils.py b/django/db/models/query_utils.py
+--- a/django/db/models/query_utils.py
++++ b/django/db/models/query_utils.py
+@@ -41,7 +41,10 @@
+ 
+     def _combine(self, other, conn):
+         if not isinstance(other, Q):
+-            raise TypeError(other)
++            if getattr(other, 'conditional', False):
++                other = Q(other)
++            else:
++                raise TypeError(other)
+ 
+         # If the other Q() is empty, ignore it and just use `self`.
+         if not other:
+@@ -85,7 +88,13 @@
+         if path.startswith('django.db.models.query_utils'):
+             path = path.replace('django.db.models.query_utils', 'django.db.models')
+         args, kwargs = (), {}
+-        if len(self.children) == 1 and not isinstance(self.children[0], Q):
++        if len(self.children) == 1 and isinstance(self.children[0], tuple):
++            args = (self.children[0],)
++        elif len(self.children) == 1 and isinstance(self.children[0], Q):
++            # A single Q child is preserved as a positional arg.
++            args = (self.children[0],)
++        elif len(self.children) == 1 and hasattr(self.children[0], '__getitem__') and len(self.children[0]) == 2:
++            # A single 2-tuple child is treated as a key-value pair for kwargs.
+             child = self.children[0]
+             kwargs = {child[0]: child[1]}
+         else:

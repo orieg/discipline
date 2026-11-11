@@ -1,0 +1,58 @@
+diff --git a/django/contrib/auth/__init__.py b/django/contrib/auth/__init__.py
+--- a/django/contrib/auth/__init__.py
++++ b/django/contrib/auth/__init__.py
+@@ -5,7 +5,7 @@
+ from django.conf import settings
+ from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+ from django.middleware.csrf import rotate_token
+-from django.utils.crypto import constant_time_compare
++from django.utils.crypto import constant_time_compare, salted_hmac
+ from django.utils.module_loading import import_string
+ from django.views.decorators.debug import sensitive_variables
+ 
+@@ -179,6 +179,34 @@
+         )
+ 
+ 
++def _verify_session_hash(session_hash, user, session):
++    """
++    Verify the session hash against the user's password hash using the current
++    secret key and fallback keys.
++
++    If a fallback key matches, update the session hash to use the current
++    secret key.
++
++    Return True if the session hash matches any of the keys.
++    """
++    key_salt = (
++        "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
++    )
++    for i, secret in enumerate([settings.SECRET_KEY, *settings.SECRET_KEY_FALLBACKS]):
++        expected_hash = salted_hmac(
++            key_salt, user.password, secret=secret, algorithm="sha256"
++        ).hexdigest()
++        if constant_time_compare(session_hash, expected_hash):
++            # If a fallback key matched (i > 0), update the session hash
++            # to use the current secret key.
++            if i > 0:
++                session[HASH_SESSION_KEY] = salted_hmac(
++                    key_salt, user.password, secret=settings.SECRET_KEY, algorithm="sha256"
++                ).hexdigest()
++            return True
++    return False
++
++
+ def get_user(request):
+     """
+     Return the user model instance associated with the given request session.
+@@ -199,8 +227,8 @@
+             # Verify the session
+             if hasattr(user, "get_session_auth_hash"):
+                 session_hash = request.session.get(HASH_SESSION_KEY)
+-                session_hash_verified = session_hash and constant_time_compare(
+-                    session_hash, user.get_session_auth_hash()
++                session_hash_verified = session_hash and _verify_session_hash(
++                    session_hash, user, request.session
+                 )
+                 if not session_hash_verified:
+                     request.session.flush()

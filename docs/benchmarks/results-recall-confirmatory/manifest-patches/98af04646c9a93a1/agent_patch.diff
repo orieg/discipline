@@ -1,0 +1,18 @@
+diff --git a/sklearn/linear_model/logistic.py b/sklearn/linear_model/logistic.py
+--- a/sklearn/linear_model/logistic.py
++++ b/sklearn/linear_model/logistic.py
+@@ -2181,7 +2181,13 @@
+                 self.C_.append(np.mean(self.Cs_[best_indices_C]))
+ 
+                 best_indices_l1 = best_indices // len(self.Cs_)
+-                self.l1_ratio_.append(np.mean(l1_ratios_[best_indices_l1]))
++                l1_ratios_arr = np.asarray(l1_ratios_)
++                l1_ratio_values = l1_ratios_arr[best_indices_l1]
++                # l2 penalty has l1_ratios_ = [None], so we need to handle this
++                if any(v is None for v in l1_ratio_values):
++                    self.l1_ratio_.append(None)
++                else:
++                    self.l1_ratio_.append(np.mean(l1_ratio_values))
+ 
+             if multi_class == 'multinomial':
+                 self.C_ = np.tile(self.C_, n_classes)

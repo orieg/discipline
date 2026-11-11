@@ -1,0 +1,51 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -1168,28 +1168,6 @@
+                     dependencies,
+                 )
+ 
+-    def _generate_removed_altered_foo_together(self, operation):
+-        for (
+-            old_value,
+-            new_value,
+-            app_label,
+-            model_name,
+-            dependencies,
+-        ) in self._get_altered_foo_together_operations(operation.option_name):
+-            removal_value = new_value.intersection(old_value)
+-            if removal_value or old_value:
+-                self.add_operation(
+-                    app_label,
+-                    operation(name=model_name, **{operation.option_name: removal_value}),
+-                    dependencies=dependencies,
+-                )
+-
+-    def generate_removed_altered_unique_together(self):
+-        self._generate_removed_altered_foo_together(operations.AlterUniqueTogether)
+-
+-    def generate_removed_altered_index_together(self):
+-        self._generate_removed_altered_foo_together(operations.AlterIndexTogether)
+-
+     def _generate_altered_foo_together(self, operation):
+         for (
+             old_value,
+@@ -1198,13 +1176,11 @@
+             model_name,
+             dependencies,
+         ) in self._get_altered_foo_together_operations(operation.option_name):
+-            removal_value = new_value.intersection(old_value)
+-            if new_value != removal_value:
+-                self.add_operation(
+-                    app_label,
+-                    operation(name=model_name, **{operation.option_name: new_value}),
+-                    dependencies=dependencies,
+-                )
++            self.add_operation(
++                app_label,
++                operation(name=model_name, **{operation.option_name: new_value}),
++                dependencies=dependencies,
++            )
+ 
+     def generate_altered_unique_together(self):
+         self._generate_altered_foo_together(operations.AlterUniqueTogether)

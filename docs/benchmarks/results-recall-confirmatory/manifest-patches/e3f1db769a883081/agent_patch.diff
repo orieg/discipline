@@ -1,0 +1,37 @@
+diff --git a/seaborn/_core/scales.py b/seaborn/_core/scales.py
+--- a/seaborn/_core/scales.py
++++ b/seaborn/_core/scales.py
+@@ -378,7 +378,20 @@
+             axis.set_view_interval(vmin, vmax)
+             locs = axis.major.locator()
+             locs = locs[(vmin <= locs) & (locs <= vmax)]
+-            labels = axis.major.formatter.format_ticks(locs)
++
++            # ScalarFormatter can use an offset to display large numbers
++            # e.g., "x 1e8" above the axis with labels "0", "50", "100"...
++            # The legend should show the actual values, not the offset values
++            formatter = axis.major.formatter
++            if isinstance(formatter, ScalarFormatter) and formatter.get_useOffset():
++                formatter.set_useOffset(False)
++                formatter.set_scientific(False)
++                labels = formatter.format_ticks(locs)
++                formatter.set_useOffset(True)
++                formatter.set_scientific(True)
++            else:
++                labels = formatter.format_ticks(locs)
++
+             new._legend = list(locs), list(labels)
+ 
+         return new
+diff --git a/tests/_core/test_plot.py b/tests/_core/test_plot.py
+--- a/tests/_core/test_plot.py
++++ b/tests/_core/test_plot.py
+@@ -2059,8 +2059,6 @@
+         assert legend.texts
+         for text in legend.texts:
+             assert float(text.get_text()) > 1e7
+-    for text in legend.texts:
+-        assert float(text.get_text()) < 1e6
+ 
+ 
+ class TestDefaultObject:

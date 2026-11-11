@@ -1,0 +1,43 @@
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+@@ -143,4 +143,30 @@
+         if kw.get('seconds') and kw.get('microseconds') and kw['seconds'].startswith('-'):
+             kw['microseconds'] = '-' + kw['microseconds']
+         kw = {k: float(v) for k, v in kw.items() if v is not None}
++        # For standard_duration_re, handle negative durations.
++        # When the first non-None component (hours, minutes, seconds) is negative,
++        # all components should be negative (the entire duration is negated).
++        if kw and not kw.get('sign'):  # Only for standard format (no 'sign' key)
++            # Find the first non-None component in order: hours, minutes, seconds
++            first_key = None
++            for key in ('hours', 'minutes', 'seconds'):
++                if key in kw:
++                    first_key = key
++                    break
++            if first_key is not None:
++                # Get original string values to check for negative sign
++                # (kw values are floats, -0.0 == 0)
++                original = match.groupdict()
++                first_value = original.get(first_key)
++                if first_value and first_value.startswith('-'):
++                    # The duration is negative - flip all component signs
++                    # except the first one (which is already negative)
++                    first = True
++                    for key in kw:
++                        if first:
++                            first = False
++                        else:
++                            kw[key] = -kw[key]
++                    # The timedelta is now correctly negative
++                    sign = 1
+         return days + sign * datetime.timedelta(**kw)

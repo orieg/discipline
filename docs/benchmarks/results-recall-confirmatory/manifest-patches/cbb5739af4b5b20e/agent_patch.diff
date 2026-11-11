@@ -1,0 +1,47 @@
+diff --git a/xarray/core/duck_array_ops.py b/xarray/core/duck_array_ops.py
+--- a/xarray/core/duck_array_ops.py
++++ b/xarray/core/duck_array_ops.py
+@@ -315,7 +315,7 @@
+ def _create_nan_agg_method(name, dask_module=dask_array, coerce_strings=False):
+     from . import nanops
+ 
+-    def f(values, axis=None, skipna=None, **kwargs):
++    def f(values, axis=None, skipna=None, min_count=None, **kwargs):
+         if kwargs.pop("out", None) is not None:
+             raise TypeError(f"`out` is not valid for {name}")
+ 
+@@ -325,7 +325,9 @@
+             values = values.astype(object)
+ 
+         func = None
+-        if skipna or (skipna is None and values.dtype.kind in "cfO"):
++        if skipna or min_count is not None or (
++            skipna is None and values.dtype.kind in "cfO"
++        ):
+             nanname = "nan" + name
+             func = getattr(nanops, nanname)
+         else:
+diff --git a/xarray/core/nanops.py b/xarray/core/nanops.py
+--- a/xarray/core/nanops.py
++++ b/xarray/core/nanops.py
+@@ -26,13 +26,14 @@
+     """
+     xarray version of pandas.core.nanops._maybe_null_out
+     """
+-    if hasattr(axis, "__len__"):  # if tuple or list
+-        raise ValueError(
+-            "min_count is not available for reduction with more than one dimensions."
+-        )
+-
+     if axis is not None and getattr(result, "ndim", False):
+-        null_mask = (mask.shape[axis] - mask.sum(axis) - min_count) < 0
++        # When axis is a tuple/list, we need to compute the product of
++        # the shape values for those axes
++        if hasattr(axis, "__len__"):
++            size = np.take(mask.shape, axis).prod()
++        else:
++            size = mask.shape[axis]
++        null_mask = (size - mask.sum(axis) - min_count) < 0
+         if null_mask.any():
+             dtype, fill_value = dtypes.maybe_promote(result.dtype)
+             result = result.astype(dtype)

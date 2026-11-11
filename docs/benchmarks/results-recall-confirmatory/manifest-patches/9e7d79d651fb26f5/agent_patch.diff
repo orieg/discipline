@@ -1,0 +1,81 @@
+diff --git a/pylint/config/argument.py b/pylint/config/argument.py
+--- a/pylint/config/argument.py
++++ b/pylint/config/argument.py
+@@ -114,7 +114,7 @@
+ def _regexp_csv_transfomer(value: str) -> Sequence[Pattern[str]]:
+     """Transforms a comma separated list of regular expressions."""
+     patterns: list[Pattern[str]] = []
+-    for pattern in _csv_transformer(value):
++    for pattern in pylint_utils._splitstrip_regex(value):
+         patterns.append(_regex_transformer(pattern))
+     return patterns
+ 
+diff --git a/pylint/utils/__init__.py b/pylint/utils/__init__.py
+--- a/pylint/utils/__init__.py
++++ b/pylint/utils/__init__.py
+@@ -15,6 +15,7 @@
+     IsortDriver,
+     _check_csv,
+     _splitstrip,
++    _splitstrip_regex,
+     _unquote,
+     decoding_stream,
+     diff_string,
+@@ -33,6 +34,7 @@
+     "IsortDriver",
+     "_check_csv",
+     "_splitstrip",
++    "_splitstrip_regex",
+     "_unquote",
+     "decoding_stream",
+     "diff_string",
+diff --git a/pylint/utils/utils.py b/pylint/utils/utils.py
+--- a/pylint/utils/utils.py
++++ b/pylint/utils/utils.py
+@@ -232,6 +232,46 @@
+     return [word.strip() for word in string.split(sep) if word.strip()]
+ 
+ 
++def _splitstrip_regex(string: str) -> list[str]:
++    """Split a comma-separated string on commas, but respect curly braces.
++
++    This is needed for parsing comma-separated regular expressions that may
++    contain commas inside quantifier expressions like {1,3}.
++
++    >>> _splitstrip_regex('a, b, c')
++    ['a', 'b', 'c']
++    >>> _splitstrip_regex('foo, bar{1,3}')
++    ['foo', 'bar{1,3}']
++    >>> _splitstrip_regex('(foo{1,3})')
++    ['(foo{1,3})']
++
++    :param string: a csv line potentially containing regular expressions
++    :return: the split and stripped strings
++    """
++    result: list[str] = []
++    current: list[str] = []
++    brace_count = 0
++
++    for char in string:
++        if char == "{":
++            brace_count += 1
++            current.append(char)
++        elif char == "}":
++            brace_count -= 1
++            current.append(char)
++        elif char == "," and brace_count == 0:
++            if current:
++                result.append("".join(current).strip())
++                current = []
++        else:
++            current.append(char)
++
++    if current:
++        result.append("".join(current).strip())
++
++    return result
++
++
+ def _unquote(string: str) -> str:
+     """Remove optional quotes (simple or double) from the string.
+ 

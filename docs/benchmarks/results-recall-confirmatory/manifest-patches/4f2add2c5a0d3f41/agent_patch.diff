@@ -1,0 +1,15 @@
+diff --git a/sklearn/model_selection/_split.py b/sklearn/model_selection/_split.py
+--- a/sklearn/model_selection/_split.py
++++ b/sklearn/model_selection/_split.py
+@@ -1102,6 +1102,11 @@
+         self.n_repeats = n_repeats
+         self.random_state = random_state
+         self.cvargs = cvargs
++        for key, value in cvargs.items():
++            setattr(self, key, value)
++
++    def __repr__(self):
++        return _build_repr(self)
+ 
+     def split(self, X, y=None, groups=None):
+         """Generates indices to split data into training and test set.

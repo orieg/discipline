@@ -1,0 +1,40 @@
+diff --git a/django/utils/timezone.py b/django/utils/timezone.py
+--- a/django/utils/timezone.py
++++ b/django/utils/timezone.py
+@@ -73,7 +73,23 @@
+ 
+ def _get_timezone_name(timezone):
+     """Return the name of ``timezone``."""
+-    return str(timezone)
++    # Handle Etc/GMT* timezones specially because the tz database
++    # uses inverted signs. E.g., Etc/GMT-10 is 10 hours EAST of UTC,
++    # but the name contains a minus sign. We need to return the actual
++    # offset (e.g., '+10') so that _prepare_tzname_delta() can correctly
++    # convert it for database queries.
++    tzname = None
++    if _is_pytz_zone(timezone) and timezone.zone and timezone.zone.startswith('Etc/GMT'):
++        tzname = timezone.tzname(None)
++    elif isinstance(timezone, (pytz.BaseTzInfo,)):
++        tzname = str(timezone)
++    elif hasattr(timezone, 'key') and timezone.key and timezone.key.startswith('Etc/GMT'):
++        tzname = timezone.tzname(None)
++    elif hasattr(timezone, 'key'):
++        tzname = timezone.key
++    else:
++        tzname = str(timezone)
++    return tzname
+ 
+ # Timezone selection functions.
+ 
+diff --git a/tests/utils_tests/test_timezone.py b/tests/utils_tests/test_timezone.py
+--- a/tests/utils_tests/test_timezone.py
++++ b/tests/utils_tests/test_timezone.py
+@@ -285,8 +285,6 @@
+             with self.subTest(tz=tz, expected=expected):
+                 self.assertEqual(timezone._get_timezone_name(tz), expected)
+ 
+-    self.assertEqual(timezone._get_timezone_name(datetime.timezone(datetime.timedelta(hours=10))), 'UTC+09:00')
+-
+     def test_get_default_timezone(self):
+         self.assertEqual(timezone.get_default_timezone_name(), 'America/Chicago')
+ 

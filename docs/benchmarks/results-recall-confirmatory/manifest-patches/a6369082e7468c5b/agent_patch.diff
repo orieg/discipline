@@ -1,0 +1,35 @@
+diff --git a/src/_pytest/logging.py b/src/_pytest/logging.py
+--- a/src/_pytest/logging.py
++++ b/src/_pytest/logging.py
+@@ -396,6 +396,10 @@
+ 
+         .. versionadded:: 3.4
+         """
++        # For "call" and "teardown" phases, return handler.records directly
++        # so that clear() affects them. For "setup", return a snapshot.
++        if when in ("call", "teardown"):
++            return self.handler.records
+         return self._item.stash[caplog_records_key].get(when, [])
+ 
+     @property
+@@ -406,7 +410,7 @@
+     @property
+     def records(self) -> List[logging.LogRecord]:
+         """The list of log records."""
+-        return self.handler.records
++        return self.get_records("call")
+ 
+     @property
+     def record_tuples(self) -> List[Tuple[str, int, str]]:
+@@ -701,6 +705,11 @@
+ 
+             yield
+ 
++            # For "setup" phase, replace the reference with a copy so that
++            # subsequent reset() calls don't clear the setup records.
++            if when == "setup":
++                item.stash[caplog_records_key][when] = list(caplog_handler.records)
++
+             log = report_handler.stream.getvalue().strip()
+             item.add_report_section(when, "log", log)
+ 

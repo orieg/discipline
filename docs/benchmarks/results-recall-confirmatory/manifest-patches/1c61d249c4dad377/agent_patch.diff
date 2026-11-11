@@ -1,0 +1,31 @@
+diff --git a/sympy/core/relational.py b/sympy/core/relational.py
+--- a/sympy/core/relational.py
++++ b/sympy/core/relational.py
+@@ -389,10 +389,14 @@
+     def _eval_as_set(self):
+         # self is univariate and periodicity(self, x) in (0, None)
+         from sympy.solvers.inequalities import solve_univariate_inequality
++        from sympy.sets.conditionset import ConditionSet
+         syms = self.free_symbols
+         assert len(syms) == 1
+         x = syms.pop()
+-        return solve_univariate_inequality(self, x, relational=False)
++        try:
++            return solve_univariate_inequality(self, x, relational=False)
++        except NotImplementedError:
++            return ConditionSet(x, self, S.Reals)
+ 
+     @property
+     def binary_symbols(self):
+diff --git a/sympy/core/tests/test_relational.py b/sympy/core/tests/test_relational.py
+--- a/sympy/core/tests/test_relational.py
++++ b/sympy/core/tests/test_relational.py
+@@ -961,7 +961,7 @@
+ def test_issue_18188():
+     from sympy.sets.conditionset import ConditionSet
+     result1 = Eq(x*cos(x) - 3*sin(x), 0)
+-    assert result1.as_set() == ConditionSet(x, Eq(x*cos(x) - 4*sin(x), 0), Reals)
++    assert result1.as_set() == ConditionSet(x, Eq(x*cos(x) - 3*sin(x), 0), Reals)
+ 
+     result2 = Eq(x**2 + sqrt(x*2) + sin(x), 0)
+     assert result2.as_set() == ConditionSet(x, Eq(sqrt(2)*sqrt(x) + x**2 + sin(x), 0), Reals)
