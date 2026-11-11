@@ -110,7 +110,9 @@ required_trailers = ["Signed-off-by"]
 require_agent_review = false
 
 [gates.pii]
-exempt_paths = ["tests/fixtures/**"]
+# The sealed #838 agent and benchmark patches are pinned by sha256 in their manifest and carry
+# upstream projects' own example paths; they cannot be edited or annotated (#1058).
+exempt_paths = ["tests/fixtures/**", "docs/benchmarks/results-recall-confirmatory/manifest-patches/**"]
 redact_lan_ips = true
 
 # Path-filtered jobs are gated by detect-changes; ci-skip-set verifies at runtime
