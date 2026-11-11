@@ -317,6 +317,30 @@ discipline audit --last 200 --format html -o audit.html
   <img alt="discipline audit report of this repository's last 200 merged changes: the headline, a strip of checks marked found, checked or not checked, and a ranked Needs a decision list" src="docs/assets/img/audit-overview-light.png" width="100%">
 </picture>
 
+## Results
+
+**In short:** discipline 0.32.0 blocked 17% of merged agent pull requests; a simple baseline rule that blocks any change to a test, CI or configuration file blocked 56%. 84% of discipline's blocks are correct (likely 76–90%), against 2% for that rule. Each agent edit is checked in a few seconds. Still open: how much test gaming it catches.
+
+Every number comes from public pull requests or public benchmarks. Each chart states what was measured, and how each study was run, with its raw data, is in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md).
+
+**How often does it block?**
+
+![Discipline 0.32.0 blocked 40 of 232 merged coding-agent pull requests (17%); a simple rule that blocks any change to a test, CI or configuration file blocked 130 (56%).](docs/assets/img/results/pr-block-rate.svg)
+
+**Were those blocks right?**
+
+![84% of discipline's blocks are correct: 103 of 122, likely 76–90%, or 59–95% per pull request. The simple rule: 3 of 150 (2%). By check: CI workflow changes 66 of 66, swallowed errors 10 of 11, changed expected outputs 11 of 13, new dependencies 9 of 20.](docs/assets/img/results/block-precision.svg)
+
+AI models graded every finding, not people. Two models from different vendors agreed on 266 of 276; a third, from one of those vendors, settled the other 10. One pull request holds 52 of the 122 findings, so the per-pull-request range is wider.
+
+**How long does each check take?**
+
+![Each agent edit is checked in 7.9 seconds on this repository and 4.3 seconds on ripgrep when the hook can block, and in under 0.1 second in observe mode; a full CI check takes 19.5 and 6.3 seconds.](docs/assets/img/results/hook-latency.svg)
+
+**Does it catch test gaming?** This is measured, and the results are being reviewed before they are published. They will appear here whatever they show ([#838](https://github.com/orieg/discipline/issues/838)).
+
+**Judge it on your own repository:** `discipline replay --last 50` shows what discipline would have blocked in your last 50 merged changes, without blocking anything. The charts are generated from the committed results by `scripts/benchmark_charts.py`.
+
 ## Installation
 
 Discipline is distributed as a standalone static binary, native operating system packages (APT, RPM, Homebrew, MacPorts), cargo toolchain binary, or container image:

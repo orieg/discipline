@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 760 211" width="100%">
+<title>Discipline blocked 17% of merged agent pull requests; a simple rule blocked 56%</title>
+<defs><style>
+.bg{fill:#fff} .border{stroke:#e2e8f0;fill:none} .grid{stroke:#f1f5f9;stroke-dasharray:2,3}
+.axis{stroke:#cbd5e1;stroke-width:1.5px} .floor{stroke:#b45309;stroke-width:1.5px;stroke-dasharray:5,3}
+.t-title{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:14px;font-weight:700;fill:#0f172a}
+.t-sub{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:11px;font-weight:500;fill:#334155}
+.t-note{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:10px;fill:#64748b}
+.t-head{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:11px;font-weight:700;fill:#0f172a}
+.t-row{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:11px;font-weight:600;fill:#0f172a}
+.t-axis{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:9.5px;fill:#64748b}
+.t-val{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:10.5px;font-weight:600;fill:#334155}
+.t-big{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:11px;font-weight:700;fill:#0f172a}
+.t-floor{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:10px;font-weight:700;fill:#b45309}
+.c-disc{fill:#4f46e5;stroke:#4f46e5} .c-base{fill:#64748b;stroke:#64748b}
+.c-hollow{fill:#fff;stroke:#4f46e5;stroke-width:2px}
+.ci{stroke-width:2.5px;stroke-linecap:round}
+.bg{fill:#0d1117} .border{stroke:#30363d} .grid{stroke:#21262d} .axis{stroke:#484f58}
+.t-title,.t-row,.t-head,.t-big{fill:#f0f6fc} .t-sub{fill:#cbd5e1} .t-note,.t-axis{fill:#94a3b8} .t-val{fill:#e2e8f0}
+.floor{stroke:#f59e0b} .t-floor{fill:#fbbf24}
+.c-disc{fill:#818cf8;stroke:#818cf8} .c-base{fill:#94a3b8;stroke:#94a3b8}
+.c-hollow{fill:#0d1117;stroke:#818cf8}
+</style></defs>
+<rect class="bg" width="760" height="211" rx="6"/>
+<rect class="border" x=".5" y=".5" width="759" height="210" rx="6"/>
+<text class="t-title" x="24" y="32">Discipline blocked 17% of merged agent pull requests; a simple rule blocked 56%</text>
+<text class="t-sub" x="24" y="52">232 merged pull requests by coding agents, from 8 public repositories. Dot: measured. Line: likely range.</text>
+<line class="grid" x1="254.0" y1="79" x2="254.0" y2="137"/>
+<text class="t-axis" x="254.0" y="151" text-anchor="middle">0%</text>
+<line class="grid" x1="306.0" y1="79" x2="306.0" y2="137"/>
+<text class="t-axis" x="306.0" y="151" text-anchor="middle">20%</text>
+<line class="grid" x1="358.0" y1="79" x2="358.0" y2="137"/>
+<text class="t-axis" x="358.0" y="151" text-anchor="middle">40%</text>
+<line class="grid" x1="410.0" y1="79" x2="410.0" y2="137"/>
+<text class="t-axis" x="410.0" y="151" text-anchor="middle">60%</text>
+<line class="grid" x1="462.0" y1="79" x2="462.0" y2="137"/>
+<text class="t-axis" x="462.0" y="151" text-anchor="middle">80%</text>
+<line class="grid" x1="514.0" y1="79" x2="514.0" y2="137"/>
+<text class="t-axis" x="514.0" y="151" text-anchor="middle">100%</text>
+<line class="axis" x1="254" y1="137" x2="514" y2="137"/>
+<text class="t-row" x="24" y="93">Discipline</text>
+<line class="ci c-disc" x1="287.6" y1="89" x2="312.8" y2="89"/>
+<circle class="c-disc" cx="298.8" cy="89" r="4.5"/>
+<text class="t-big" x="526" y="93">17%</text>
+<text class="t-val" x="576" y="93">40 of 232 · likely 12%–23%</text>
+<text class="t-row" x="24" y="119">Simple rule: any test, CI or config file</text>
+<line class="ci c-base" x1="383.0" y1="115" x2="415.9" y2="115"/>
+<circle class="c-base" cx="399.7" cy="115" r="4.5"/>
+<text class="t-big" x="526" y="119">56%</text>
+<text class="t-val" x="576" y="119">130 of 232 · likely 49%–63%</text>
+<text class="t-note" x="24" y="175">Fewer blocks, less friction. The next chart shows whether the blocks are correct. The simple rule is a baseline for</text>
+<text class="t-note" x="24" y="189">comparison: it blocks any pull request that changes a test, CI or configuration file. Discipline 0.32.0. (measured)</text>
+</svg>

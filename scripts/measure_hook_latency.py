@@ -11,6 +11,9 @@ Cells (method: docs/benchmarks/hook-latency.md):
   check-large      `check --base <base>~N`: the same head against a base N commits back
   hook-post-edit   a Claude Code `PostToolUse` Edit payload piped through
                    `hook run --agent claude-code --observe`, hooks installed, one-file change
+  hook-post-edit-enforcing
+                   the same payload through `hook run --agent claude-code` without `--observe`:
+                   the agent waits for the check (observe mode answers before it, #1003)
   hook-pre-tool    the same payload through `hook run --agent claude-code --event pre-tool --observe`
   git-diff-*       `git diff --name-only` and `git diff` over the same ranges (the floor
                    the check cannot go under)
@@ -176,6 +179,8 @@ def cells(repo: dict, binary: Path) -> list[tuple[str, list[str], str | None]]:
         ("check-one-file", [exe, "check", "--base", b, "--quiet"], None),
         ("check-large", [exe, "check", "--base", lb, "--quiet"], None),
         ("hook-post-edit", [exe, "hook", "run", "--agent", "claude-code", "--base", b, "--observe"],
+         POST_EDIT.format(cwd=cwd, path=path)),
+        ("hook-post-edit-enforcing", [exe, "hook", "run", "--agent", "claude-code", "--base", b],
          POST_EDIT.format(cwd=cwd, path=path)),
         ("hook-pre-tool", [exe, "hook", "run", "--agent", "claude-code", "--base", b,
                            "--event", "pre-tool", "--observe"], PRE_TOOL.format(cwd=cwd, path=path)),
