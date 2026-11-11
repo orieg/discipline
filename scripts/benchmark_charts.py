@@ -7,7 +7,7 @@ Reads only committed result files and writes the charts to `docs/assets/img/resu
     a simple rule that blocks any changed test, CI or configuration file
     (`agent-pr-precision-v8`, `docs/benchmarks/results-v8/summary.json`).
   - `block-precision`: how often the finding behind a block has the defect its rule describes,
-    overall, with whole pull requests resampled, and for the four checks with 10 or more
+    overall, per pull request (cluster bootstrap), and for the four checks with 10 or more
     findings (`agent-pr-precision-v8`).
   - `hook-latency`: how long the CI check and the agent edit hook take on the released code
     (`docs/benchmarks/results-hook-latency/release-0.32-hook-latency.json`).
@@ -231,11 +231,11 @@ def pr_block_rate() -> Chart:
     ]
     return chart(
         f"Discipline blocked {pct(d['k'] / d['n'])} of merged agent pull requests; a simple rule blocked {pct(t['k'] / t['n'])}",
-        [f"{b['total_pull_requests']} merged pull requests written by coding agents, in 8 public repositories. Dot: measured share. Line: the likely range."],
+        [f"{b['total_pull_requests']} merged pull requests by coding agents, from 8 public repositories. Dot: measured. Line: likely range."],
         [(None, rows, {})],
         [
-            "Fewer blocks means less friction. Whether the blocks it keeps are right is the next chart.",
-            "Discipline 0.32.0. The simple rule blocks any pull request that changes a test, CI or configuration file. (measured)",
+            "Fewer blocks, less friction. The next chart shows whether the blocks are correct.",
+            "The simple rule blocks any pull request that changes a test, CI or configuration file. Discipline 0.32.0. (measured)",
         ],
     )
 
@@ -247,7 +247,7 @@ def block_precision() -> Chart:
     tw = cls["twin"]["rule_fidelity"]
     disc = proportion("Discipline", rf["k"], rf["n"], "c-disc")
     lo, hi = rf["pr_cluster_bootstrap_95"]
-    by_pr = ("Discipline, whole pull requests resampled", rf["k"] / rf["n"], lo, hi, "c-hollow", pct(rf["k"] / rf["n"]),
+    by_pr = ("Discipline, per pull request", rf["k"] / rf["n"], lo, hi, "c-hollow", pct(rf["k"] / rf["n"]),
              f"{rf['k']} of {rf['n']} · likely {outward(lo, hi)}")
     gates = [proportion(name, s["per_gate"][g]["true_positive"], s["per_gate"][g]["n"], "c-disc")
              for g, name in GATE_NAMES.items()]
@@ -255,18 +255,17 @@ def block_precision() -> Chart:
     settled = s["tie_breaker_final_labels"]["rule_fidelity"]
     graded = rf["n"] + tw["n"] + cls["heuristic-and-prose"]["rule_fidelity"]["n"]
     return chart(
-        f"When discipline blocks, the flagged code has the problem its rule names {pct(rf['k'] / rf['n'])} of the time; for the simple rule's flags, {pct(tw['k'] / tw['n'])}",
-        ["Each finding behind a block was graded: does the flagged code really have the defect the rule describes? "
-         "Dot: measured share. Line: the likely range."],
+        f"Discipline's blocks are correct {pct(rf['k'] / rf['n'])} of the time; the simple rule's, {tw['k'] / tw['n'] * 100:.0f}%",
+        ["Correct: the flagged code really has the problem the block names. Dot: measured. Line: likely range."],
         [
             (None, [disc, by_pr, proportion(SIMPLE_FILE_RULE, tw["k"], tw["n"], "c-base")], {}),
-            ("By check (the four with 10 or more findings)", gates, {}),
+            ("By check (checks with 10 or more findings)", gates, {}),
         ],
         [
-            f"Graded by two AI models from different vendors, not by people; they agreed on {graded - settled} of {graded} findings,"
-            f" and a third AI model, from one of those vendors, settled the other {settled} without seeing their answers. {rf['n'] - rf['k']} of {rf['n']} were not the defect, or could not be told from the change.",
-            "One pull request holds 52 of the findings, all CI workflow changes; the second line counts each pull request as one draw, so its range is wider.",
-            f"Whether maintainers wanted these blocks cannot be measured here: every pull request in the set was merged. Discipline 0.32.0. (measured)",
+            f"Graded by AI models, not people. Two models from different vendors agreed on {graded - settled} of {graded} findings;"
+            f" a third, from one of those vendors, settled the other {settled}.",
+            "One pull request holds 52 of the findings, so the per-pull-request range is wider.",
+            "Every pull request here was merged, so this cannot show whether maintainers wanted the blocks. Discipline 0.32.0. (measured)",
         ],
     )
 
