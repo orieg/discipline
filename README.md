@@ -319,17 +319,19 @@ discipline audit --last 200 --format html -o audit.html
 
 ## Results
 
-**In short:** discipline blocks far fewer agent pull requests than a simple test-file rule, and checks each agent edit in a few seconds. Two things are still open: whether its blocks are right, and how much test gaming it catches.
+**In short:** discipline 0.32.0 blocked 17% of merged agent pull requests, against 56% for a simple test-file rule. When it blocks, the flagged code has the problem its rule names 84% of the time (likely 76–90%). It checks each agent edit in a few seconds. Still open: how much test gaming it catches.
 
 Every number comes from public pull requests or public benchmarks. Each chart states what was measured, and how each study was run, with its raw data, is in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md).
 
 **How often does it block?**
 
-![Discipline blocked 41 of 232 merged coding-agent pull requests (18%); a simple rule that blocks any change to a test, CI or configuration file blocked 130 (56%).](docs/assets/img/results/pr-block-rate.svg)
+![Discipline 0.32.0 blocked 40 of 232 merged coding-agent pull requests (17%); a simple rule that blocks any change to a test, CI or configuration file blocked 130 (56%).](docs/assets/img/results/pr-block-rate.svg)
 
 **Were those blocks right?**
 
-![Two rounds of AI grading disagree on whether discipline's blocks were right: 119 of 125 findings in the first round (95%), 12 of 122 in the second (10%), against a 90% bar set in advance.](docs/assets/img/results/precision-raters.svg)
+![When discipline blocks, the flagged code has the defect its rule describes in 103 of 122 findings (84%, likely 76–90%, or 59–95% with whole pull requests resampled); for the simple rule's flags, 3 of 150. By check: CI workflow changes 66 of 66, swallowed errors 10 of 11, changed expected outputs 11 of 13, new dependencies 9 of 20. Graded by AI models, not people.](docs/assets/img/results/block-precision.svg)
+
+Two AI models from different vendors graded every finding; a third, from the same vendor as one of them, settled the 10 they answered differently without seeing their answers. No person graded them, and one pull request holds 52 of the 122 findings, which is why the range with whole pull requests resampled is wider.
 
 **How long does each check take?**
 

@@ -3,11 +3,12 @@
 
 Reads only committed result files and writes the charts to `docs/assets/img/results/`:
 
-  - `pr-block-rate`: how many merged coding-agent pull requests discipline blocks, against a
-    simple rule that blocks any changed test, CI or configuration file
-    (`agent-pr-precision-v6`, `docs/benchmarks/results-v6/summary.json`).
-  - `precision-raters`: whether those blocks were right, as two rounds of AI grading judged the
-    same findings (`docs/benchmarks/results-v5/`, `results-v6/`).
+  - `pr-block-rate`: how many merged coding-agent pull requests the 0.32.0 code blocks, against
+    a simple rule that blocks any changed test, CI or configuration file
+    (`agent-pr-precision-v8`, `docs/benchmarks/results-v8/summary.json`).
+  - `block-precision`: how often the finding behind a block has the defect its rule describes,
+    overall, with whole pull requests resampled, and for the four checks with 10 or more
+    findings (`agent-pr-precision-v8`).
   - `hook-latency`: how long the CI check and the agent edit hook take on the released code
     (`docs/benchmarks/results-hook-latency/release-0.32-hook-latency.json`).
   - `recall-tradeoff`, `recall-by-release`: test gaming caught on impossible tests
@@ -16,7 +17,8 @@ Reads only committed result files and writes the charts to `docs/assets/img/resu
 
 The charts are written for readers who are not statisticians: each title states the finding,
 rows lead with a plain percentage, and identifiers stay in the docs the footnotes link to.
-A rate's range is its Wilson 95% score interval (`benchmark_power_audit.wilson_score_interval`);
+A rate's range is its Wilson 95% score interval (`benchmark_power_audit.wilson_score_interval`),
+or the study's pull-request cluster bootstrap where the row says so;
 a latency is a median with its min-max spread. `<name>.svg` follows the reader's light or dark
 colour scheme (the README); `<name>-light.svg` and `<name>-dark.svg` are fixed, for the Pages
 site, whose theme toggle an image cannot see.
@@ -210,53 +212,61 @@ def load(path: Path) -> dict:
         return json.load(f)
 
 
-def structural(summary: dict) -> tuple[int, int]:
-    for c in summary["class_results"]:
-        if c["class"] == "structural-ast-and-deterministic":
-            return c["k"], c["n"]
-    raise ValueError("no structural-ast-and-deterministic class result")
+V8 = BENCH / "results-v8" / "summary.json"
+GATE_NAMES = {
+    "ci-integrity": "CI workflow changes",
+    "golden-output": "Changed expected outputs",
+    "error-swallowing": "Swallowed errors",
+    "dependency-delta": "New dependencies",
+}
 
 
 def pr_block_rate() -> Chart:
-    s = load(BENCH / "results-v6" / "summary.json")
+    s = load(V8)
     b = s["pull_request_block_rates"]
     d, t = b["discipline"], b["naive_sensitive_path_filter"]
     rows = [
-        proportion("Discipline", d["blocked"], d["n"], "c-disc"),
-        proportion(SIMPLE_FILE_RULE, t["blocked"], t["n"], "c-base"),
+        proportion("Discipline", d["k"], d["n"], "c-disc"),
+        proportion(SIMPLE_FILE_RULE, t["k"], t["n"], "c-base"),
     ]
     return chart(
-        f"Discipline blocked {pct(d['blocked'] / d['n'])} of merged agent pull requests; a simple rule blocked {pct(t['blocked'] / t['n'])}",
+        f"Discipline blocked {pct(d['k'] / d['n'])} of merged agent pull requests; a simple rule blocked {pct(t['k'] / t['n'])}",
         [f"{b['total_pull_requests']} merged pull requests written by coding agents, in 8 public repositories. Dot: measured share. Line: the likely range."],
         [(None, rows, {})],
         [
-            "Fewer blocks means less friction, but only if the blocks it keeps are right, and that is not yet known (next chart).",
-            f"Discipline {s['discipline_version']}. The simple rule blocks any pull request that changes a test, CI or configuration file. (measured)",
+            "Fewer blocks means less friction. Whether the blocks it keeps are right is the next chart.",
+            "Discipline 0.32.0. The simple rule blocks any pull request that changes a test, CI or configuration file. (measured)",
         ],
     )
 
 
-def precision_raters() -> Chart:
-    v5 = load(BENCH / "results-v5" / "summary.json")
-    v6 = load(BENCH / "results-v6" / "summary.json")
-    floor = next(c["precision_floor"] for c in v6["class_results"] if c["class"] == "structural-ast-and-deterministic")
-    (k5, n5), (k6, n6) = structural(v5), structural(v6)
-    rows = [
-        proportion("First grading round", k5, n5, "c-base"),
-        proportion("Second round, new graders", k6, n6, "c-base"),
-    ]
-    lo5 = wilson_score_interval(k5, n5)[0]
+def block_precision() -> Chart:
+    s = load(V8)
+    cls = s["classes"]
+    rf = cls["structural-ast-and-deterministic"]["rule_fidelity"]
+    tw = cls["twin"]["rule_fidelity"]
+    disc = proportion("Discipline", rf["k"], rf["n"], "c-disc")
+    lo, hi = rf["pr_cluster_bootstrap_95"]
+    by_pr = ("Discipline, whole pull requests resampled", rf["k"] / rf["n"], lo, hi, "c-hollow", pct(rf["k"] / rf["n"]),
+             f"{rf['k']} of {rf['n']} · likely {outward(lo, hi)}")
+    gates = [proportion(name, s["per_gate"][g]["true_positive"], s["per_gate"][g]["n"], "c-disc")
+             for g, name in GATE_NAMES.items()]
+    gates.sort(key=lambda r: -r[1])
+    settled = s["tie_breaker_final_labels"]["rule_fidelity"]
+    graded = rf["n"] + tw["n"] + cls["heuristic-and-prose"]["rule_fidelity"]["n"]
     return chart(
-        "Unknown: two rounds of AI grading disagree on whether the blocks were right",
+        f"When discipline blocks, the flagged code has the problem its rule names {pct(rf['k'] / rf['n'])} of the time; for the simple rule's flags, {pct(tw['k'] / tw['n'])}",
+        ["Each finding behind a block was graded: does the flagged code really have the defect the rule describes? "
+         "Dot: measured share. Line: the likely range."],
         [
-            "Graders judged whether each finding behind a block was right. The first round said "
-            f"{pct(k5 / n5)} were; a second round of new graders, on the same findings, said {pct(k6 / n6)}.",
+            (None, [disc, by_pr, proportion(SIMPLE_FILE_RULE, tw["k"], tw["n"], "c-base")], {}),
+            ("By check (the four with 10 or more findings)", gates, {}),
         ],
-        [(None, rows, {"floor": floor, "floor_label": f"Bar set in advance: {pct(floor)}"})],
         [
-            f"The second-round graders agreed with each other only weakly (score {v6['cohens_kappa']:.2f}, where 1 is full agreement and 0 is chance; 0.75 was required),"
-            f" so neither round settles it. All graders were AI models, not people. Even the first round's range starts at {math.floor(lo5 * 1000) / 10:.1f}%, under the bar.",
-            f"One pull request can hold several findings. The newer release dropped {n5 - n6} of the first round's {n5} findings, none graded right. (measured)",
+            f"Graded by two AI models from different vendors, not by people; they agreed on {graded - settled} of {graded} findings,"
+            f" and a third AI model, from one of those vendors, settled the other {settled} without seeing their answers. {rf['n'] - rf['k']} of {rf['n']} were not the defect, or could not be told from the change.",
+            "One pull request holds 52 of the findings, all CI workflow changes; the second line counts each pull request as one draw, so its range is wider.",
+            f"Whether maintainers wanted these blocks cannot be measured here: every pull request in the set was merged. Discipline 0.32.0. (measured)",
         ],
     )
 
@@ -357,7 +367,7 @@ def charts() -> dict[str, str]:
     """Every chart file: `<name>.svg` follows the reader's scheme, `-light` / `-dark` are fixed."""
     made = {
         "pr-block-rate": pr_block_rate(),
-        "precision-raters": precision_raters(),
+        "block-precision": block_precision(),
         "hook-latency": hook_latency(),
     }
     if RECALL.is_dir():
