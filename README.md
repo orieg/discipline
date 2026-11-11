@@ -111,7 +111,7 @@ jobs:
       - uses: orieg/discipline@a2aec5b19e97ebfe23f58ee4f7e0b8caaab5ea2f # v0.31.0
 ```
 
-The action is pinned by commit SHA because the default `ci-integrity` gate reports any tag ref (`@v0`, `@v0.31.0`) newly added to a workflow as an unpinned action, so a tag would fail the pull request that adds it. A SHA ref runs the binary of the release that commit's `Cargo.toml` names; `version:` under `with:` picks another release, and [Renovate](docs/CONFIGURATION.md#keeping-pins-current-with-renovate) or [Dependabot](docs/CONFIGURATION.md#keeping-pins-current-with-dependabot) move the pin. A repository that turns `ci-integrity` off can use the floating `@v0` ref, which tracks the latest `v0.x.y` release and moves only after that release has passed its smoke tests. Pin `@v0.31.0` or a commit SHA when a verdict must be reproducible from the workflow file alone. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger).
+The action is pinned by commit SHA because the default `ci-integrity` gate reports any tag ref (`@v0`, `@v0.32.0`) newly added to a workflow as an unpinned action, so a tag would fail the pull request that adds it. A SHA ref runs the binary of the release that commit's `Cargo.toml` names; `version:` under `with:` picks another release, and [Renovate](docs/CONFIGURATION.md#keeping-pins-current-with-renovate) or [Dependabot](docs/CONFIGURATION.md#keeping-pins-current-with-dependabot) move the pin. A repository that turns `ci-integrity` off can use the floating `@v0` ref, which tracks the latest `v0.x.y` release and moves only after that release has passed its smoke tests. Pin `@v0.32.0` or a commit SHA when a verdict must be reproducible from the workflow file alone. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger).
 
 The step fails on errors only. A warning, such as `AGENTS.md Missing` in a repository without one, shows in the report and the step summary without failing it. Add `fail_on_warnings: true` under `with:` once the warnings are fixed or baselined; [First Week](#5-first-week-from-advisory-to-enforcing) gives the order.
 
@@ -156,9 +156,9 @@ The action fetches the matching release archive and its `SHA256SUMS` from GitHub
 A mirror can replace an archive and its `SHA256SUMS` together, so a mirror install is checked further only when the mirror also serves the release's Sigstore bundle, `discipline.intoto.jsonl`, and the runner has `gh`: the bundle must be signed by this repository's release workflow for the requested tag, which a mirror cannot forge. `require_provenance: true` fails the install, before the binary runs, when that check cannot be made; `trusted_root` (a file from `gh attestation trusted-root`) lets it run without network:
 
 ```yaml
-      - uses: https://github.com/orieg/discipline@<full commit SHA> # v0.31.0
+      - uses: https://github.com/orieg/discipline@<full commit SHA> # v0.32.0
         with:
-          version: v0.31.0
+          version: v0.32.0
           download_url: https://mirror.example.com/discipline/releases
           require_provenance: true
           trusted_root: /opt/sigstore/trusted_root.jsonl # optional, for no network
@@ -370,7 +370,7 @@ curl -fsSL https://orieg.github.io/discipline/install.sh | bash
 Custom destination directory or pinned release tag:
 
 ```bash
-bash install.sh --to ~/.local/bin --version v0.31.0
+bash install.sh --to ~/.local/bin --version v0.32.0
 ```
 
 ### Debian / Ubuntu (APT)
@@ -474,10 +474,10 @@ gh attestation trusted-root > trusted_root.jsonl
 gh attestation verify discipline-x86_64-unknown-linux-musl.tar.gz \
   --bundle discipline.intoto.jsonl --custom-trusted-root trusted_root.jsonl \
   --repo orieg/discipline --signer-workflow orieg/discipline/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.31.0
+  --source-ref refs/tags/v0.32.0
 ```
 
-`install.sh --version v0.31.0 --verify-provenance [--trusted-root trusted_root.jsonl]` runs the same check before it installs.
+`install.sh --version v0.32.0 --verify-provenance [--trusted-root trusted_root.jsonl]` runs the same check before it installs.
 
 ## Documentation
 
