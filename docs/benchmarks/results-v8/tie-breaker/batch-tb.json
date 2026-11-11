@@ -1,0 +1,114 @@
+{
+  "items": [
+    {
+      "item_id": "PKT-0021",
+      "repo": "astral-sh/ruff",
+      "commit_sha": "6e20f2219020",
+      "commit_subject": "test: migrate `show_settings` and `version` tests to use `CliTest` (#23702)",
+      "file": "crates/ruff/tests/version.rs",
+      "line": null,
+      "rule_summary": "Existing test file modified: verify whether the change weakens, deletes, or degrades test assertions or coverage.",
+      "diff_excerpt": "diff --git a/crates/ruff/tests/version.rs b/crates/ruff/tests/version.rs\ndeleted file mode 100644\nindex fa4a8380e9..0000000000\n--- a/crates/ruff/tests/version.rs\n+++ /dev/null\n@@ -1,104 +0,0 @@\n-//! Tests for the --version command\n-use std::fs;\n-use std::process::Command;\n-\n-use anyhow::Result;\n-use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};\n-use tempfile::TempDir;\n-\n-const BIN_NAME: &str = \"ruff\";\n-const VERSION_FILTER: [(&str, &str); 1] = [(\n-    r\"\\d+\\.\\d+\\.\\d+(\\+\\d+)?( \\(\\w{9} \\d\\d\\d\\d-\\d\\d-\\d\\d\\))?\",\n-    \"[VERSION]\",\n-)];\n-\n-#[test]\n-fn version_basics() {\n-    insta::with_settings!({filters => VERSION_FILTER.to_vec()}, {\n-        assert_cmd_snapshot!(\n-            Command::new(get_cargo_bin(BIN_NAME)).arg(\"version\"), @\"",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0054",
+      "repo": "tokio-rs/tokio",
+      "commit_sha": "8f37021c169c",
+      "commit_subject": "ci: bump actions/checkout from 6 to 7 (#8229)",
+      "file": ".github/workflows/uring-kernel-version-test.yml",
+      "line": null,
+      "rule_summary": "CI workflow file modified: verify whether the change introduces unpinned actions, masks failures, or weakens CI gating.",
+      "diff_excerpt": "diff --git a/.github/workflows/uring-kernel-version-test.yml b/.github/workflows/uring-kernel-version-test.yml\nindex 7823bc24..68db25f5 100644\n--- a/.github/workflows/uring-kernel-version-test.yml\n+++ b/.github/workflows/uring-kernel-version-test.yml\n@@ -12,11 +12,11 @@ jobs:\n   build:\n     runs-on: ubuntu-latest\n     env:\n       KERNEL_VERSION: ${{ inputs.kernel_version }}\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7\n \n       - name: Install system dependencies\n         run: |\n           sudo apt-get update\n           sudo apt-get install -y \\",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0099",
+      "repo": "denoland/deno",
+      "commit_sha": "70dba84c5f2b",
+      "commit_subject": "fix(canvas): don't hold SurfaceData mut borrow over window resize (#35993)",
+      "file": "tests/unit/webgpu_test.ts",
+      "line": null,
+      "rule_summary": "Existing test file modified: verify whether the change weakens, deletes, or degrades test assertions or coverage.",
+      "diff_excerpt": "diff --git a/tests/unit/webgpu_test.ts b/tests/unit/webgpu_test.ts\nindex ad37505429..43d5d22441 100644\n--- a/tests/unit/webgpu_test.ts\n+++ b/tests/unit/webgpu_test.ts\n@@ -13,10 +13,47 @@ try {\n // yet, and skip on macOS x86 CI because these do not have virtual GPUs.\n const isCIWithoutGPU = (Deno.build.os === \"linux\" ||\n   (Deno.build.os === \"darwin\" && Deno.build.arch === \"x86_64\")) && isCI;\n // Skip these tests in WSL because it doesn't have good GPU support.\n const isWsl = await checkIsWsl();\n+// Skip the window surface tests when there is no windowing system available\n+// (e.g. headless or Wayland-only). Checked up front so those tests are\n+// reported as ignored rather than silently passing.\n+const hasWindowingSystem = checkWindowingSystem();\n+\n+function checkWindowingSystem(): boolean {\n+  if (Deno.build.os === \"windows\") {\n+    // Window creation is asserted in the test itself.\n+    return true;\n+  }\n+  if (Deno.build.os !== \"linux\") {\n+    return false;\n+  }\n+  try {\n+    const x11 = Deno.dlopen(",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0136",
+      "repo": "vitejs/vite",
+      "commit_sha": "2540ed06d0b6",
+      "commit_subject": "feat: forward browser console logs and errors to dev server terminal (#20916)",
+      "file": "packages/vite/src/shared/tsconfig.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/packages/vite/src/shared/tsconfig.json b/packages/vite/src/shared/tsconfig.json\nindex 18d419812..448d4f977 100644\n--- a/packages/vite/src/shared/tsconfig.json\n+++ b/packages/vite/src/shared/tsconfig.json\n@@ -1,8 +1,9 @@\n {\n   \"extends\": \"../../tsconfig.base.json\",\n   \"include\": [\"./\", \"../types\"],\n+  \"exclude\": [\"__tests__\"],\n   \"compilerOptions\": {\n     \"lib\": [\"ESNext\", \"DOM\"],\n     \"stripInternal\": true\n   }\n }",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0142",
+      "repo": "vitejs/vite",
+      "commit_sha": "2540ed06d0b6",
+      "commit_subject": "feat: forward browser console logs and errors to dev server terminal (#20916)",
+      "file": "packages/vite/src/shared/tsconfig.json",
+      "line": null,
+      "rule_summary": "Compiler, linter, type-checker, or test-runner configuration rule was weakened or disabled.",
+      "diff_excerpt": "diff --git a/packages/vite/src/shared/tsconfig.json b/packages/vite/src/shared/tsconfig.json\nindex 18d419812..448d4f977 100644\n--- a/packages/vite/src/shared/tsconfig.json\n+++ b/packages/vite/src/shared/tsconfig.json\n@@ -1,8 +1,9 @@\n {\n   \"extends\": \"../../tsconfig.base.json\",\n   \"include\": [\"./\", \"../types\"],\n+  \"exclude\": [\"__tests__\"],\n   \"compilerOptions\": {\n     \"lib\": [\"ESNext\", \"DOM\"],\n     \"stripInternal\": true\n   }\n }",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0167",
+      "repo": "astral-sh/ruff",
+      "commit_sha": "9ba4b13cc521",
+      "commit_subject": "Bump ecosystem-analyzer to e7576e6 (#24834)",
+      "file": ".github/workflows/ty-ecosystem-analyzer.yaml",
+      "line": null,
+      "rule_summary": "CI workflow file modified: verify whether the change introduces unpinned actions, masks failures, or weakens CI gating.",
+      "diff_excerpt": "diff --git a/.github/workflows/ty-ecosystem-analyzer.yaml b/.github/workflows/ty-ecosystem-analyzer.yaml\nindex 46f6eab3df..2cc1dfa438 100644\n--- a/.github/workflows/ty-ecosystem-analyzer.yaml\n+++ b/.github/workflows/ty-ecosystem-analyzer.yaml\n@@ -33,11 +33,11 @@ env:\n   CARGO_INCREMENTAL: 0\n   CARGO_NET_RETRY: 10\n   CARGO_TERM_COLOR: always\n   RUSTUP_MAX_RETRIES: 10\n   RUST_BACKTRACE: 1\n-  ECOSYSTEM_ANALYZER_COMMIT: bea89c6205aa21eede8f18fa8d5e28c7803c9e2a\n+  ECOSYSTEM_ANALYZER_COMMIT: e7576e66e8f992b057ea92c820c04313dceda755\n \n jobs:\n   build-ty:\n     name: Build ty\n     runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-22.04-32' || 'ubuntu-latest' }}\n@@ -133,11 +133,10 @@ jobs:\n           uvx \\\n             --from \"git+https://github.com/astral-sh/ecosystem-analyzer@${ECOSYSTEM_ANALYZER_COMMIT}\" \\\n             ecosystem-analyzer \\\n             --flaky-runs 10 \\\n             diff \\\n-            --dynamic-flaky \\\n             --projects-old projects_old.txt \\",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0186",
+      "repo": "vitejs/vite",
+      "commit_sha": "d65a9831c984",
+      "commit_subject": "fix(server): improve malformed URL handling in middlewares (#20830)",
+      "file": "packages/vite/src/node/utils.ts",
+      "line": 1632,
+      "rule_summary": "Production code adds an empty catch/except/error handler that silently swallows errors.",
+      "diff_excerpt": "diff --git a/packages/vite/src/node/utils.ts b/packages/vite/src/node/utils.ts\nindex 937c4cc8c..931559d0e 100644\n--- a/packages/vite/src/node/utils.ts\n+++ b/packages/vite/src/node/utils.ts\n@@ -1624,10 +1624,19 @@ export function partialEncodeURIPath(uri: string): string {\n   const filePath = cleanUrl(uri)\n   const postfix = filePath !== uri ? uri.slice(filePath.length) : ''\n   return filePath.replaceAll('%', '%25') + postfix\n }\n \n+export function decodeURIIfPossible(input: string): string | undefined {\n+  try {\n+    return decodeURI(input)\n+  } catch {\n+    // url is malformed, probably a interpolate syntax of template engines\n+    return\n+  }\n+}\n+\n type SigtermCallback = (signal?: 'SIGTERM', exitCode?: number) => Promise<void>\n \n // Use a shared callback when attaching sigterm listeners to avoid `MaxListenersExceededWarning`\n const sigtermCallbacks = new Set<SigtermCallback>()\n const parentSigtermCallback: SigtermCallback = async (signal, exitCode) => {",
+      "line_context": "1627: }\n1628: \n1629: export function decodeURIIfPossible(input: string): string | undefined {\n1630:   try {\n1631:     return decodeURI(input)\n1632:   } catch {\n1633:     // url is malformed, probably a interpolate syntax of template engines\n1634:     return\n1635:   }\n1636: }\n1637: "
+    },
+    {
+      "item_id": "PKT-0190",
+      "repo": "vitejs/vite",
+      "commit_sha": "2540ed06d0b6",
+      "commit_subject": "feat: forward browser console logs and errors to dev server terminal (#20916)",
+      "file": "playground/forward-console/package.json",
+      "line": null,
+      "rule_summary": "Manifest adds a new direct dependency requiring license/supply-chain review or waiver.",
+      "diff_excerpt": "diff --git a/playground/forward-console/package.json b/playground/forward-console/package.json\nnew file mode 100644\nindex 000000000..7920da380\n--- /dev/null\n+++ b/playground/forward-console/package.json\n@@ -0,0 +1,16 @@\n+{\n+  \"name\": \"@vitejs/test-forward-console\",\n+  \"private\": true,\n+  \"version\": \"0.0.0\",\n+  \"type\": \"module\",\n+  \"scripts\": {\n+    \"dev\": \"vite\",\n+    \"build\": \"vite build\",\n+    \"debug\": \"node --inspect-brk ../../packages/vite/bin/vite\",\n+    \"preview\": \"vite preview\"\n+  },\n+  \"dependencies\": {\n+    \"@vitejs/test-forward-console-throw-dep\": \"file:./fixtures/throw-dep\"\n+  },\n+  \"devDependencies\": {}\n+}",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0233",
+      "repo": "astral-sh/ruff",
+      "commit_sha": "6e20f2219020",
+      "commit_subject": "test: migrate `show_settings` and `version` tests to use `CliTest` (#23702)",
+      "file": "crates/ruff/tests/show_settings.rs",
+      "line": null,
+      "rule_summary": "Existing test file modified: verify whether the change weakens, deletes, or degrades test assertions or coverage.",
+      "diff_excerpt": "diff --git a/crates/ruff/tests/show_settings.rs b/crates/ruff/tests/show_settings.rs\ndeleted file mode 100644\nindex 33db97b75e..0000000000\n--- a/crates/ruff/tests/show_settings.rs\n+++ /dev/null\n@@ -1,105 +0,0 @@\n-use anyhow::Context;\n-use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};\n-use std::path::Path;\n-use std::process::Command;\n-use tempfile::TempDir;\n-\n-const BIN_NAME: &str = \"ruff\";\n-\n-#[test]\n-fn display_default_settings() -> anyhow::Result<()> {\n-    let tempdir = TempDir::new().context(\"Failed to create temp directory.\")?;\n-\n-    // Tempdir path's on macos are symlinks, which doesn't play nicely with\n-    // our snapshot filtering.\n-    let project_dir =\n-        dunce::canonicalize(tempdir.path()).context(\"Failed to canonical tempdir path.\")?;\n-\n-    std::fs::write(\n-        project_dir.join(\"pyproject.toml\"),",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0274",
+      "repo": "astral-sh/ruff",
+      "commit_sha": "a928da0bcf22",
+      "commit_subject": "[ty] Use TDD-based narrowing constraints and support NoReturn narrowing (#23109)",
+      "file": "crates/ty_python_semantic/src/list.rs",
+      "line": null,
+      "rule_summary": "Tracked file deleted from repository without an explicit deletion rationale.",
+      "diff_excerpt": "diff --git a/crates/ty_python_semantic/src/list.rs b/crates/ty_python_semantic/src/list.rs\ndeleted file mode 100644\nindex 547c69e47e..0000000000\n--- a/crates/ty_python_semantic/src/list.rs\n+++ /dev/null\n@@ -1,745 +0,0 @@\n-//! Sorted, arena-allocated association lists\n-//!\n-//! An [_association list_][alist], which is a linked list of key/value pairs. We additionally\n-//! guarantee that the elements of an association list are sorted (by their keys), and that they do\n-//! not contain any entries with duplicate keys.\n-//!\n-//! Association lists have fallen out of favor in recent decades, since you often need operations\n-//! that are inefficient on them. In particular, looking up a random element by index is O(n), just\n-//! like a linked list; and looking up an element by key is also O(n), since you must do a linear\n-//! scan of the list to find the matching element. The typical implementation also suffers from\n-//! poor cache locality and high memory allocation overhead, since individual list cells are\n-//! typically allocated separately from the heap. We solve that last problem by storing the cells\n-//! of an association list in an [`IndexVec`] arena.\n-//!\n-//! We exploit structural sharing where possible, reusing cells across multiple lists when we can.\n-//! That said, we don't guarantee that lists are canonical \u2014 it's entirely possible for two lists\n-//! with identical contents to use different list cells and have different identifiers.\n-//!\n-//! Given all of this, association lists have the following benefits:",
+      "line_context": null
+    }
+  ]
+}

@@ -271,7 +271,7 @@ Discipline's lane is the integrity of an agent's diff: tests, safety justificati
 
 Entries in each gate's "What it does NOT catch" list:
 
-[`agents-md`](docs/GATES.md#agents-md) 1 · [`assertion-reduction`](docs/GATES.md#assertion-reduction) 21 · [`vacuous-tests`](docs/GATES.md#vacuous-tests) 8 · [`ignored-tests`](docs/GATES.md#ignored-tests) 11 · [`unsafe-safety-comment`](docs/GATES.md#unsafe-safety-comment) 3 · [`deletion-rationale`](docs/GATES.md#deletion-rationale) 5 · [`time-estimates`](docs/GATES.md#time-estimates) 7 · [`pii`](docs/GATES.md#pii) 8 · [`agent-scratch`](docs/GATES.md#agent-scratch) 1 · [`shell-secrets`](docs/GATES.md#shell-secrets) 5 · [`issue-link`](docs/GATES.md#issue-link) 3 · [`review-threads`](docs/GATES.md#review-threads) 4 · [`ratified-paths`](docs/GATES.md#ratified-paths) 4 · [`citation-metadata`](docs/GATES.md#citation-metadata) 4 · [`commit-provenance`](docs/GATES.md#commit-provenance) 8 · [`config-integrity`](docs/GATES.md#config-integrity) 6 · [`stub-bodies`](docs/GATES.md#stub-bodies) 6 · [`harness-tampering`](docs/GATES.md#harness-tampering) 9 · [`error-swallowing`](docs/GATES.md#error-swallowing) 10 · [`instruction-smuggling`](docs/GATES.md#instruction-smuggling) 11 · [`build-hooks`](docs/GATES.md#build-hooks) 3 · [`toolchain-config`](docs/GATES.md#toolchain-config) 9 · [`sandbox-config`](docs/GATES.md#sandbox-config) 7 · [`scope-confinement`](docs/GATES.md#scope-confinement) 4 · [`suppression-delta`](docs/GATES.md#suppression-delta) 5 · [`provenance-tags`](docs/GATES.md#provenance-tags) 4 · [`ci-integrity`](docs/GATES.md#ci-integrity) 7 · [`ci-skip-set`](docs/GATES.md#ci-skip-set) 3 · [`test-floor`](docs/GATES.md#test-floor) 8 · [`golden-output`](docs/GATES.md#golden-output) 1 · [`dependency-delta`](docs/GATES.md#dependency-delta) 5 · [`test-budget`](docs/GATES.md#test-budget) 5 · [`pr-checklist`](docs/GATES.md#pr-checklist) 11 · [`command`](docs/GATES.md#command) 3 · [`sanitizers`](docs/GATES.md#sanitizers) 3 · [`msrv`](docs/GATES.md#msrv) 3 · [`miri`](docs/GATES.md#miri) 3 · [`unsafe-budget`](docs/GATES.md#unsafe-budget) 3 · [`bench-regression`](docs/GATES.md#bench-regression) 2 · [`archive-contents`](docs/GATES.md#archive-contents) 2 · [`manifest-sync`](docs/GATES.md#manifest-sync) 2 · [`version-lockstep`](docs/GATES.md#version-lockstep) 2 · [`gate-command-lint`](docs/GATES.md#gate-command-lint) 6 · [`mechanism-sections`](docs/GATES.md#mechanism-sections) 4 · [`citation-anchors`](docs/GATES.md#citation-anchors) 6 · [`claim-labels`](docs/GATES.md#claim-labels) 3 · [`companion-edit`](docs/GATES.md#companion-edit) 4
+[`agents-md`](docs/GATES.md#agents-md) 1 · [`assertion-reduction`](docs/GATES.md#assertion-reduction) 24 · [`vacuous-tests`](docs/GATES.md#vacuous-tests) 8 · [`ignored-tests`](docs/GATES.md#ignored-tests) 11 · [`unsafe-safety-comment`](docs/GATES.md#unsafe-safety-comment) 3 · [`deletion-rationale`](docs/GATES.md#deletion-rationale) 5 · [`time-estimates`](docs/GATES.md#time-estimates) 7 · [`pii`](docs/GATES.md#pii) 9 · [`agent-scratch`](docs/GATES.md#agent-scratch) 1 · [`shell-secrets`](docs/GATES.md#shell-secrets) 5 · [`issue-link`](docs/GATES.md#issue-link) 3 · [`review-threads`](docs/GATES.md#review-threads) 4 · [`ratified-paths`](docs/GATES.md#ratified-paths) 4 · [`citation-metadata`](docs/GATES.md#citation-metadata) 4 · [`commit-provenance`](docs/GATES.md#commit-provenance) 8 · [`config-integrity`](docs/GATES.md#config-integrity) 6 · [`stub-bodies`](docs/GATES.md#stub-bodies) 6 · [`harness-tampering`](docs/GATES.md#harness-tampering) 9 · [`error-swallowing`](docs/GATES.md#error-swallowing) 10 · [`instruction-smuggling`](docs/GATES.md#instruction-smuggling) 11 · [`build-hooks`](docs/GATES.md#build-hooks) 3 · [`toolchain-config`](docs/GATES.md#toolchain-config) 9 · [`sandbox-config`](docs/GATES.md#sandbox-config) 7 · [`scope-confinement`](docs/GATES.md#scope-confinement) 4 · [`suppression-delta`](docs/GATES.md#suppression-delta) 5 · [`provenance-tags`](docs/GATES.md#provenance-tags) 4 · [`ci-integrity`](docs/GATES.md#ci-integrity) 7 · [`ci-skip-set`](docs/GATES.md#ci-skip-set) 3 · [`test-floor`](docs/GATES.md#test-floor) 8 · [`golden-output`](docs/GATES.md#golden-output) 1 · [`dependency-delta`](docs/GATES.md#dependency-delta) 5 · [`test-budget`](docs/GATES.md#test-budget) 5 · [`pr-checklist`](docs/GATES.md#pr-checklist) 11 · [`command`](docs/GATES.md#command) 3 · [`sanitizers`](docs/GATES.md#sanitizers) 3 · [`msrv`](docs/GATES.md#msrv) 3 · [`miri`](docs/GATES.md#miri) 3 · [`unsafe-budget`](docs/GATES.md#unsafe-budget) 3 · [`bench-regression`](docs/GATES.md#bench-regression) 2 · [`archive-contents`](docs/GATES.md#archive-contents) 2 · [`manifest-sync`](docs/GATES.md#manifest-sync) 2 · [`version-lockstep`](docs/GATES.md#version-lockstep) 2 · [`gate-command-lint`](docs/GATES.md#gate-command-lint) 6 · [`mechanism-sections`](docs/GATES.md#mechanism-sections) 4 · [`citation-anchors`](docs/GATES.md#citation-anchors) 6 · [`claim-labels`](docs/GATES.md#claim-labels) 3 · [`companion-edit`](docs/GATES.md#companion-edit) 4
 <!-- /generated -->
 
 Generated by `discipline docs --write` from each gate's "What it does NOT catch" list in [`docs/GATES.md`](docs/GATES.md); `discipline docs --check` fails when this section and those lists disagree.
@@ -316,6 +316,30 @@ discipline audit --last 200 --format html -o audit.html
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/img/audit-overview-dark.png">
   <img alt="discipline audit report of this repository's last 200 merged changes: the headline, a strip of checks marked found, checked or not checked, and a ranked Needs a decision list" src="docs/assets/img/audit-overview-light.png" width="100%">
 </picture>
+
+## Results
+
+**In short:** discipline 0.32.0 blocked 17% of merged agent pull requests; a simple baseline rule that blocks any change to a test, CI or configuration file blocked 56%. 84% of discipline's blocks are correct (likely 76–90%), against 2% for that rule. Each agent edit is checked in a few seconds. Still open: how much test gaming it catches.
+
+Every number comes from public pull requests or public benchmarks. Each chart states what was measured, and how each study was run, with its raw data, is in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md).
+
+**How often does it block?**
+
+![Discipline 0.32.0 blocked 40 of 232 merged coding-agent pull requests (17%); a simple rule that blocks any change to a test, CI or configuration file blocked 130 (56%).](docs/assets/img/results/pr-block-rate.svg)
+
+**Were those blocks right?**
+
+![84% of discipline's blocks are correct: 103 of 122, likely 76–90%, or 59–95% per pull request. The simple rule: 3 of 150 (2%). By check: CI workflow changes 66 of 66, swallowed errors 10 of 11, changed expected outputs 11 of 13, new dependencies 9 of 20.](docs/assets/img/results/block-precision.svg)
+
+AI models graded every finding, not people. Two models from different vendors agreed on 266 of 276; a third, from one of those vendors, settled the other 10. One pull request holds 52 of the 122 findings, so the per-pull-request range is wider.
+
+**How long does each check take?**
+
+![Each agent edit is checked in 7.9 seconds on this repository and 4.3 seconds on ripgrep when the hook can block, and in under 0.1 second in observe mode; a full CI check takes 19.5 and 6.3 seconds.](docs/assets/img/results/hook-latency.svg)
+
+**Does it catch test gaming?** This is measured, and the results are being reviewed before they are published. They will appear here whatever they show ([#838](https://github.com/orieg/discipline/issues/838)).
+
+**Judge it on your own repository:** `discipline replay --last 50` shows what discipline would have blocked in your last 50 merged changes, without blocking anything. The charts are generated from the committed results by `scripts/benchmark_charts.py`.
 
 ## Installation
 

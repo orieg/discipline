@@ -538,8 +538,6 @@ fn pair_findings<'a>(
     } else {
         crate::ast::comparisons::weakened(&b.comparisons, &h.comparisons)
     };
-    // The same assertion expecting a different value: the count and strength hold.
-    let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
     // The same case row with one value rewritten: the count of rows and assertions holds.
     let rewritten_rows = crate::ast::test_cases::rewritten_cells(&b.case_cells, &h.case_cells);
     // The same assertion with widened expected exception or dropped matcher.
@@ -548,6 +546,11 @@ fn pair_findings<'a>(
     if total_drop || strong_drop {
         widened.retain(|w| !w.dropped);
     }
+    // The same assertion expecting a different value: the count and strength hold. A
+    // `pytest.raises(match=..)` pattern loosened is the widened expectation above, on the
+    // same line, and is not reported twice (#1039).
+    let mut changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
+    changed.retain(|line| !widened.iter().any(|w| !w.dropped && w.line == *line));
     // Equality assertions that compare an operand with itself and that the base
     // side did not hold (`ast::self_comparison`).
     let self_compared = h.equality_operands.introduced_since(&b.equality_operands);
@@ -1006,7 +1009,12 @@ fn report_weakened_bounds(
         // The line and the two operators only: operators are a closed set, the rest of
         // the assertion is the change's own text and is not echoed into a report agents
         // read.
-        let message = if w.fails_when_true {
+        let message = if w.inverted {
+            format!(
+                "{test_label}: the assertion on line {} inverted its check from `{}` to `{}`, so it passes on the results it was written to reject.",
+                w.line, w.from, w.to
+            )
+        } else if w.fails_when_true {
             format!(
                 "{test_label}: the failure condition on line {} changed its comparison from `{}` to `{}`, so the test fails on fewer results.",
                 w.line, w.from, w.to

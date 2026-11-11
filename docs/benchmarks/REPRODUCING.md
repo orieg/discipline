@@ -14,9 +14,10 @@ Adopting a gate is worth it when it blocks real problems (value), rarely blocks 
 |---|---|---|---|---|
 | Noise and value on real changes | `agent-pr-precision-v2` to `-v6` | Every blocking finding on merged coding-agent pull requests, labelled true or false positive by two blinded raters; precision per gate class, and the same for a naive twin | `docs/benchmarks/precision-preregistration*.toml` | `docs/benchmarks/results*/` |
 | Noise and value on a random sample | `agent-pr-precision-v7` | Block rate on randomly sampled merged agent pull requests, then labelled precision per gate | `docs/benchmarks/precision-preregistration-v7.toml` | not run yet |
-| Value on verified test gaming | `impossible-recall-v1` (#838) | Share of agent changes that pass impossible tests by editing the test side that discipline blocks (recall), against a line-regex twin; false alarms on honest solutions to the normal split | `docs/benchmarks/recall-preregistration.toml` | `docs/benchmarks/results-recall-pilot/` (pilot); `docs/benchmarks/results-recall-confirmatory/` (verdict REJECTED with 0.26.0; a descriptive 0.31.0 replay beside it) |
+| Noise and value of the 0.32 code | `agent-pr-precision-v8` | Block rate of the 0.32.0 code on v2 to v6's 232 pull requests; rule fidelity and actionability of each block, graded by a Claude and a Gemini rater, every disagreement settled by a third LLM agent (amendment 2) | `docs/benchmarks/precision-preregistration-v8.toml` | `docs/benchmarks/results-v8/` (`scripts/precision_v8.py report --tie-breaker fable`) |
+| Value on verified test gaming | `impossible-recall-v1` (#838) | Share of agent changes that pass impossible tests by editing the test side that discipline blocks (recall), against a line-regex twin; false alarms on honest solutions to the normal split | `docs/benchmarks/recall-preregistration.toml` | `docs/benchmarks/results-recall-pilot/` (pilot); `docs/benchmarks/results-recall-confirmatory/` (verdict REJECTED with 0.26.0; descriptive replays of 0.31.0 and the 0.32.0 code beside it) |
 | Value on known regressions | `regression-value-v1` (#1024) | Share of reverted or fix-linked agent pull requests that discipline blocks with a finding in an implicated file, and its block rate on them against matched controls from the same repositories, beside a naive twin | `docs/benchmarks/regression-value-preregistration.toml` (draft) | not run yet |
-| Prevention in the agent's loop | `prevention-v1` (#1036) | Landed test-gaming rate on impossible tests with discipline refusing submissions in the agent's loop, against no gate and a test-path-lock twin; landed honest passes on the normal split as the cost | `docs/benchmarks/prevention-preregistration.toml` (draft) | not run yet |
+| Prevention in the agent's loop | `prevention-v1` (#1036) | Landed test-gaming rate on impossible tests with discipline refusing submissions in the agent's loop, against no gate and a test-path-lock twin; landed honest passes on the normal split as the cost | `docs/benchmarks/prevention-preregistration.toml` (draft; H1 Step 0 REJECT_UNDETECTABLE) | not run yet |
 | Value on known evasions | evasion corpus | Each known way to weaken a test without tripping a gate, recorded as `caught` or `known_miss` | none (a regression suite) | `tests/fixtures/evasion_corpus.json`, checked by `tests/test_evasion_corpus.rs` |
 | Cost | hook latency (#982) | Wall time of the per-edit agent hook | `docs/benchmarks/hook-latency.md` §1 | `docs/benchmarks/results-hook-latency/` |
 
@@ -190,3 +191,11 @@ newer binary under the same study id.
 
 `docs/benchmarks/hook-latency.md` §3 gives the command and host requirement; its figures
 are medians from an idle host.
+
+## 6. Charts
+
+The charts in the README and on the Pages site (`docs/assets/img/results/`) are drawn from the
+committed results above by `python3 scripts/benchmark_charts.py`, which reads no other input.
+Re-run it after a result file changes; `tests/test_benchmark_charts.rs` fails while a chart and
+its results disagree. The recall charts are drawn only once
+`docs/benchmarks/results-recall-confirmatory/` is committed.

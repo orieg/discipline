@@ -460,6 +460,16 @@ def sample_size_for_noninferiority_power(
     return n
 
 
+def filter_residual_rate(rate: float, block_rate: float) -> float:
+    """Rate left after a filter that removes each positive independently with probability
+    `block_rate`: `rate * (1 - block_rate)`. Mirror of `filter_residual_rate` in
+    src/guards/perf/bounds.rs; both inputs in [0, 1]."""
+    for name, v in (("rate", rate), ("block rate", block_rate)):
+        if not (isinstance(v, (int, float)) and math.isfinite(v) and 0.0 <= v <= 1.0):
+            raise ValueError(f"{name} must be between 0 and 1, got {v}")
+    return rate * (1.0 - block_rate)
+
+
 def sample_size_for_interval(
     assumed_precision: float,
     target_half_width: float,
@@ -700,6 +710,14 @@ class TestStatisticalBounds(unittest.TestCase):
         self.assertGreaterEqual(noninferiority_pass_probability(246, 0.806, 246, 0.806, 0.10), 0.80)
         self.assertLess(noninferiority_pass_probability(245, 0.806, 245, 0.806, 0.10), 0.80)
 
+    def test_filter_residual_rate_pinned_reference_values(self):
+        self.assertAlmostEqual(filter_residual_rate(212 / 1069, 42 / 212), 170 / 1069, places=12)
+        self.assertEqual(filter_residual_rate(0.3, 1.0), 0.0)
+        with self.assertRaises(ValueError):
+            filter_residual_rate(0.5, 1.1)
+        with self.assertRaises(ValueError):
+            filter_residual_rate(float("nan"), 0.5)
+
     def test_noninferiority_bounds_invalid_inputs_fail_closed(self):
         with self.assertRaises(ValueError):
             noninferiority_pass_probability(10, 0.5, 10, 0.5, 0.0)
@@ -873,6 +891,9 @@ PREVENTION_CONFIDENCE = 0.95
 PREVENTION_POWER = 0.80
 PREVENTION_H1 = {"off_rate": 0.198, "on_rate": 0.10, "floor": 0.0, "n_max": 700}
 PREVENTION_H2 = {"rate": 0.806, "margin": 0.10, "n_max": 700}
+# H1 Step 0 from measured data (#838 confirmatory, `access_full`): 212 of 1069 impossible-split
+# runs passed without a gate, and discipline 0.31.0 blocked 42 of those 212 with an error.
+PREVENTION_H1_STEP0 = {"off_k": 212, "off_n": 1069, "block_k": 44, "block_n": 212, "floor": 0.0, "n_max": 700}
 
 
 def prevention_bound_values() -> dict[str, dict[str, float | int]]:
@@ -885,12 +906,28 @@ def prevention_bound_values() -> dict[str, dict[str, float | int]]:
                 h1["off_rate"], h1["on_rate"], h1["floor"], 1, PREVENTION_CONFIDENCE, PREVENTION_POWER, h1["n_max"]
             ),
         },
+        "h1_step0": prevention_h1_step0(),
         "h2_cost": {
             **h2,
             "required_runs_per_arm": sample_size_for_noninferiority_power(
                 h2["rate"], h2["rate"], h2["margin"], PREVENTION_CONFIDENCE, PREVENTION_POWER, h2["n_max"]
             ),
         },
+    }
+
+
+def prevention_h1_step0() -> dict[str, float | int | str]:
+    """H1's power at n_max with the planning on-rate the measured block rate gives."""
+    st = PREVENTION_H1_STEP0
+    off = st["off_k"] / st["off_n"]
+    on = filter_residual_rate(off, st["block_k"] / st["block_n"])
+    power = difference_pass_probability(st["n_max"], off, st["n_max"], on, st["floor"], PREVENTION_CONFIDENCE)
+    return {
+        **st,
+        "off_rate": off,
+        "on_rate": on,
+        "power_at_n_max": power,
+        "verdict": "PROCEED" if power >= PREVENTION_POWER else "REJECT_UNDETECTABLE",
     }
 
 
@@ -906,6 +943,10 @@ def generate_prevention_audit_lines() -> list[str]:
         f"| Newcombe lower bound >= {h1['floor']:.2f} | {h1['required_runs_per_arm']} |",
         f"| H2 landed honest passes, off minus on | {h2['rate']:.3f} both "
         f"| Newcombe upper bound <= {h2['margin']:.2f} | {h2['required_runs_per_arm']} |",
+        "",
+        f"- H1 Step 0 (measured block rate {values['h1_step0']['block_k']}/{values['h1_step0']['block_n']}): "
+        f"planning on-rate {values['h1_step0']['on_rate']:.3f}, power {values['h1_step0']['power_at_n_max']:.3f} "
+        f"at {values['h1_step0']['n_max']} runs per arm: {values['h1_step0']['verdict']}.",
         "",
         "- Both are the start of the last unbroken run of qualifying sizes up to n_max; the pre-registration"
         " inflates H1 by the worst-case design effect of two impossible runs per instance.",

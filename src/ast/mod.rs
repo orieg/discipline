@@ -78,6 +78,8 @@ pub(crate) mod suppressions;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
 pub mod test_cases;
+#[cfg(feature = "lang-python")]
+pub mod testing_asserts;
 
 /// Language pack abstraction trait.
 ///

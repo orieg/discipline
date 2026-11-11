@@ -2939,6 +2939,31 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a Python context-manager assertion argument or a local literal edited is a changed expectation, a local that is also an input is not",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expectations::changed;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let at = |body: String| -> anyhow::Result<Vec<crate::ast::expectations::Expectation>> {
+                let src = format!("def test_t(self):\n{body}");
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests[0]
+                    .expectations
+                    .clone())
+            };
+            let queries = |n| at(format!("    with self.assertNumQueries({n}):\n        f()\n"));
+            let local = |n| at(format!("    expected = {n}\n    assert f(3) == expected\n"));
+            let input = |n| at(format!("    n = {n}\n    assert f(n) == n\n"));
+            Ok(changed(&queries("1")?, &queries("0")?).len() == 1
+                && changed(&local("3")?, &local("4")?).len() == 1
+                && changed(&local("3")?, &local("3")?).is_empty()
+                && input("3")?.is_empty())
+        },
+    ),
+    (
         "assertion-reduction: a Python or Rust expected failure widened to an ancestor or dropping a matcher is reported, a sibling exception is not",
         || {
             use crate::ast::default_registry;
@@ -4665,6 +4690,96 @@ const CASES: &[Case] = &[
                 && read("    m.assert_called_once\n")? == (0, 0, 0)
                 && read("    m.assert_valid()\n")? == (0, 0, 0)
                 && read("    pass\n")? == (0, 0, 0))
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "assertion-reduction: an imported numpy testing assertion function is a check (#1038)",
+        || {
+            let path = "tests/test_m.py";
+            let numpy = |body: &str| {
+                format!("from numpy.testing import assert_allclose\n\n\ndef test_f():\n{body}")
+            };
+            let local = |body: &str| {
+                format!("def assert_allclose(a, b):\n    return a\n\n\ndef test_f():\n{body}")
+            };
+            let both = "    assert_allclose(f(3), 3)\n    assert_allclose(f(1), 1)\n";
+            let change = |form: &dyn Fn(&str) -> String, head: &str| {
+                helper_change(&[(path, &form(both), &form(head))], "")
+            };
+            Ok(
+                change(&numpy, "    assert_allclose(f(1), 1)\n")?
+                    == ["assertion-reduction/assertions-reduced"]
+                    && change(&numpy, "    assert_allclose(f(3), 4)\n    assert_allclose(f(1), 1)\n")?
+                        == ["assertion-reduction/expected-value-changed"]
+                    // Controls: the same edits to a helper of the file's own of that name.
+                    && change(&local, "    assert_allclose(f(1), 1)\n")?.is_empty()
+                    && change(&local, "    assert_allclose(f(3), 4)\n    assert_allclose(f(1), 1)\n")?
+                        .is_empty(),
+            )
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "assertion-reduction: a value changed inside a Python composite expected operand is reported (#1048)",
+        || {
+            let path = "tests/test_m.py";
+            let test = |line: &str| format!("def test_f():\n    {line}\n");
+            let change = |base: &str, head: &str| {
+                helper_change(&[(path, &test(base), &test(head))], "")
+            };
+            Ok(
+                change("assert f() == [1, 2, 3]", "assert f() == [3, 2, 1]")?
+                    == ["assertion-reduction/expected-value-changed"]
+                    && change("assert f() == np.array([1])", "assert f() == np.array([-1])")?
+                        == ["assertion-reduction/expected-value-changed"]
+                    // Controls: the value under test changed; the expected operand's
+                    // structure changed.
+                    && change("assert f(1) == [1]", "assert f(2) == [1]")?.is_empty()
+                    && change("assert f() == [1]", "assert f() == [1, 2]")?.is_empty(),
+            )
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "assertion-reduction: a Python assertion whose polarity is inverted is reported (#1049)",
+        || {
+            let path = "tests/test_m.py";
+            let test = |line: &str| {
+                format!("import unittest\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {line}\n")
+            };
+            let change = |base: &str, head: &str| {
+                helper_change(&[(path, &test(base), &test(head))], "")
+            };
+            Ok(
+                change("self.assertFalse(f())", "self.assertTrue(f())")?
+                    == ["assertion-reduction/weakened-bound"]
+                    && change("assert f()", "assert not f()")?
+                        == ["assertion-reduction/weakened-bound"]
+                    // Controls: the checked value changed with the method; another family.
+                    && change("self.assertFalse(f())", "self.assertTrue(g())")?.is_empty()
+                    && change("self.assertTrue(f())", "self.assertIsNotNone(f())")?.is_empty(),
+            )
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "assertion-reduction: a literal argument of a test case's own assert method changed is reported (#1050)",
+        || {
+            let path = "tests/test_m.py";
+            let test = |line: &str| {
+                format!("import unittest\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {line}\n")
+            };
+            let change = |base: &str, head: &str| {
+                helper_change(&[(path, &test(base), &test(head))], "")
+            };
+            Ok(
+                change("self.assertNumberMigrations(c, 'app', 2)", "self.assertNumberMigrations(c, 'app', 1)")?
+                    == ["assertion-reduction/expected-value-changed"]
+                    // Controls: a message; a method of another object.
+                    && change("self.assertNumberMigrations(c, 'app', 2, msg='a')", "self.assertNumberMigrations(c, 'app', 2, msg='b')")?.is_empty()
+                    && change("h.assertNumberMigrations(c, 'app', 2)", "h.assertNumberMigrations(c, 'app', 1)")?.is_empty(),
+            )
         },
     ),
     #[cfg(feature = "lang-python")]

@@ -379,6 +379,13 @@
     .audit-grid { display: grid; gap: 1.25rem; }
     .audit-points { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
     .audit-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+    .result-chart { width: 100%; height: auto; display: block; }
+    .result-chart.light { display: none; }
+    [data-theme="light"] .result-chart.light { display: block; }
+    [data-theme="light"] .result-chart.dark { display: none; }
+    .results-grid { display: grid; gap: 1.25rem; }
+    .results-note { color: var(--text-muted); max-width: 72ch; }
+    .results-q { margin: 0.75rem 0 0; font-size: 1.05rem; }
 
     .section-block {
       padding: 3rem 0;
@@ -935,6 +942,7 @@
     <li><a href="#platforms">Platforms</a></li>
     <li><a href="#gates">Gate Reference</a></li>
     <li><a href="#audit">Audit</a></li>
+    <li><a href="#results">Results</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#install">Install</a></li>
     <li><a href="tutorials/getting-started/">Tutorial</a></li>
@@ -1088,6 +1096,33 @@
       <div class="audit-actions">
         <a href="demo/audit.html" class="btn-primary">Open this repository's audit &rarr;</a>
         <a href="configuration/#auditing-escape-hatches-discipline-audit" class="btn-secondary">Read the reference</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section class="section-block" id="results">
+    <div class="section-head">
+      <div class="section-title">Results</div>
+      <p class="section-desc">Discipline 0.32.0 blocked 17% of merged agent pull requests; a simple baseline rule that blocks any change to a test, CI or configuration file blocked 56%. 84% of discipline's blocks are correct (likely 76–90%), against 2% for that rule. Each agent edit is checked in a few seconds. Still open: how much test gaming it catches.</p>
+    </div>
+    <div class="results-grid">
+      <h3 class="results-q">How often does it block?</h3>
+      <img class="result-chart dark" src="assets/img/results/pr-block-rate-dark.svg" alt="Discipline 0.32.0 blocked 40 of 232 merged coding-agent pull requests (17%); a simple rule that blocks any change to a test, CI or configuration file blocked 130 (56%)." loading="lazy">
+      <img class="result-chart light" src="assets/img/results/pr-block-rate-light.svg" alt="Discipline 0.32.0 blocked 40 of 232 merged coding-agent pull requests (17%); a simple rule that blocks any change to a test, CI or configuration file blocked 130 (56%)." loading="lazy">
+      <h3 class="results-q">Were those blocks right?</h3>
+      <img class="result-chart dark" src="assets/img/results/block-precision-dark.svg" alt="84% of discipline's blocks are correct: 103 of 122, likely 76–90%, or 59–95% per pull request. The simple rule: 3 of 150 (2%). By check: CI workflow changes 66 of 66, swallowed errors 10 of 11, changed expected outputs 11 of 13, new dependencies 9 of 20." loading="lazy">
+      <img class="result-chart light" src="assets/img/results/block-precision-light.svg" alt="84% of discipline's blocks are correct: 103 of 122, likely 76–90%, or 59–95% per pull request. The simple rule: 3 of 150 (2%). By check: CI workflow changes 66 of 66, swallowed errors 10 of 11, changed expected outputs 11 of 13, new dependencies 9 of 20." loading="lazy">
+      <p class="results-note">AI models graded every finding, not people. Two models from different vendors agreed on 266 of 276; a third, from one of those vendors, settled the other 10. One pull request holds 52 of the 122 findings, so the per-pull-request range is wider.</p>
+      <h3 class="results-q">How long does each check take?</h3>
+      <img class="result-chart dark" src="assets/img/results/hook-latency-dark.svg" alt="Each agent edit is checked in 7.9 seconds on this repository and 4.3 seconds on ripgrep when the hook can block, and in under 0.1 second in observe mode; a full CI check takes 19.5 and 6.3 seconds." loading="lazy">
+      <img class="result-chart light" src="assets/img/results/hook-latency-light.svg" alt="Each agent edit is checked in 7.9 seconds on this repository and 4.3 seconds on ripgrep when the hook can block, and in under 0.1 second in observe mode; a full CI check takes 19.5 and 6.3 seconds." loading="lazy">
+      <h3 class="results-q">Does it catch test gaming?</h3>
+      <p class="results-note">This is measured, and the results are being reviewed before they are published. They will appear here whatever they show (<a href="https://github.com/orieg/discipline/issues/838">#838</a>).</p>
+      <h3 class="results-q">Judge it on your own repository</h3>
+      <p class="results-note"><code>discipline replay --last 50</code> shows what discipline would have blocked in your last 50 merged changes, without blocking anything.</p>
+      <div class="audit-actions">
+        <a href="https://github.com/orieg/discipline/blob/main/docs/benchmarks/REPRODUCING.md" class="btn-secondary">How each study was run, with its raw data</a>
       </div>
     </div>
   </section>

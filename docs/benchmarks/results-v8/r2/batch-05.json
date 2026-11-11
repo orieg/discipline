@@ -1,0 +1,86 @@
+{
+ "model_reported": null,
+ "conversation_id": "dc0732d1-7410-47b4-9790-864bea3b0961",
+ "labels": {
+  "PKT-0011": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0030": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0065": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0074": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0080": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0093": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0095": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0097": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0126": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0133": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0138": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0144": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0145": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0159": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0164": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0169": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0180": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0181": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0206": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0249": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  }
+ }
+}

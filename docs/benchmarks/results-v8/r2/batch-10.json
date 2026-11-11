@@ -1,0 +1,86 @@
+{
+ "model_reported": null,
+ "conversation_id": "f21717c0-fb8f-4ac3-9d46-72efee63d10a",
+ "labels": {
+  "PKT-0006": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0040": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0046": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0048": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0050": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0056": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0089": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0096": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0119": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0120": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0131": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0140": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0163": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0185": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0207": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0216": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0237": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "true-positive"
+  },
+  "PKT-0257": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0263": {
+   "actionability": "would-not-block",
+   "rule_fidelity": "false-positive"
+  },
+  "PKT-0269": {
+   "actionability": "cannot-tell",
+   "rule_fidelity": "cannot-tell"
+  }
+ }
+}

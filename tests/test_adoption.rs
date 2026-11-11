@@ -161,6 +161,35 @@ fn baseline_whole_tree_records_only_blocking_findings_by_default() {
     );
 }
 
+/// #1040: by default `pii` reads only the lines a change adds, so a LAN address already on
+/// `main` does not block a clean change; `baseline --whole-tree` is the explicit sweep that
+/// still lists it, at the gate's default severity.
+#[test]
+fn pii_reads_the_change_by_default_and_the_whole_tree_sweep_still_lists_old_findings() {
+    let repo = Repo::new();
+    // Assembled at runtime so this source file does not itself carry the address.
+    repo.commit_base(
+        "docs/contact.md",
+        &format!("host = {}\n", ["192", "168", "4", "7"].join(".")),
+        "docs: contact",
+    );
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2.\n");
+    repo.commit("docs: plan");
+
+    let check = repo.check(&["--base", "main"]);
+    assert_eq!(check.titles("pii").len(), 0, "{}", check.stdout);
+
+    let sweep = repo.run(&["baseline", "--write", "--whole-tree"], &[]);
+    assert_eq!(sweep.code, 0, "{}{}", sweep.stdout, sweep.stderr);
+    assert_eq!(
+        recorded_by_gate(&repo).get("pii"),
+        Some(&1),
+        "the whole-tree sweep records the address already on main:\n{}",
+        sweep.stdout
+    );
+}
+
 #[test]
 fn baseline_all_severities_records_warnings_and_notes() {
     let repo = severity_fixture();

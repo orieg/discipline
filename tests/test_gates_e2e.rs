@@ -17,7 +17,8 @@ fn clean_change_passes_and_reports_what_it_examined() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let json = run.json();
     assert_eq!(json["errors"], 0);
-    assert!(run.outcome("pii")["examined"].as_u64().unwrap() >= 4);
+    // `pii` reads the files the change touches (`diff_only = true` by default, #1040).
+    assert_eq!(run.outcome("pii")["examined"].as_u64(), Some(1));
     assert!(json["planned_gates"].as_array().unwrap().is_empty());
 }
 
@@ -1038,6 +1039,215 @@ fn parenthesised_expected_values_and_bounds_are_read_in_rust_go_and_js() {
     }
 }
 
+/// A Python expected value outside the assertion's own operands (#1039): a literal
+/// argument of a context-manager assertion, and a literal bound to a local name the
+/// assertion reads, changed is `expected-value-changed`. A local renamed, a local that is
+/// also an input, and the argument of `with open(..)` changed are not; a `match=` pattern
+/// loosened is reported once, as a widened expected exception.
+#[test]
+fn python_expected_values_in_context_managers_and_locals_are_compared() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f(x):\n    return x\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nimport pytest\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n{body}")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let changed = ["assertion-reduction/expected-value-changed"];
+    let queries = |n| format!("        with self.assertNumQueries({n}):\n            f(1)\n");
+    assert_eq!(codes(&queries(1), &queries(0)), changed);
+    let local = |v| format!("        expected = {v}\n        assert f(3) == expected\n");
+    assert_eq!(codes(&local(3), &local(4)), changed);
+    let message = |m| {
+        format!("        with self.assertRaisesMessage(ValueError, '{m}'):\n            f(1)\n")
+    };
+    assert_eq!(codes(&message("bad"), &message("good")), changed);
+    let raises =
+        |m| format!("        with pytest.raises(ValueError, match='{m}'):\n            f(1)\n");
+    assert_eq!(codes(&raises("bad input"), &raises("wrong input")), changed);
+    assert_eq!(
+        codes(&raises("bad input"), &raises("bad")),
+        ["assertion-reduction/expected-exception-widened"]
+    );
+
+    // Controls.
+    assert!(codes(&queries(1), &(queries(1) + "        # kept\n")).is_empty());
+    let renamed = "        want = 3\n        assert f(3) == want\n";
+    assert!(codes(&local(3), renamed).is_empty());
+    let input = |v| format!("        n = {v}\n        assert f(n) == n\n");
+    assert!(codes(&input(3), &input(4)).is_empty());
+    let opened =
+        |p| format!("        with open('{p}') as fh:\n            assert f(fh.name) == 'x'\n");
+    assert!(codes(&opened("a.txt"), &opened("b.txt")).is_empty());
+}
+
+/// A Python expected value changed inside a composite operand (#1048): a list, a dict, a
+/// constructor call (`np.array([1])`, `ConditionSet(.., 4*sin(x), ..)`) or an implicitly
+/// concatenated string is `expected-value-changed`. The value under test changed, the
+/// expected operand's structure changed, a literal inside a computing call changed, and
+/// two composite operands are not.
+#[test]
+fn python_expected_values_inside_composite_operands_are_compared() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f(*a):\n    return list(a)\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nimport numpy as np\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {body}\n")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let changed = ["assertion-reduction/expected-value-changed"];
+    for (base, head) in [
+        (
+            "self.assertEqual(f(), [1, 2, 3])",
+            "self.assertEqual(f(), [3, 2, 1])",
+        ),
+        (
+            "assert f(1)[0] == np.array([1])",
+            "assert f(1)[0] == np.array([-1])",
+        ),
+        (
+            "self.assertEqual(f(), list((1, 2, 3)))",
+            "self.assertEqual(f(), list((3, 2, 1)))",
+        ),
+        ("assert f() == {'a': 1}", "assert f() == {'a': 2}"),
+        (
+            "self.assertEqual(f(x), ConditionSet(x, Eq(4*sin(x), 0), S.Reals))",
+            "self.assertEqual(f(x), ConditionSet(x, Eq(3*sin(x), 0), S.Reals))",
+        ),
+        ("assert f() == ('ab' 'cd')", "assert f() == ('ax' 'cd')"),
+    ] {
+        assert_eq!(codes(base, head), changed, "{base} -> {head}");
+        // Control: the same assertion kept, with the file changed below it.
+        assert!(
+            codes(base, &format!("{base}\n        # kept")).is_empty(),
+            "{base}"
+        );
+    }
+    for (base, head) in [
+        ("self.assertEqual(f(1), [1])", "self.assertEqual(f(2), [1])"),
+        ("assert f() == [1, 2]", "assert f() == [1, 2, 3]"),
+        ("assert f() == [abs(1)]", "assert f() == [abs(2)]"),
+        (
+            "self.assertEqual(Foo(1), [1])",
+            "self.assertEqual(Foo(2), [2])",
+        ),
+    ] {
+        assert!(codes(base, head).is_empty(), "{base} -> {head}");
+    }
+}
+
+/// A Python assertion whose polarity is inverted in an existing test (#1049): a
+/// `self.assert*` method swapped for its negated twin, or `not` added to or taken from a
+/// bare `assert`, fails the run. The same edit to a method of another family, or with the
+/// checked value changed as well, does not report a polarity change.
+#[test]
+fn python_assertions_with_inverted_polarity_fail_the_run() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f():\n    return [1, 2, 3]\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {body}\n")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let inverted = ["assertion-reduction/weakened-bound"];
+    for (base, head) in [
+        (
+            "self.assertFalse(issubclass(int, str))",
+            "self.assertTrue(issubclass(int, str))",
+        ),
+        ("self.assertIs(f(), f())", "self.assertIsNot(f(), f())"),
+        ("self.assertIsNotNone(f())", "self.assertIsNone(f())"),
+        ("self.assertIn(1, f())", "self.assertNotIn(1, f())"),
+        ("assert f()", "assert not f()"),
+    ] {
+        assert_eq!(codes(base, head), inverted, "{base} -> {head}");
+        assert!(
+            codes(base, &format!("{base}\n        # kept")).is_empty(),
+            "{base}"
+        );
+    }
+    for (base, head) in [
+        (
+            "self.assertGreater(len(f()), 1)",
+            "self.assertLess(len(f()), 1)",
+        ),
+        ("self.assertTrue(f())", "self.assertFalse(list(f()))"),
+    ] {
+        assert!(
+            !codes(base, head).contains(&inverted[0].to_string()),
+            "{base} -> {head}"
+        );
+    }
+}
+
+/// A literal argument of a test case's own assertion method changed in a call statement
+/// (#1050) is `expected-value-changed`; a message argument, `unittest.TestCase`'s own
+/// methods' message, and a method of another object are not.
+#[test]
+fn python_literal_arguments_of_a_test_cases_own_assert_method_are_compared() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f():\n    return [1, 2, 3]\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def assertNumberMigrations(self, got, app, n, msg=None):\n        self.assertEqual(len(got), n, msg)\n\n    def test_f(self):\n        {body}\n")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let changed = ["assertion-reduction/expected-value-changed"];
+    let base = "self.assertNumberMigrations(f(), 'app', 3)";
+    assert_eq!(
+        codes(base, "self.assertNumberMigrations(f(), 'app', 2)"),
+        changed
+    );
+    assert_eq!(
+        codes(base, "self.assertNumberMigrations(f(), 'other', 3)"),
+        changed
+    );
+    // Controls.
+    assert!(codes(base, &format!("{base}\n        # kept")).is_empty());
+    assert!(codes(
+        "self.assertNumberMigrations(f(), 'app', 3, msg='a')",
+        "self.assertNumberMigrations(f(), 'app', 3, msg='b')"
+    )
+    .is_empty());
+    assert!(codes("self.assertTrue(f(), 'a')", "self.assertTrue(f(), 'b')").is_empty());
+}
+
 /// A comparison operator moved the loose way inside an otherwise unchanged assertion
 /// (#934): the count, the class and the literal hold, so only the operator shows it.
 /// Each shape fails the run as `weakened-bound`; `allow-assertion-drop:` lifts it, and a
@@ -1187,6 +1397,84 @@ fn python_mock_assertion_calls_count_toward_assertion_reduction() {
         codes(&added),
         (0, vec!["vacuous-tests/asserts-only-on-mocks".to_string()])
     );
+}
+
+/// A numpy / pandas / xarray testing assertion function the file imports is a check
+/// (#1038): deleting one from an existing test is a reduction, and changing its expected
+/// argument is a changed expected value. A helper of the file's own of that name is not
+/// one, and the import forms are read alike.
+#[test]
+fn python_testing_library_assertions_count_toward_assertion_reduction() {
+    const NUMPY: &str = "from numpy.testing import assert_allclose\n";
+    const LOCAL: &str = "def assert_allclose(a, b):\n    return a\n";
+    let file =
+        |head: &str, body: &str| format!("{head}\nfrom pkg.m import f\n\n\ndef test_f():\n{body}");
+    let base_body = "    assert_allclose(f(3), 3)\n    assert_allclose(f(1), 1)\n";
+    let codes = |base: &str, head: &str| -> (i32, Vec<String>) {
+        let repo = Repo::new();
+        repo.write("pkg/__init__.py", "");
+        repo.write("pkg/m.py", "def f(x):\n    return x\n");
+        repo.commit_base("tests/test_m.py", base, "test: m");
+        repo.write("tests/test_m.py", head);
+        repo.commit("test: change");
+        let run = repo.check(&[]);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes)
+    };
+    let deleted = "    assert_allclose(f(1), 1)\n";
+    let changed = "    assert_allclose(f(3), 4)\n    assert_allclose(f(1), 1)\n";
+    assert_eq!(
+        codes(&file(NUMPY, base_body), &file(NUMPY, deleted)),
+        (
+            1,
+            vec!["assertion-reduction/assertions-reduced".to_string()]
+        )
+    );
+    assert_eq!(
+        codes(&file(NUMPY, base_body), &file(NUMPY, changed)),
+        (
+            1,
+            vec!["assertion-reduction/expected-value-changed".to_string()]
+        )
+    );
+    // Through a module alias and through the package.
+    let npt = file(
+        "import numpy.testing as npt\n",
+        &base_body.replace("assert_allclose", "npt.assert_allclose"),
+    );
+    assert_eq!(
+        codes(&npt, &npt.replace("    npt.assert_allclose(f(3), 3)\n", "")),
+        (
+            1,
+            vec!["assertion-reduction/assertions-reduced".to_string()]
+        )
+    );
+    let np = file(
+        "import numpy as np\n",
+        &base_body.replace("assert_allclose", "np.testing.assert_allclose"),
+    );
+    assert_eq!(
+        codes(&np, &np.replace("(f(3), 3)", "(f(3), 4)")),
+        (
+            1,
+            vec!["assertion-reduction/expected-value-changed".to_string()]
+        )
+    );
+    // Controls: the same edits to a helper of the file's own of that name, and a
+    // change that keeps every check through another import form.
+    assert_eq!(
+        codes(&file(LOCAL, base_body), &file(LOCAL, deleted)),
+        (0, vec![])
+    );
+    assert_eq!(
+        codes(&file(LOCAL, base_body), &file(LOCAL, changed)),
+        (0, vec![])
+    );
+    assert_eq!(codes(&file(NUMPY, base_body), &np), (0, vec![]));
 }
 
 /// A new test whose checks are a mock interaction and a property nearly any value has
@@ -10259,7 +10547,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 20 disabled, 1 not evaluated (67 items examined)"
+            "gates:  26 passed, 0 failed, 20 disabled, 1 not evaluated (63 items examined)"
         ),
         "{}",
         run.stdout
@@ -10275,13 +10563,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=67"), "{step_output}");
+    assert!(step_output.contains("examined_items=63"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 20 disabled, 1 not evaluated (67 items examined)"
+            "**Summary:** 26 passed, 0 failed, 20 disabled, 1 not evaluated (63 items examined)"
         ),
         "{step_summary}"
     );
@@ -14598,11 +14886,21 @@ fn diff_only_mode_ignores_preexisting_findings_in_untouched_lines() {
     repo.write("src/new_code.rs", "pub fn answer() -> u32 { 42 }\n");
     repo.commit("feat: add answer");
 
-    // 1. In default sweep mode, both gates fail on pre-existing files
-    let sweep_run = repo.check(&["--base", "HEAD~1"]);
+    // 1. By default `pii` reads the change only (#1040); `time-estimates` sweeps the
+    //    tree and fails on the pre-existing file.
+    let default_run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(default_run.titles("time-estimates").len(), 1);
+    assert_eq!(default_run.titles("pii").len(), 0, "{}", default_run.stdout);
+
+    // 1b. With `diff_only = false`, `pii` sweeps every tracked file and fails on it too.
+    let sweep_run = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.pii]\ndiff_only = false\n",
+    ]);
     assert_eq!(sweep_run.code, 1);
-    assert_eq!(sweep_run.titles("time-estimates").len(), 1);
-    assert_eq!(sweep_run.titles("pii").len(), 1);
+    assert_eq!(sweep_run.titles("pii").len(), 1, "{}", sweep_run.stdout);
 
     // 2. In diff_only mode, pre-existing files are not flagged
     let diff_run = repo.check(&[
@@ -15030,10 +15328,11 @@ fn pii_scans_test_functions_and_agent_config_refs() {
         ),
     );
     repo.commit("docs: reference personal agent config");
+    // Only the new reference: the escaped path committed above is outside this change.
     let run_agent_cfg = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run_agent_cfg.titles("pii").len(),
-        2,
+        1,
         "{}",
         run_agent_cfg.stdout
     );

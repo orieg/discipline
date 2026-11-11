@@ -185,6 +185,23 @@ The 60–120 s wall time reported for `check` and `diff` in the `#966` review wa
 
 The `#995` detached check (step 3) changes what the agent waits for in observe mode, but not the check's own cost. The hook answers once it has written the `started` line, and the check's time is in the `finished` line's `duration_ms`. Enforcing mode still waits for the check, so the figures above are the cost of an enforcing edit hook.
 
+### 4.4 The 0.32.0 code, with the enforcing edit hook timed (`#1056`)
+
+**Host (RUN, 2026-11-10):** one AWS `c7g.2xlarge` (Graviton3, 8 vCPU arm64, 16 GB, Amazon Linux 2023, kernel 6.18), driven over SSM only and verified `terminated` after the run. `load1` was 1.13 before the first timed run and 1.04 after the last, with no process above 100% CPU. Binary: `cargo build --release --locked` at `87447255`, the code released as 0.32.0 (it reports 0.31.0: the version bump comes after it). Method: section 1, one warm-up and 7 timed runs per cell, `DISCIPLINE_NO_NETWORK=1`. Results: `results-hook-latency/release-0.32-hook-latency.json`.
+
+**Cell added:** `hook-post-edit-enforcing`, the same payload through `hook run --agent claude-code` without `--observe`. Since `#1003` the observe-mode edit hook answers before its check runs, so `hook-post-edit` no longer times the check: it is what an agent waits for in observe mode. The enforcing cell is what it waits for when the hook can block.
+
+Median seconds, min-max in brackets *(measured: AWS c7g.2xlarge, 87447255)*:
+
+| Cell | `orieg/discipline` (1405 files) | `BurntSushi/ripgrep` (225 files) |
+|---|---|---|
+| `check-one-file` (every gate, as CI runs it) | 19.49 (19.47-19.53) | 6.28 (6.27-6.29) |
+| `hook-post-edit-enforcing` (the gates an edit can trip; the agent waits) | **7.91** (7.88-7.92) | **4.28** (4.28-4.29) |
+| `hook-post-edit` (observe mode; the check runs after the hook answers) | 0.02 (0.02-0.02) | 0.01 (0.01-0.01) |
+| `hook-pre-tool` | 0.01 | 0.01 |
+
+`check-one-file` exits 1 on `orieg/discipline`: the appended comment line trips a gate of this repository's configuration; the time is that of a full check either way. The enforcing figures are within about 0.5 s of section 4.3's `#994` + step 2 column, measured on an earlier commit of the same host type.
+
 ## 5. Decision it feeds
 
 Pre-registered before any figure exists:

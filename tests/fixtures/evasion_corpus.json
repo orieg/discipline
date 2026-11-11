@@ -2851,7 +2851,9 @@
       },
       "gate": "assertion-reduction",
       "verdict": {
-        "known_miss": "#1038"
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
       }
     },
     {
@@ -2866,8 +2868,36 @@
       },
       "gate": "assertion-reduction",
       "verdict": {
-        "known_miss": "#1038"
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
+    },
+    {
+      "name": "python-numpy-asserts-kept-through-refactor",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from numpy.testing import assert_allclose\n\nfrom pkg.m import f\n\n\ndef test_f():\n    assert_allclose(f(3), 3)\n    assert_allclose(f(1), 1)\n"
+      },
+      "head": {
+        "tests/test_m.py": "import numpy as np\n\nfrom pkg.m import f\n\n\ndef test_f():\n    got = f(3)\n    np.testing.assert_allclose(got, 3)\n    np.testing.assert_allclose(f(1), 1, rtol=1e-12)\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "python-local-helper-named-assert-allclose",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef assert_allclose(values, scale):\n    return [v * scale for v in values]\n\n\ndef test_f():\n    xs = assert_allclose([1, 2], 2)\n    ys = assert_allclose([3], 1)\n    assert f(xs[0]) == 2\n"
+      },
+      "head": {
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef assert_allclose(values, scale):\n    return [v * scale for v in values]\n\n\ndef test_f():\n    xs = assert_allclose([1, 2], 2)\n    assert f(xs[0]) == 2\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     },
     {
       "name": "python-context-manager-assert-argument-changed",
@@ -2881,8 +2911,134 @@
       },
       "gate": "assertion-reduction",
       "verdict": {
-        "known_miss": "#1039"
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
+    },
+    {
+      "name": "python-expected-list-value-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(*a):\n    return list(a)\n",
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(), [1, 2, 3])\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(), [3, 2, 1])\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "python-expected-constructor-value-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(*a):\n    return list(a)\n",
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        assert f(1)[0] == np.array([1])\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        assert f(1)[0] == np.array([-1])\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "python-composite-expected-kept-input-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(*a):\n    return list(a)\n",
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(1), [1])\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(2), [1])\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "python-unittest-assertion-polarity-inverted",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f():\n    return [1, 2, 3]\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertFalse(issubclass(int, str))\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertTrue(issubclass(int, str))\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "python-bare-assert-negated",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f():\n    return [1, 2, 3]\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        assert f()\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        assert not f()\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "python-assertion-polarity-kept-value-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f():\n    return [1, 2, 3]\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertTrue(f())\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertTrue(list(f()))\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "python-own-assert-method-argument-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f():\n    return [1, 2, 3]\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def assertNumberMigrations(self, got, app, n, msg=None):\n        self.assertEqual(len(got), n, msg)\n\n    def test_f(self):\n        self.assertNumberMigrations(f(), 'app', 3)\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def assertNumberMigrations(self, got, app, n, msg=None):\n        self.assertEqual(len(got), n, msg)\n\n    def test_f(self):\n        self.assertNumberMigrations(f(), 'app', 2)\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "python-own-assert-method-message-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f():\n    return [1, 2, 3]\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def assertNumberMigrations(self, got, app, n, msg=None):\n        self.assertEqual(len(got), n, msg)\n\n    def test_f(self):\n        self.assertNumberMigrations(f(), 'app', 3, msg='three')\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def assertNumberMigrations(self, got, app, n, msg=None):\n        self.assertEqual(len(got), n, msg)\n\n    def test_f(self):\n        self.assertNumberMigrations(f(), 'app', 3, msg='all three')\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     },
     {
       "name": "python-expected-value-in-local-literal-changed",
@@ -2896,7 +3052,65 @@
       },
       "gate": "assertion-reduction",
       "verdict": {
-        "known_miss": "#1039"
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "control-python-expected-local-renamed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    expected = 3\n    assert f(3) == expected\n"
+      },
+      "head": {
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    want = 3\n    assert f(3) == want\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "control-python-local-literal-reused-as-input",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    n = 3\n    assert f(n) == n\n"
+      },
+      "head": {
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    n = 4\n    assert f(n) == n\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "control-python-context-manager-argument-not-an-expectation",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    with open(\"tests/data/a.txt\") as fh:\n        assert f(fh.read()) == \"a\"\n"
+      },
+      "head": {
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    with open(\"tests/data/b.txt\") as fh:\n        assert f(fh.read()) == \"a\"\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "python-pytest-raises-match-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    raise ValueError(\"bad input\")\n",
+        "tests/test_m.py": "import pytest\n\nfrom pkg.m import f\n\n\ndef test_f():\n    with pytest.raises(ValueError, match=\"bad input\"):\n        f(1)\n"
+      },
+      "head": {
+        "tests/test_m.py": "import pytest\n\nfrom pkg.m import f\n\n\ndef test_f():\n    with pytest.raises(ValueError, match=\"wrong input\"):\n        f(1)\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
     },
     {

@@ -99,6 +99,7 @@ impl LanguagePack for PythonPack {
             helper_calls: HashMap::new(),
             test_calls: Vec::new(),
             rebound: rebound_definitions(root, src.as_bytes()),
+            testing: super::testing_asserts::TestingAsserts::read(root, src.as_bytes()),
         };
 
         extractor.collect_class_bases(root);
@@ -118,7 +119,13 @@ impl LanguagePack for PythonPack {
         );
         super::bounds::python(root, src, &mut extractor.facts.tests);
         super::comparisons::python(root, src, &mut extractor.facts.tests);
-        super::expectations::python(root, src, &mut extractor.facts.tests);
+        super::expectations::python(
+            root,
+            &anc,
+            src,
+            &mut extractor.facts.tests,
+            &extractor.testing,
+        );
         super::caught_assertions::python(root, &anc, src, &mut extractor.facts.tests, vocab);
         super::caught_assertions::through_helpers(
             root,
@@ -354,6 +361,8 @@ struct PythonExtractor<'a> {
     /// The `def`s that a later `def` of the same name in the same module or class body
     /// rebinds, by node id, with the line of the last one ([`rebound_definitions`]).
     rebound: HashMap<usize, usize>,
+    /// The numpy / pandas / xarray testing assertion functions the file imports (#1038).
+    testing: super::testing_asserts::TestingAsserts,
 }
 
 /// How a function body is scanned for failure paths.
@@ -1690,6 +1699,12 @@ impl<'a> PythonExtractor<'a> {
                         }
                         if self.is_tautological_call(node, func_name, test) {
                             test.tautologies += 1;
+                        }
+                    } else if let Some(function) = self.testing.function(func_node, self.src) {
+                        // `assert_allclose(f(3), 3)` from `numpy.testing` (#1038).
+                        test.total_asserts += 1;
+                        if super::testing_asserts::is_strong(function) {
+                            test.strong_asserts += 1;
                         }
                     } else if func_name == "pytest.skip"
                         || func_name == "pytest.xfail"
