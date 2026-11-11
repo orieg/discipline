@@ -185,7 +185,7 @@ id = 2
 date = "2026-11-10"
 before_data = false
 change = """
-The tie-breaker is a Claude Fable 5.2 agent, not the owner. Both rater slots had answered every
+The tie-breaker is a Claude agent on the `fable` model, not the owner. Both rater slots had answered every
 item when this was written; the owner had graded none of the 10 items they answer differently
 (PKT-0021, PKT-0054, PKT-0099, PKT-0136, PKT-0142, PKT-0167, PKT-0186, PKT-0190, PKT-0233,
 PKT-0274). The agent runs in its own session, which has not seen this study's conversation. It

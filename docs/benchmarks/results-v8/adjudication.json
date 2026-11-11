@@ -1,0 +1,4450 @@
+{
+  "items": [
+    {
+      "item_id": "PKT-0001",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0002",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0003",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0004",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0005",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0006",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0007",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0008",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0009",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0010",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0011",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0012",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0013",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0014",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0016",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0017",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0018",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0019",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0020",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0021",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "cannot-tell",
+        "rule_fidelity": "cannot-tell"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0022",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0023",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0024",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0025",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0026",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0027",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0028",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0029",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0030",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0031",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0032",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0033",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0034",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0035",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0036",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0037",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0038",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0039",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0040",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0041",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0042",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0043",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0044",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0045",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0046",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0047",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0048",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0049",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0050",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0051",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0052",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0053",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0054",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0055",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0056",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0057",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0058",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0059",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0060",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0061",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0062",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0063",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0064",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0065",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0066",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0067",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0068",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0069",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0070",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0071",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0072",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0073",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0074",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0075",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0076",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0077",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0078",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0079",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0080",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0081",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0082",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0083",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0084",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0085",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0086",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0087",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0088",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0089",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0090",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0091",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0092",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0093",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0094",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0095",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0096",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0097",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0098",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0099",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0100",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0101",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0102",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0103",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0104",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0105",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0106",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0107",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0108",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0109",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0110",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0111",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0112",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0113",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0114",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0115",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0116",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0117",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0118",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0119",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0120",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0121",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0122",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0123",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0124",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0125",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0126",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0127",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0128",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0129",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0130",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0131",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0132",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0133",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0134",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0135",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0136",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0137",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0138",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0139",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0140",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0141",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0142",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0143",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0144",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0145",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0146",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0147",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0148",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0149",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0150",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0151",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0152",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0153",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0154",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0155",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0156",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0157",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0158",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0159",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0160",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0161",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0162",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0163",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0164",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0165",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0166",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0167",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0168",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0169",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0170",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0171",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0172",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0173",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0174",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0175",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0176",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "cannot-tell"
+      },
+      "rater_2": {
+        "actionability": "cannot-tell",
+        "rule_fidelity": "cannot-tell"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "cannot-tell"
+      }
+    },
+    {
+      "item_id": "PKT-0177",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0178",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0179",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0180",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0181",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0182",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0183",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0184",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0185",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0186",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0187",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0188",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0189",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0190",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0191",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0192",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0193",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0194",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0195",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0196",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0197",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0198",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0199",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0200",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0201",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0202",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0203",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0204",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0205",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0206",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0207",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0208",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0209",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0210",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0211",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0212",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0213",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0214",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0215",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0216",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0217",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0218",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0219",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0220",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0221",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0222",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0223",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0224",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0225",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0226",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0227",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0228",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0229",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0230",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0231",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0232",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0233",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "cannot-tell",
+        "rule_fidelity": "cannot-tell"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0234",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0235",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0236",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0237",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0238",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0239",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0240",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0241",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0242",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0243",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0244",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0245",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0246",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0247",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0248",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0249",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0250",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0251",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0252",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0253",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0254",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0255",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0256",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0257",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0258",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0259",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0260",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0261",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0262",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0263",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0264",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0265",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0266",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0267",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0268",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0269",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "cannot-tell"
+      },
+      "rater_2": {
+        "actionability": "cannot-tell",
+        "rule_fidelity": "cannot-tell"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "cannot-tell"
+      }
+    },
+    {
+      "item_id": "PKT-0270",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0271",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0272",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0273",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0274",
+      "rater_1": {
+        "rule_fidelity": "cannot-tell",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0275",
+      "rater_1": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "true-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "true-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0276",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    },
+    {
+      "item_id": "PKT-0277",
+      "rater_1": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      },
+      "rater_2": {
+        "actionability": "would-not-block",
+        "rule_fidelity": "false-positive"
+      },
+      "tie_breaker": null,
+      "final": {
+        "rule_fidelity": "false-positive",
+        "actionability": "would-not-block"
+      }
+    }
+  ]
+}

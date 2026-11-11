@@ -1,0 +1,299 @@
+{
+  "study_id": "agent-pr-precision-v8",
+  "code_commit": "87447255f2d0f4d44644e6f801c2d49cc9e6d87c",
+  "binary_sha256": "c793f49204a9a725a0e2a01a121123d75b26fe6d1d17c1bde96ad07dc2dca54a",
+  "host": "macOS arm64 (Apple M1)",
+  "rater_kind": "llm-subagent and llm-cli, fable tie-break",
+  "synthetic_rater_disclosure": "Rater 1 (Claude subagents) and Rater 2 (Gemini through the agy CLI) are AI models, not people. A fable agent, from the same vendor as Rater 1, settled every item the two answered differently (amendment 2). No independent human labelled any item.",
+  "tie_breaker": "fable",
+  "amendments": [
+    1,
+    2
+  ],
+  "pull_request_block_rates": {
+    "total_pull_requests": 232,
+    "discipline": {
+      "k": 40,
+      "n": 232,
+      "point": 0.1724137931034483,
+      "wilson_95": [
+        0.129245952423288,
+        0.2262532852422881
+      ]
+    },
+    "naive_sensitive_path_filter": {
+      "k": 130,
+      "n": 232,
+      "point": 0.5603448275862069,
+      "wilson_95": [
+        0.4960079084969091,
+        0.6227159161436426
+      ]
+    }
+  },
+  "reliability": {
+    "rule_fidelity": {
+      "kappa": 0.9428023728725746,
+      "kappa_95": [
+        0.8996728462377317,
+        0.9786311551563951
+      ],
+      "observed_agreement": 0.9710144927536232,
+      "prevalence_adjusted_agreement": 0.9420289855072463,
+      "majority_label_share": 0.5778985507246377,
+      "rater_1_degenerate": false,
+      "rater_2_degenerate": false,
+      "meets_bar": true
+    },
+    "actionability": {
+      "kappa": 0.6634146341463405,
+      "kappa_95": [
+        0.0,
+        1.0
+      ],
+      "observed_agreement": 0.9927536231884058,
+      "prevalence_adjusted_agreement": 0.9855072463768115,
+      "majority_label_share": 0.9891304347826086,
+      "rater_1_degenerate": true,
+      "rater_2_degenerate": true,
+      "meets_bar": false
+    }
+  },
+  "tie_breaker_final_labels": {
+    "rule_fidelity": 10,
+    "actionability": 10
+  },
+  "classes": {
+    "structural-ast-and-deterministic": {
+      "rule_fidelity": {
+        "k": 103,
+        "n": 122,
+        "point": 0.8442622950819673,
+        "wilson_95": [
+          0.769533914546802,
+          0.8979726511525664
+        ],
+        "pr_cluster_bootstrap_95": [
+          0.5942028985507246,
+          0.9461547085201792
+        ],
+        "repository_cluster_bootstrap_95": [
+          0.5865384615384616,
+          0.9862068965517241
+        ],
+        "labels": {
+          "true-positive": 103,
+          "false-positive": 17,
+          "cannot-tell": 2
+        }
+      },
+      "actionability": {
+        "k": 0,
+        "n": 122,
+        "point": 0.0,
+        "wilson_95": [
+          0.0,
+          0.030526178389012865
+        ],
+        "pr_cluster_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "repository_cluster_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "labels": {
+          "would-block": 0,
+          "would-not-block": 120,
+          "cannot-tell": 2
+        }
+      },
+      "verdict_labels_would_give": "insufficient-n",
+      "verdict": "INTERMEDIATE_amended_threshold_redesign",
+      "verdict_before_amendment": "insufficient-n",
+      "verdict_qualifier": "no-human-labels",
+      "floor": 0.9,
+      "required_n": 153
+    },
+    "heuristic-and-prose": {
+      "rule_fidelity": {
+        "k": 3,
+        "n": 4,
+        "point": 0.75,
+        "wilson_95": [
+          0.30064184258240184,
+          0.9544127391902995
+        ],
+        "pr_cluster_bootstrap_95": [
+          0.0,
+          1.0
+        ],
+        "repository_cluster_bootstrap_95": [
+          0.5,
+          1.0
+        ],
+        "labels": {
+          "true-positive": 3,
+          "false-positive": 1,
+          "cannot-tell": 0
+        }
+      },
+      "actionability": {
+        "k": 0,
+        "n": 4,
+        "point": 0.0,
+        "wilson_95": [
+          0.0,
+          0.4898908364545973
+        ],
+        "pr_cluster_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "repository_cluster_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "labels": {
+          "would-block": 0,
+          "would-not-block": 4,
+          "cannot-tell": 0
+        }
+      },
+      "verdict_labels_would_give": "insufficient-n",
+      "verdict": "INTERMEDIATE_amended_threshold_redesign",
+      "verdict_before_amendment": "insufficient-n",
+      "verdict_qualifier": "no-human-labels",
+      "floor": 0.8,
+      "required_n": 184
+    },
+    "twin": {
+      "rule_fidelity": {
+        "k": 3,
+        "n": 150,
+        "point": 0.02,
+        "wilson_95": [
+          0.006824751322967459,
+          0.05714668327038608
+        ],
+        "pr_cluster_bootstrap_95": [
+          0.0,
+          0.05084745762711865
+        ],
+        "repository_cluster_bootstrap_95": [
+          0.0,
+          0.030303030303030304
+        ],
+        "labels": {
+          "true-positive": 3,
+          "false-positive": 143,
+          "cannot-tell": 4
+        }
+      },
+      "actionability": {
+        "k": 0,
+        "n": 150,
+        "point": 0.0,
+        "wilson_95": [
+          1.734723475976807e-18,
+          0.0249702443680766
+        ],
+        "pr_cluster_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "repository_cluster_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "labels": {
+          "would-block": 0,
+          "would-not-block": 150,
+          "cannot-tell": 0
+        }
+      }
+    }
+  },
+  "per_gate": {
+    "ci-integrity": {
+      "class": "structural-ast-and-deterministic",
+      "n": 66,
+      "true_positive": 66,
+      "false_positive": 0,
+      "cannot_tell": 0
+    },
+    "assertion-reduction": {
+      "class": "structural-ast-and-deterministic",
+      "n": 5,
+      "true_positive": 4,
+      "false_positive": 1,
+      "cannot_tell": 0
+    },
+    "golden-output": {
+      "class": "structural-ast-and-deterministic",
+      "n": 13,
+      "true_positive": 11,
+      "false_positive": 2,
+      "cannot_tell": 0
+    },
+    "error-swallowing": {
+      "class": "structural-ast-and-deterministic",
+      "n": 11,
+      "true_positive": 10,
+      "false_positive": 1,
+      "cannot_tell": 0
+    },
+    "dependency-delta": {
+      "class": "structural-ast-and-deterministic",
+      "n": 20,
+      "true_positive": 9,
+      "false_positive": 11,
+      "cannot_tell": 0
+    },
+    "stub-bodies": {
+      "class": "structural-ast-and-deterministic",
+      "n": 1,
+      "true_positive": 1,
+      "false_positive": 0,
+      "cannot_tell": 0
+    },
+    "instruction-smuggling": {
+      "class": "heuristic-and-prose",
+      "n": 3,
+      "true_positive": 3,
+      "false_positive": 0,
+      "cannot_tell": 0
+    },
+    "toolchain-config": {
+      "class": "structural-ast-and-deterministic",
+      "n": 1,
+      "true_positive": 0,
+      "false_positive": 1,
+      "cannot_tell": 0
+    },
+    "test-floor": {
+      "class": "structural-ast-and-deterministic",
+      "n": 2,
+      "true_positive": 0,
+      "false_positive": 0,
+      "cannot_tell": 2
+    },
+    "deletion-rationale": {
+      "class": "structural-ast-and-deterministic",
+      "n": 3,
+      "true_positive": 2,
+      "false_positive": 1,
+      "cannot_tell": 0
+    },
+    "citation-anchors": {
+      "class": "heuristic-and-prose",
+      "n": 1,
+      "true_positive": 0,
+      "false_positive": 1,
+      "cannot_tell": 0
+    }
+  },
+  "bootstrap_seed": 20261110,
+  "bootstrap_resamples": 20000
+}
