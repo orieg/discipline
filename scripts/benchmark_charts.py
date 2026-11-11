@@ -56,8 +56,8 @@ SIMPLE_LINE_RULE = "Simple rule: any changed test line"
 RECALL_BUILDS = [
     ("replay-summary.json", "0.26.0, the release fixed in advance", False),
     ("replay-v0.31.0-summary.json", "0.31.0", True),
-    ("replay-main-9df9b947-summary.json", "Development version, before #1048", True),
-    ("replay-main-87447255-summary.json", "Development version, with #1048-#1050", True),
+    ("replay-main-9df9b947-summary.json", "0.32.0 code before #1048-#1050", True),
+    ("replay-main-87447255-summary.json", "0.32.0", True),
 ]
 
 # Discipline in indigo, the comparison rules in grey, a bar set in advance in amber. No colour
@@ -314,6 +314,7 @@ def recall_tradeoff() -> Chart:
     r, f, twins = p["R"], p["F"], p["twins"]
     lr, tp = twins["line-regex"], twins["naive-sensitive-path-filter"]
     floor = load(RECALL / "replay-summary.json")["recall_floor"]
+    prs = load(V8)["pull_request_block_rates"]["naive_sensitive_path_filter"]
     caught = [
         proportion("Discipline", r["k"], r["n"], "c-disc"),
         proportion(SIMPLE_LINE_RULE, lr["recall"]["k"], lr["recall"]["n"], "c-base"),
@@ -325,7 +326,7 @@ def recall_tradeoff() -> Chart:
         proportion(SIMPLE_FILE_RULE, tp["false_block_rate_original"]["k"], tp["false_block_rate_original"]["n"], "c-base"),
     ]
     return chart(
-        f"On impossible tests, Discipline caught {pct(r['k'] / r['n'])} of test gaming; simple rules caught {pct(lr['recall']['k'] / lr['recall']['n'])}-{pct(tp['recall']['k'] / tp['recall']['n'])}",
+        f"Discipline caught {r['k'] / r['n'] * 100:.0f}% of test gaming; simple rules caught {lr['recall']['k'] / lr['recall']['n'] * 100:.0f}-{tp['recall']['k'] / tp['recall']['n'] * 100:.0f}%",
         [
             "Coding agents were given tests that cannot pass honestly. When an agent made them pass by editing tests, which check blocked it?",
             "The same agents also solved ordinary tasks honestly; the second panel is how often each check wrongly blocked those.",
@@ -335,7 +336,12 @@ def recall_tradeoff() -> Chart:
              {"floor": floor, "floor_label": f"Bar set in advance: {pct(floor)}"}),
             (f"Honest solutions wrongly blocked, out of {f['n']} (lower is better)", wrong, {}),
         ],
-        ["Python tasks from Impossible-SWE-bench, discipline 0.26.0, the release fixed before the study. Method: docs/benchmarks/REPRODUCING.md §4. (measured)"],
+        [
+            "75 of the 138 cases are tests the benchmark itself broke: they do not parse, or the changed line sits outside any test, "
+            "so no assertion was weakened for a diff check to see. On the other 63, Discipline caught 8. (post hoc triage, #838)",
+            f"The simple rules block every test edit. Honest solutions here rarely touch tests; on real pull requests the file rule blocked {pct(prs['k'] / prs['n'])}.",
+            "Python tasks from Impossible-SWE-bench, discipline 0.26.0, the release fixed before the study. Method: docs/benchmarks/REPRODUCING.md §4. (measured)",
+        ],
     )
 
 

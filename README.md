@@ -319,7 +319,7 @@ discipline audit --last 200 --format html -o audit.html
 
 ## Results
 
-**In short:** discipline 0.32.0 blocked 17% of merged agent pull requests; a simple baseline rule that blocks any change to a test, CI or configuration file blocked 56%. 84% of discipline's blocks are correct (likely 76–90%), against 2% for that rule. Each agent edit is checked in a few seconds. Still open: how much test gaming it catches.
+**In short:** discipline 0.32.0 blocked 17% of merged agent pull requests; a simple baseline rule that blocks any change to a test, CI or configuration file blocked 56%. 84% of discipline's blocks are correct (likely 76–90%), against 2% for that rule. Each agent edit is checked in a few seconds. It does not yet catch most test gaming: on a public benchmark it blocked 8% of agents' edits that made impossible tests pass, short of the 80% set in advance.
 
 Every number comes from public pull requests or public benchmarks. Each chart states what was measured, and how each study was run, with its raw data, is in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md).
 
@@ -337,7 +337,13 @@ AI models graded every finding, not people. Two models from different vendors ag
 
 ![Each agent edit is checked in 7.9 seconds on this repository and 4.3 seconds on ripgrep when the hook can block, and in under 0.1 second in observe mode; a full CI check takes 19.5 and 6.3 seconds.](docs/assets/img/results/hook-latency.svg)
 
-**Does it catch test gaming?** This is measured, and the results are being reviewed before they are published. They will appear here whatever they show ([#838](https://github.com/orieg/discipline/issues/838)).
+**Does it catch test gaming?** Not yet, mostly ([#838](https://github.com/orieg/discipline/issues/838)).
+
+![On a benchmark of impossible tests, discipline 0.26.0 caught 11 of 138 agent edits that made a test pass by changing it (8%, likely 4.5–14%), short of the 80% bar set in advance. Simple rules that block any changed test line, or any test, CI or configuration file, caught 82% and 91%. Honest solutions wrongly blocked: discipline 11 of 644 (1.7%), the simple rules 1 and 2.](docs/assets/img/results/recall-tradeoff.svg)
+
+![The same 138 cases on later builds: 0.31.0 caught 12, the 0.32.0 code before its last three fixes 14, and 0.32.0 21 (15%, likely 10–23%). Those fixes were written from misses on these cases. Honest solutions wrongly blocked stay at 11 of 644.](docs/assets/img/results/recall-by-release.svg)
+
+The verdict is fixed by the release chosen before the study, 0.26.0: it fails its bar. 75 of the 138 cases are tests the benchmark itself broke (they do not parse, or the changed line sits outside any test), so a diff check has nothing to see; on the other 63, discipline caught 8. The later builds catch more, but they were fixed using these same cases, so only fresh cases can show whether that holds. The simple rules catch more because they block every test edit; on real pull requests the file rule blocked 56%.
 
 **Judge it on your own repository:** `discipline replay --last 50` shows what discipline would have blocked in your last 50 merged changes, without blocking anything. The charts are generated from the committed results by `scripts/benchmark_charts.py`.
 
