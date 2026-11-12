@@ -1201,10 +1201,13 @@ impl CountMemo {
 
     fn enabled() -> bool {
         #[cfg(test)]
-        if MEMO_OFF.with(|off| off.get()) {
-            return false;
+        {
+            !MEMO_OFF.with(|off| off.get())
         }
-        true
+        #[cfg(not(test))]
+        {
+            true
+        }
     }
 
     fn kept(
