@@ -6,7 +6,7 @@
 
 GITEA_IMAGE="gitea/gitea:28.1.0@sha256:f505a0d3a41323b786e05942fc7a4075e07ae7c169fd9485649aa55ee543a21a"
 RUNNER_IMAGE="gitea/act_runner:0.6.1@sha256:b5c35d6bdbb9bb25e531230bfc7cc663cb751406cbec90a2a891b85fea54de86"
-DISCIPLINE_IMAGE="ghcr.io/orieg/discipline:v0.31.0@sha256:d292eabaf1439514305dbf5c7afe10cb6d4856e9fb722849d84720abe1b3c6b0"
+DISCIPLINE_IMAGE="ghcr.io/orieg/discipline:v0.32.0@sha256:bd47b55f3bde33b4fd288fa946eb98fc702278fbb405e62f68f9459509f1611c"
 
 # Names are prefixed so down.sh removes only what up.sh created.
 LAB_NET="discipline-forge-lab"
