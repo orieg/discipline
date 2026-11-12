@@ -1,7 +1,7 @@
 //! Turnkey data-driven presets for the universal `command` gate.
 //!
 //! Presets are structured data configurations that define defaults for verification
-//! tools across mutation testing, diff coverage, semver/API snapshotting,
+//! tools across mutation testing, coverage reports, semver/API snapshotting,
 //! supply-chain audits, and deterministic concurrency testing.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +65,7 @@ pub const BASE_TESTS_COMMAND: &str =
 pub const CARGO_MUTANTS_COMMAND: &str = "cargo mutants --in-diff {diff_file}";
 
 pub static PRESETS: &[PresetDefinition] = &[
-    // 1. Diff-Scoped Mutation Testing
+    // 1. Mutation Testing (`cargo-mutants` alone is scoped to the diff)
     PresetDefinition {
         id: "cargo-mutants",
         category: "mutation",
@@ -92,7 +92,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         policy_files: &["setup.cfg", "pyproject.toml"],
         snapshot: None,
         snapshot_ignore: &[],
-        description: "Python mutation testing scoped to changed code using mutmut",
+        description: "Python mutation testing using mutmut, over the whole project",
     },
     PresetDefinition {
         id: "stryker",
@@ -106,7 +106,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         policy_files: &["stryker.config.json", "stryker.conf.json"],
         snapshot: None,
         snapshot_ignore: &[],
-        description: "JavaScript/TypeScript mutation testing using Stryker",
+        description: "JavaScript/TypeScript mutation testing using Stryker, over the whole project",
     },
     PresetDefinition {
         id: "pit",
@@ -120,9 +120,9 @@ pub static PRESETS: &[PresetDefinition] = &[
         policy_files: &["pom.xml"],
         snapshot: None,
         snapshot_ignore: &[],
-        description: "Java/JVM mutation testing using PIT",
+        description: "Java/JVM mutation testing using PIT, over the whole project",
     },
-    // 2. Diff Coverage
+    // 2. Coverage Reports (no changed-line coverage, no threshold)
     PresetDefinition {
         id: "lcov",
         category: "coverage",
@@ -135,7 +135,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         policy_files: &["lcov.info"],
         snapshot: None,
         snapshot_ignore: &[],
-        description: "LCOV code coverage report summary inspector",
+        description: "LCOV coverage summary: fails on 0% line coverage only",
     },
     PresetDefinition {
         id: "cobertura",
@@ -150,7 +150,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         policy_files: &["coverage.xml"],
         snapshot: None,
         snapshot_ignore: &[],
-        description: "Cobertura XML code coverage report validator",
+        description: "Cobertura XML coverage report parse check, with no coverage threshold",
     },
     // 3. Semver & API Compatibility
     PresetDefinition {
@@ -467,6 +467,24 @@ mod tests {
             assert!(!p.default_command.is_empty());
             assert!(!p.description.is_empty());
             assert!(p.default_timeout_seconds > 0);
+        }
+    }
+
+    /// A preset says it is scoped to the change only when its command takes the
+    /// change's diff (`{diff_file}`), and a coverage preset never claims to read changed
+    /// lines or a threshold it does not check (#1067).
+    #[test]
+    fn a_preset_description_claims_diff_scoping_only_when_its_command_takes_the_diff() {
+        for p in PRESETS {
+            let d = p.description.to_lowercase();
+            let claims_scope = ["diff", "changed", "scoped"].iter().any(|w| d.contains(w));
+            assert_eq!(
+                claims_scope,
+                p.default_command.contains("{diff_file}"),
+                "`{}`: {}",
+                p.id,
+                p.description
+            );
         }
     }
 
