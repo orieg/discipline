@@ -72,6 +72,15 @@ pub enum Agent {
 }
 
 impl Agent {
+    /// The agent's one discipline hook runs once its edits are done, so every run is the
+    /// end of a turn and checks every gate (#1069): Cursor's generated file registers the
+    /// check under `stop` only, and Aider's `lint-cmd` runs after the edits of a reply.
+    /// Judged as an edit, their runs left the repository and provenance gates to an end of
+    /// the turn that never came.
+    pub fn every_run_ends_a_turn(self) -> bool {
+        matches!(self, Agent::Cursor | Agent::Aider)
+    }
+
     pub fn id(self) -> &'static str {
         match self {
             Agent::ClaudeCode => "claude-code",
@@ -510,6 +519,8 @@ fn run_payload(
     observe: bool,
     verbose: bool,
 ) -> Result<HookOutput> {
+    let mut payload = payload;
+    payload.stop |= agent.every_run_ends_a_turn();
     let event = if payload.stop {
         Event::Stop
     } else {
@@ -1023,7 +1034,9 @@ fn answer_run(
     }
     // A change that passed, at the end of a turn: the turn itself is judged, when the
     // base ref's configuration asks for it. A change with findings is already an answer.
-    if run.code == 0 && event == Event::Stop {
+    // Cursor's and Aider's turns are not judged: their payloads were never recorded live
+    // (Cursor) or carry nothing (Aider), and docs/CONFIGURATION.md says they are not covered.
+    if run.code == 0 && event == Event::Stop && !agent.every_run_ends_a_turn() {
         if let Some(out) = verified_stop(agent, dir, base, payload, observe) {
             return Ok(out);
         }
