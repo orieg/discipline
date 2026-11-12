@@ -1684,12 +1684,8 @@ impl<'a> JsExtractor<'a> {
                 }
             }
         }
-        if (prop_name == "toBeTruthy" && call_text.contains("expect(true)"))
+        (prop_name == "toBeTruthy" && call_text.contains("expect(true)"))
             || (prop_name == "toBeFalsy" && call_text.contains("expect(false)"))
-        {
-            return true;
-        }
-        false
     }
 
     /// The one argument of a receiver that is the call `expect(subject)`.

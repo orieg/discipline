@@ -1720,10 +1720,7 @@ fn is_placeholder(reason: &str) -> bool {
         .split(|c: char| c.is_whitespace() || is_invisible(c))
         .filter(|w| !w.is_empty())
         .collect();
-    if words.len() > 1 && words.iter().all(|w| is_placeholder_word(w)) {
-        return true;
-    }
-    false
+    words.len() > 1 && words.iter().all(|w| is_placeholder_word(w))
 }
 
 /// Words that stand for a field of a `(measured: <host>, <commit>)` tag without naming a

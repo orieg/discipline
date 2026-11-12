@@ -500,7 +500,7 @@ Write a minimal discipline.toml: gates run at their built\-in defaults; commente
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline init\fR [\fB\-n\fR|\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline init\fR [\fB\-n\fR|\fB\-\-name\fR] [\fB\-\-profile\fR] [\fB\-\-reviewer\fR] [\fB\-\-agent\-login\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -509,8 +509,27 @@ Write a minimal discipline.toml: gates run at their built\-in defaults; commente
 \fB\-n\fR, \fB\-\-name\fR \fI<NAME>\fR
 Name of the project (defaults to current directory name)
 .TP
+\fB\-\-profile\fR \fI<PROFILE>\fR
+Write a profile\*(Aqs keys: `observe` (the defaults in advisory mode) or `agent\-guard` (the human\-review controls for coding agents; docs/CONFIGURATION.md, Init Profiles)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+observe: The built\-in defaults in advisory mode: the first\-week start (README, First Week)
+.IP \(bu 2
+agent\-guard: The human\-review controls for a repository where coding agents open pull requests
+.RE
+.TP
+\fB\-\-reviewer\fR \fI<LOGIN>\fR
+With `\-\-profile agent\-guard`: a login, other than the agents\*(Aq, whose approval lets a directive apply and whose comment ratifies a policy edit (repeatable). Without one, `require_approval` and `ratified\-paths` are not written
+.TP
+\fB\-\-agent\-login\fR \fI<LOGIN>\fR
+With `\-\-profile agent\-guard`: a login the coding agents use, which never ratifies (repeatable)
+.TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS "discipline gates"
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '

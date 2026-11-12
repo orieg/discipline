@@ -214,6 +214,7 @@ pub const DOCTOR_FINDINGS: &[&str] = &[
     "hook-binary",
     "hook-mode",
     "immutable-releases",
+    "init-profile",
     "last-push-approval",
     "leases",
     "mutation-testing",

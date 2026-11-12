@@ -5,9 +5,10 @@ use super::{
     agent_permission_findings, agent_policy_claim, agent_policy_finding, agent_sandbox_findings,
     analyse_gitlab_ci, analyse_workflows, codeowners_covers, codeowners_finding,
     copilot_trust_finding, default_branch, gitea_protection, github_protection, gitlab_protection,
-    merge_methods, multi_agent_findings, mutation_preset_finding, protection_findings, push_covers,
-    read, security_policy_finding, test_report_finding, DisciplineJob, Finding, ProtectionRead,
-    Report, Status, CODEOWNERS_PATHS, SECURITY_POLICY_PATHS, WORKFLOW_DIRS,
+    init_profile_finding, merge_methods, multi_agent_findings, mutation_preset_finding,
+    protection_findings, push_covers, read, security_policy_finding, test_report_finding,
+    DisciplineJob, Finding, ProtectionRead, Report, Status, CODEOWNERS_PATHS,
+    SECURITY_POLICY_PATHS, WORKFLOW_DIRS,
 };
 use crate::forge::{Forge, ForgeApi, ForgeKind};
 use std::path::Path;
@@ -167,6 +168,10 @@ pub fn run(input: &DoctorInput) -> Report {
     ));
 
     if let Some(f) = test_report_finding(root, repo_config.as_ref()) {
+        findings.push(f);
+    }
+
+    if let Some(f) = read(root, "discipline.toml").and_then(|c| init_profile_finding(&c)) {
         findings.push(f);
     }
 

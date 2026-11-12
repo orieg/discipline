@@ -2319,10 +2319,11 @@ fn is_spec_free_mock(function: Node, name: &str, src: &[u8]) -> bool {
                         while let Some(v) = value.filter(|v| v.kind() == "assignment") {
                             value = v.child_by_field_name("right");
                         }
-                        if !value.is_some_and(|v| mock_constructor(v, src)) {
-                            return false;
+                        // A name bound to anything but a mock leaves the function.
+                        match value {
+                            Some(v) if mock_constructor(v, src) => true,
+                            _ => return false,
                         }
-                        true
                     }
                     "augmented_assignment" | "for_statement" | "for_in_clause" => {
                         is("left", parent, node)

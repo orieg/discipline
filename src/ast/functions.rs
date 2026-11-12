@@ -329,12 +329,7 @@ fn is_test_double_name(name: &str) -> bool {
             }
         }
         // Infix: my_mock_client
-        if lower.contains(&format!("_{target_lower}_"))
-            || lower.contains(&format!("-{target_lower}-"))
-        {
-            return true;
-        }
-        false
+        lower.contains(&format!("_{target_lower}_")) || lower.contains(&format!("-{target_lower}-"))
     };
 
     is_camel_or_delim("Stub", "stub")
