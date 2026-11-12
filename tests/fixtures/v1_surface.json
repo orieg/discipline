@@ -208,7 +208,10 @@
       "hook run --verbose",
       "hook run -b",
       "hook run -v",
+      "init --agent-login",
       "init --name",
+      "init --profile",
+      "init --reviewer",
       "init -n",
       "install-hooks --force",
       "install-hooks -f",
@@ -295,7 +298,9 @@
       "hook run --event=post-tool",
       "hook run --event=pre-tool",
       "hook run --event=session-start",
-      "hook run --event=stop"
+      "hook run --event=stop",
+      "init --profile=agent-guard",
+      "init --profile=observe"
     ],
     "config.keys": [
       "audit",
@@ -1123,6 +1128,7 @@
       "hook-binary",
       "hook-mode",
       "immutable-releases",
+      "init-profile",
       "last-push-approval",
       "leases",
       "mutation-testing",

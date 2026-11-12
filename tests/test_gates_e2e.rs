@@ -10192,6 +10192,130 @@ fn init_writes_a_config_that_loads_and_refuses_to_overwrite() {
     assert_eq!(repo.run(&["init"], &[]).code, 2);
 }
 
+/// `init --profile agent-guard` (#1075): the change that adds the file passes under the
+/// base branch's policy with the directives the output names and fails without them, and
+/// `doctor` reads the profile back and reports a key removed afterwards.
+#[test]
+fn init_profile_agent_guard_passes_with_its_directives_and_doctor_reads_it_back() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["checkout", "-q", "-B", "policy"]);
+    let init = repo.run(
+        &[
+            "init",
+            "--name",
+            "demo",
+            "--profile",
+            "agent-guard",
+            "--reviewer",
+            "owner",
+            "--agent-login",
+            "agent-bot",
+        ],
+        &[],
+    );
+    assert_eq!(init.code, 0, "{}{}", init.stdout, init.stderr);
+    assert!(
+        init.stdout.contains("allow-gate-weakening: ratified-paths"),
+        "{}",
+        init.stdout
+    );
+    repo.commit("chore: add the agent-guard profile");
+    let body_dir = tempfile::tempdir().unwrap();
+    let body = body_dir.path().join("body.txt");
+    std::fs::write(
+        &body,
+        "allow-gate-weakening: directives the reviewer named at init\nallow-gate-weakening: ratified-paths the reviewer named at init\n",
+    )
+    .unwrap();
+    let body = body.to_str().unwrap();
+    let adds = repo.run(
+        &[
+            "check",
+            "--format",
+            "json",
+            "--base",
+            "main",
+            "--policy-from",
+            "base",
+            "--pr-body-file",
+            body,
+        ],
+        &[],
+    );
+    assert_eq!(adds.code, 0, "{}{}", adds.stdout, adds.stderr);
+    // Without the directives the same change fails on the loosenings the output named.
+    let bare = repo.run(
+        &[
+            "check",
+            "--format",
+            "json",
+            "--base",
+            "main",
+            "--policy-from",
+            "base",
+        ],
+        &[],
+    );
+    assert_eq!(bare.code, 1, "{}{}", bare.stdout, bare.stderr);
+    assert_eq!(bare.titles("config-integrity").len(), 2);
+
+    // Once merged, `doctor` reads the profile back from the file.
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["merge", "-q", "--ff-only", "policy"]);
+    let doctor = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    let status = |out: &str| {
+        let v: serde_json::Value = serde_json::from_str(out).unwrap();
+        v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == "init-profile")
+            .map(|f| {
+                (
+                    f["status"].as_str().unwrap().to_string(),
+                    f["summary"].as_str().unwrap().to_string(),
+                )
+            })
+    };
+    assert_eq!(
+        status(&doctor.stdout).unwrap().0,
+        "pass",
+        "{}",
+        doctor.stdout
+    );
+    let config = repo.path().join("discipline.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, text.replacen("max_overrides = 1", "", 1)).unwrap();
+    let doctor = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    let (st, summary) = status(&doctor.stdout).unwrap();
+    assert_eq!(st, "warn", "{}", doctor.stdout);
+    assert!(summary.contains("`directives.max_overrides`"), "{summary}");
+}
+
+/// `init --profile observe` writes advisory mode, and `--reviewer` belongs to
+/// `agent-guard` only.
+#[test]
+fn init_profile_observe_writes_advisory_mode_and_refuses_a_reviewer() {
+    let repo = Repo::new();
+    let refused = repo.run(
+        &["init", "--profile", "observe", "--reviewer", "owner"],
+        &[],
+    );
+    assert_ne!(refused.code, 0);
+    assert!(!repo.path().join("discipline.toml").exists());
+    let init = repo.run(&["init", "--profile", "observe"], &[]);
+    assert_eq!(init.code, 0, "{}", init.stderr);
+    assert!(
+        init.stdout.contains("allow-gate-weakening: meta"),
+        "{}",
+        init.stdout
+    );
+    let text = std::fs::read_to_string(repo.path().join("discipline.toml")).unwrap();
+    assert!(text.lines().any(|l| l == "mode = \"advisory\""), "{text}");
+    assert_eq!(repo.run(&["gates"], &[]).code, 0);
+}
+
 #[test]
 fn running_from_subdirectory_resolves_repo_config() {
     let repo = Repo::new();
