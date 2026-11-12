@@ -132,8 +132,12 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '-n+[Name of the project (defaults to current directory name)]:NAME:_default' \
 '--name=[Name of the project (defaults to current directory name)]:NAME:_default' \
-'-h[Print help]' \
-'--help[Print help]' \
+'--profile=[Write a profile'\''s keys\: \`observe\` (the defaults in advisory mode) or \`agent-guard\` (the human-review controls for coding agents; docs/CONFIGURATION.md, Init Profiles)]:PROFILE:((observe\:"The built-in defaults in advisory mode\: the first-week start (README, First Week)"
+agent-guard\:"The human-review controls for a repository where coding agents open pull requests"))' \
+'*--reviewer=[With \`--profile agent-guard\`\: a login, other than the agents'\'', whose approval lets a directive apply and whose comment ratifies a policy edit (repeatable). Without one, \`require_approval\` and \`ratified-paths\` are not written]:LOGIN:_default' \
+'*--agent-login=[With \`--profile agent-guard\`\: a login the coding agents use, which never ratifies (repeatable)]:LOGIN:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (gates)

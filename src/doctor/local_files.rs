@@ -81,6 +81,54 @@ pub fn test_report_finding(
 }
 
 /// `mutation-testing`: whether a mutation testing preset is configured in `command`.
+/// `init-profile` (#1075): a `discipline.toml` that `discipline init --profile` wrote
+/// still sets that profile's keys. The forge rules an `agent-guard` file presumes are
+/// reported by `required-check` and `agent-policy`. `None` for a file no profile wrote.
+pub fn init_profile_finding(content: &str) -> Option<Finding> {
+    use crate::init::{missing_profile_keys, profile_of, Profile};
+    let profile = profile_of(content)?;
+    let name = profile.name();
+    let missing = match missing_profile_keys(profile, content) {
+        Ok(m) => m,
+        Err(e) => {
+            return Some(Finding::new(
+                "init-profile",
+                Status::Unknown,
+                format!(
+                    "discipline.toml was written from the `{name}` profile and does not parse: {e}"
+                ),
+            ))
+        }
+    };
+    Some(match (profile, missing.is_empty()) {
+        (Profile::Observe, true) => Finding::new(
+            "init-profile",
+            Status::Info,
+            "discipline.toml was written from the `observe` profile and is in advisory mode: findings never fail a run",
+        )
+        .fix("Delete `mode = \"advisory\"` to enforce once the findings are fixed or baselined (README, First Week)."),
+        (Profile::Observe, false) => Finding::new(
+            "init-profile",
+            Status::Pass,
+            "discipline.toml was written from the `observe` profile and no longer sets advisory mode: its gates enforce",
+        ),
+        (Profile::AgentGuard, true) => Finding::new(
+            "init-profile",
+            Status::Pass,
+            "discipline.toml sets every key of the `agent-guard` profile it was written from; `required-check` and `agent-policy` report the forge rules it presumes",
+        ),
+        (Profile::AgentGuard, false) => Finding::new(
+            "init-profile",
+            Status::Warn,
+            format!(
+                "discipline.toml was written from the `agent-guard` profile and no longer sets {} as the profile did",
+                missing.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", ")
+            ),
+        )
+        .fix("Restore the keys (docs/CONFIGURATION.md, Init Profiles), or delete the profile's first line if the file no longer follows it."),
+    })
+}
+
 pub fn mutation_preset_finding(
     root: &Path,
     repo_config: Option<&crate::config::DisciplineConfig>,

@@ -91,10 +91,7 @@ impl MarkdownTableTracker {
         let hit = &line[hit_start..hit_end];
         let cal_re = Regex::new(r"(?i)\b(?:weeks?|wks?|months?|sprints?|quarters?|years?|days?)\b")
             .expect("valid regex");
-        if cal_re.is_match(hit) {
-            return false;
-        }
-        true
+        !cal_re.is_match(hit)
     }
 
     fn parse_exempt_columns(header: &str) -> Vec<bool> {
@@ -274,11 +271,7 @@ fn has_exemption_cue(clause: &str, line: &str, _matched: &str) -> bool {
         r"(?i)\b\d+[- ](?:minute|min|hour|hr)[- ](?:read|overview|talk|presentation|paper|video|podcast|description)\b",
     )
     .expect("valid regex");
-    if media_re.is_match(clause) {
-        return true;
-    }
-
-    false
+    media_re.is_match(clause)
 }
 
 /// A duration narrated as something that happened or is on record ("has been running
