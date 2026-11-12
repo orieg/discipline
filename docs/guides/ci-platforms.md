@@ -18,7 +18,7 @@ Discipline provides an official composite GitHub Action at `orieg/discipline@v0`
 A repository that runs the default `ci-integrity` gate must pin third-party actions by commit SHA, so adding `uses: orieg/discipline@v0` is itself an `Unpinned Third-Party Action` error. Pin the action to a commit; a SHA ref runs the binary of the release that commit's `Cargo.toml` names (`version:` under `with:` picks another):
 
 ```yaml
-      - uses: orieg/discipline@a2aec5b19e97ebfe23f58ee4f7e0b8caaab5ea2f # v0.31.0
+      - uses: orieg/discipline@f3d6d4a0bc4f1f60f63fa101aa27e1a17d0d5276 # v0.32.0
 ```
 
 The basic sentinel below is pinned that way and can be copied as it is; the later fragments use `@v0` for readability.
@@ -50,7 +50,7 @@ jobs:
           persist-credentials: false # the job's token can write: keep it out of .git/config
 
       - name: Run Discipline Gatekeeper
-        uses: orieg/discipline@a2aec5b19e97ebfe23f58ee4f7e0b8caaab5ea2f # v0.31.0
+        uses: orieg/discipline@f3d6d4a0bc4f1f60f63fa101aa27e1a17d0d5276 # v0.32.0
         env:
           DISCIPLINE_REPORT_SARIF: results.sarif
 
@@ -242,7 +242,7 @@ jobs:
           persist-credentials: false # the job's token can write: keep it out of .git/config
 
       - name: Run Gatekeeper
-        uses: https://github.com/orieg/discipline@a2aec5b19e97ebfe23f58ee4f7e0b8caaab5ea2f # v0.31.0
+        uses: https://github.com/orieg/discipline@f3d6d4a0bc4f1f60f63fa101aa27e1a17d0d5276 # v0.32.0
 ```
 
 ---
