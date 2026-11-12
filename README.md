@@ -194,7 +194,7 @@ Adoption and editor tooling:
 
 An order of adoption in which every change passes its own check. A step that changes a file is a pull request, and a directive it needs goes on its own line in that pull request's body.
 
-1. `discipline init` writes a starter `discipline.toml`. Commit it.
+1. `discipline init` writes a starter `discipline.toml`. Commit it. (`discipline init --profile observe` writes it with step 4's advisory line already set, and `--profile agent-guard` the review controls for coding agents: [Init Profiles](docs/CONFIGURATION.md#init-profiles).)
 2. `discipline replay --last 50` shows what the gates would have blocked in the last 50 merged changes: the findings to expect, and the configuration to tune before the check runs.
 3. `discipline baseline --write` records the findings already in the tree. Commit `discipline-baseline.toml` with `allow-gate-weakening: baseline <reason>` ([Brownfield](#2-adopting-on-an-existing-repository-brownfield)).
 4. Add the workflow from part 3 or 4, and uncomment `mode = "advisory"` under `[meta]` in `discipline.toml` (the starter carries the line): the check reports what it finds and never fails. Advisory mode loosens every gate, so the pull request that sets it carries `allow-gate-weakening: meta <reason>`, and it applies once that pull request has merged; this holds for the change that adds the first `discipline.toml` too, which is compared with the built-in defaults. (`advisory: true` under the action's `with:` does the same for one workflow; it is a `ci-integrity` finding, `ci-integrity/discipline-action-advisory`, lifted by `allow-gate-weakening: ci-integrity <reason>`.)

@@ -632,6 +632,9 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | Option | Env | Default | Description |
 |---|---|---|---|
 | `-n`, `--name` |  |  | Name of the project (defaults to current directory name) |
+| `--profile` |  |  | Write a profile's keys: `observe` (the defaults in advisory mode) or `agent-guard` (the human-review controls for coding agents; docs/CONFIGURATION.md, Init Profiles) |
+| `--reviewer` |  |  | With `--profile agent-guard`: a login, other than the agents', whose approval lets a directive apply and whose comment ratifies a policy edit (repeatable). Without one, `require_approval` and `ratified-paths` are not written |
+| `--agent-login` |  |  | With `--profile agent-guard`: a login the coding agents use, which never ratifies (repeatable) |
 
 **`discipline gates`**
 
@@ -2268,37 +2271,37 @@ commands = [
 ]
 ```
 
+### Init Profiles
+
+`discipline init --profile <name>` writes a starter `discipline.toml` with a profile's keys set, and prints what it could not enable and why:
+
+- `observe`: the built-in defaults in advisory mode, the start of [First Week](../README.md#5-first-week-from-advisory-to-enforcing). The change that adds the file carries `allow-gate-weakening: meta <reason>`; deleting the `mode` line later enforces and needs no directive.
+- `agent-guard`: the human-review controls for a repository where coding agents open pull requests. `--reviewer <login>` (repeatable) names a login other than the agents'; `--agent-login <login>` (repeatable) names the agents' own. With a reviewer, a directive applies only after that reviewer approves the head commit (`require_approval`), and an edit to the policy files needs the reviewer's ratification (`ratified-paths`, with `refuse_author_ratification`). Without one, neither is written, since an approval or ratification by the login that opens the pull requests shows no second party (#776): `fail_on_overrides` stands in, so any override fails the run and a person decides whether it merges. A reviewer also named by `--agent-login` is not used. With a reviewer, the change that adds the file grows `allowed_override_actors` and `ratifiers`, which `config-integrity` reports: its pull-request body carries `allow-gate-weakening: directives <reason>` and `allow-gate-weakening: ratified-paths <reason>`.
+
+Both profiles keep the starter's commented examples. `agent-guard` holds only when the workflow judges a change by the base branch's policy (`policy_from: base` under the action's `with:`, `--policy-from base` elsewhere) and the check is required on the default branch. `discipline doctor` reads the profile back from the file's first line and reports `init-profile`: a pass while every key below is set as the profile wrote it, a warning naming each one that is not (a login list is checked to be non-empty), and information for an `observe` file. The forge rules the profile presumes are reported by `required-check` and, once `require_approval` or `agent_logins` is set, by `agent-policy`.
+
+<!-- generated:init-profiles -->
+| Profile | Key | Value | Written | Why |
+|---|---|---|---|---|
+| `observe` | `meta.mode` | `"advisory"` | always | findings are reported and never fail a run; delete the line to enforce |
+| `agent-guard` | `directives.sources` | `["pr-body"]` | always | a directive is read from the reviewed pull-request body only, never from a commit message an agent writes |
+| `agent-guard` | `directives.max_overrides` | `1` | always | one change applies at most one directive |
+| `agent-guard` | `directives.fail_on_overrides` | `true` | without `--reviewer` | every override a change writes fails the run, so a person decides whether it merges |
+| `agent-guard` | `directives.allowed_override_actors` | the `--reviewer` logins | with `--reviewer` | the logins whose approving review lets a directive apply |
+| `agent-guard` | `directives.require_approval` | `true` | with `--reviewer` | a directive applies only after a reviewer other than the author approves the head commit |
+| `agent-guard` | `gates.review-threads.enabled` | `true` | always | a pull request with an unresolved review thread fails |
+| `agent-guard` | `gates.ratified-paths.enabled` | `true` | with `--reviewer` | an edit to the policy files needs a reviewer's ratification; a workflow edit fails (`never_ratifiable`) |
+| `agent-guard` | `gates.ratified-paths.protected_paths` | `["discipline.toml", "discipline-baseline.toml", "AGENTS.md", "CLAUDE.md", "GEMINI.md"]` | with `--reviewer` | the gate configuration, its baseline and the agent instructions |
+| `agent-guard` | `gates.ratified-paths.ratifiers` | the `--reviewer` logins | with `--reviewer` | the logins whose comment ratifies |
+| `agent-guard` | `gates.ratified-paths.agent_logins` | the `--agent-login` logins, when any is named | with `--reviewer` | logins that never ratify |
+| `agent-guard` | `gates.ratified-paths.refuse_author_ratification` | `true` | with `--reviewer` | a ratification by the pull request's own author does not count |
+<!-- /generated -->
+
 ### High-Assurance Agent Guard Configuration
 
-For automated coding agents running in iterative development loops, combine `fail_on_overrides = true` with `--format agent-prompt` to enforce that agents repair defects rather than bypassing gates:
+`discipline init --profile agent-guard` ([Init Profiles](#init-profiles)) writes the directive and review controls for coding agents. In CI, run the check with `--format agent-prompt`, so an agent that reads the report is told to repair a finding rather than to waive it:
 
-```toml
-[meta]
-version = 1
-name = "high-assurance-agent"
-
-[directives]
-sources = ["pr-body"]
-allow_hidden = false
-fail_on_overrides = true
-
-[gates.time-estimates]
-enabled = true
-severity = "error"
-
-[gates.pii]
-enabled = true
-severity = "error"
-home_paths = true
-lan_ips = true
-
-[gates.agent-scratch]
-enabled = true
-severity = "error"
-```
-
-In CI, run:
 ```bash
-discipline check --base origin/main --format agent-prompt
+discipline check --base origin/main --policy-from base --format agent-prompt
 ```
 <!-- {% endraw %} -->

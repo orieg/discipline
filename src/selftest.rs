@@ -9581,6 +9581,26 @@ smoke_cost::set_contains
         },
     ),
     (
+        "doctor: init-profile passes on an agent-guard file as written and warns, naming the key, once one is removed",
+        || {
+            use crate::doctor::{init_profile_finding, Status};
+            use crate::init::{generate, Profile, ProfileLogins};
+            let dir = std::env::temp_dir();
+            let logins = ProfileLogins {
+                reviewers: vec!["owner".to_string()],
+                agent_logins: vec!["agent-bot".to_string()],
+            };
+            let written = generate("demo", &dir, Some(Profile::AgentGuard), &logins)?.content;
+            let edited = written.replacen("require_approval = true", "", 1);
+            let as_written = init_profile_finding(&written).map(|f| f.status);
+            let after = init_profile_finding(&edited);
+            Ok(as_written == Some(Status::Pass)
+                && after.as_ref().map(|f| f.status) == Some(Status::Warn)
+                && after.is_some_and(|f| f.summary.contains("`directives.require_approval`"))
+                && init_profile_finding("[meta]\nversion = 1\n").is_none())
+        },
+    ),
+    (
         "doctor: hook-mode distinguishes observe, enforcing and unknown; pretool text does not say refuses for observe",
         || {
             use crate::doctor::{multi_agent_findings, Status};

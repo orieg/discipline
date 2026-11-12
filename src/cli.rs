@@ -697,6 +697,15 @@ pub struct InitArgs {
     /// Name of the project (defaults to current directory name)
     #[arg(short, long)]
     pub name: Option<String>,
+    /// Write a profile's keys: `observe` (the defaults in advisory mode) or `agent-guard` (the human-review controls for coding agents; docs/CONFIGURATION.md, Init Profiles)
+    #[arg(long, value_enum)]
+    pub profile: Option<crate::init::Profile>,
+    /// With `--profile agent-guard`: a login, other than the agents', whose approval lets a directive apply and whose comment ratifies a policy edit (repeatable). Without one, `require_approval` and `ratified-paths` are not written
+    #[arg(long = "reviewer", value_name = "LOGIN")]
+    pub reviewers: Vec<String>,
+    /// With `--profile agent-guard`: a login the coding agents use, which never ratifies (repeatable)
+    #[arg(long = "agent-login", value_name = "LOGIN")]
+    pub agent_logins: Vec<String>,
 }
 
 #[derive(Args, Debug)]

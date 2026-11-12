@@ -146,7 +146,11 @@ complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l fail-
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l trust-workspace -d 'Trust the workspace and disable libgit2 repository owner validation'
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -s h -l help -d 'Print help'
 complete -c discipline -n "__fish_discipline_using_subcommand init" -s n -l name -d 'Name of the project (defaults to current directory name)' -r
-complete -c discipline -n "__fish_discipline_using_subcommand init" -s h -l help -d 'Print help'
+complete -c discipline -n "__fish_discipline_using_subcommand init" -l profile -d 'Write a profile\'s keys: `observe` (the defaults in advisory mode) or `agent-guard` (the human-review controls for coding agents; docs/CONFIGURATION.md, Init Profiles)' -r -f -a "observe\t'The built-in defaults in advisory mode: the first-week start (README, First Week)'
+agent-guard\t'The human-review controls for a repository where coding agents open pull requests'"
+complete -c discipline -n "__fish_discipline_using_subcommand init" -l reviewer -d 'With `--profile agent-guard`: a login, other than the agents\', whose approval lets a directive apply and whose comment ratifies a policy edit (repeatable). Without one, `require_approval` and `ratified-paths` are not written' -r
+complete -c discipline -n "__fish_discipline_using_subcommand init" -l agent-login -d 'With `--profile agent-guard`: a login the coding agents use, which never ratifies (repeatable)' -r
+complete -c discipline -n "__fish_discipline_using_subcommand init" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c discipline -n "__fish_discipline_using_subcommand gates" -s c -l config -d 'Path to discipline.toml. An absent default file = built-in defaults (`discipline gates` lists them); any other path that does not exist is an error (exit 2)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand gates" -l config-override -d 'Inline TOML merged over the file (tables merge, lists append, scalars replace)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand gates" -l enable -d 'Gate ids to force on (comma separated)' -r

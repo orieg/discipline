@@ -146,7 +146,7 @@ fn run_command(command: Commands) -> Result<bool> {
             comment: false,
         }),
         Commands::Baseline(args) => discipline::baseline::run_cli(args),
-        Commands::Init(args) => init(args.name),
+        Commands::Init(args) => init(args),
         Commands::Gates(args) => gates(&args.config),
         Commands::Schema => schema(),
         Commands::SelfTest => discipline::selftest::run(),
@@ -1147,7 +1147,7 @@ fn post_comment(
     Ok(())
 }
 
-fn init(name: Option<String>) -> Result<bool> {
+fn init(args: discipline::cli::InitArgs) -> Result<bool> {
     let repo = discipline::gitctx::discover_repository(".").ok();
     let repo_root = repo.as_ref().and_then(|r| r.workdir());
     let config_path = repo_root
@@ -1156,19 +1156,33 @@ fn init(name: Option<String>) -> Result<bool> {
     if config_path.exists() {
         bail!("discipline.toml already exists");
     }
-    let project_name = name.unwrap_or_else(|| {
+    let project_name = args.name.unwrap_or_else(|| {
         std::env::current_dir()
             .ok()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             .unwrap_or_else(|| "my-project".to_string())
     });
     let target_root = repo_root.unwrap_or_else(|| std::path::Path::new("."));
-    let starter = discipline::init::generate_starter(&project_name, target_root);
-    std::fs::write(&config_path, starter)?;
-    println!(
-        "{} wrote minimal discipline.toml for `{project_name}` using built-in gate defaults.",
-        style::green("ok:")
-    );
+    let logins = discipline::init::ProfileLogins {
+        reviewers: args.reviewers,
+        agent_logins: args.agent_logins,
+    };
+    let generated = discipline::init::generate(&project_name, target_root, args.profile, &logins)?;
+    std::fs::write(&config_path, &generated.content)?;
+    match args.profile {
+        None => println!(
+            "{} wrote minimal discipline.toml for `{project_name}` using built-in gate defaults.",
+            style::green("ok:")
+        ),
+        Some(profile) => println!(
+            "{} wrote discipline.toml for `{project_name}` from the `{}` profile.",
+            style::green("ok:"),
+            profile.name()
+        ),
+    }
+    for note in &generated.notes {
+        println!("note: {note}");
+    }
     Ok(true)
 }
 

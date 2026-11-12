@@ -921,6 +921,7 @@ pub fn update_generated_regions(
                 }
                 "cli-options" => render_cli_options_markdown(),
                 "finding-codes" => render_finding_codes_markdown(),
+                "init-profiles" => crate::init::render_profiles_markdown(),
                 "non-goals" => {
                     let Some(gates_md) = gates_md else {
                         bail!(

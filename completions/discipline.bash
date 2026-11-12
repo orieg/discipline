@@ -1365,7 +1365,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__init)
-            opts="-n -h --name --help"
+            opts="-n -h --name --profile --reviewer --agent-login --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1376,6 +1376,18 @@ _discipline() {
                     return 0
                     ;;
                 -n)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --profile)
+                    COMPREPLY=($(compgen -W "observe agent-guard" -- "${cur}"))
+                    return 0
+                    ;;
+                --reviewer)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --agent-login)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
