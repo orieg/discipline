@@ -64,8 +64,14 @@ impl Record for Comparison {
     fn line(&self) -> usize {
         self.line
     }
+    /// The skeleton and the literal, or the operator when there is no literal: records
+    /// that differ only in their literal (`toBe(1)`, `toBe(2)`, .. on one line) hash
+    /// apart, so adding each is not a scan of the others.
     fn written(&self) -> (&str, &str) {
-        (&self.skeleton, &self.operator)
+        (
+            &self.skeleton,
+            self.literal.as_deref().unwrap_or(&self.operator),
+        )
     }
     fn of(test: &mut TestFn) -> &mut Vec<Self> {
         &mut test.comparisons
