@@ -2304,8 +2304,12 @@ mod tests {
             serde_json::Value::Object(map) => {
                 if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
                     for (name, prop) in props {
-                        let is_list = prop.get("$ref").and_then(|r| r.as_str())
-                            == Some("#/$defs/StringListOrReset");
+                        // A list a layer can reset, or a plain list inside an
+                        // array-of-tables entry (#1085): both hold configured strings.
+                        let is_list = matches!(
+                            prop.get("$ref").and_then(|r| r.as_str()),
+                            Some("#/$defs/StringListOrReset" | "#/$defs/StringList")
+                        );
                         if is_list {
                             let glob = prop
                                 .get("description")
@@ -2536,8 +2540,12 @@ mod tests {
             serde_json::Value::Object(map) => {
                 if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
                     for (name, prop) in props {
-                        let is_list = prop.get("$ref").and_then(|r| r.as_str())
-                            == Some("#/$defs/StringListOrReset");
+                        // A list a layer can reset, or a plain list inside an
+                        // array-of-tables entry (#1085): both hold configured strings.
+                        let is_list = matches!(
+                            prop.get("$ref").and_then(|r| r.as_str()),
+                            Some("#/$defs/StringListOrReset" | "#/$defs/StringList")
+                        );
                         let is_string = match prop.get("type") {
                             Some(serde_json::Value::String(t)) => t == "string",
                             Some(serde_json::Value::Array(ts)) => {

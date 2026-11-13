@@ -448,7 +448,7 @@ fn collect_rows(
 
 fn type_label(prop: &serde_json::Value) -> String {
     match prop.get("$ref").and_then(|r| r.as_str()) {
-        Some("#/$defs/StringListOrReset") => return "list".to_string(),
+        Some("#/$defs/StringListOrReset" | "#/$defs/StringList") => return "list".to_string(),
         Some("#/$defs/Severity") => return "string".to_string(),
         _ => {}
     }
