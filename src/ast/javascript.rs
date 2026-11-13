@@ -117,6 +117,7 @@ impl LanguagePack for JavaScriptPack {
             &mut extractor.facts.tests,
             &extractor.std_asserts,
         );
+        super::comparisons::javascript(root, src, &mut extractor.facts.tests);
         super::caught_assertions::javascript(
             root,
             &anc,

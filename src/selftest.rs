@@ -4660,6 +4660,40 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-javascript")]
+    (
+        "assertion-reduction: a JS/TS assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let js = |check: &str| format!("it('t', () => {{\n  {check};\n}});\n");
+            let mut ok = true;
+            for (base, head) in [
+                ("expect(f(6)).toBeGreaterThan(6)", "expect(f(6)).toBeGreaterThanOrEqual(6)"),
+                ("expect(f(0)).toBe(0)", "expect(f(0)).not.toBe(1)"),
+                ("expect(rows).toContain(1)", "expect(rows).not.toContain(1)"),
+                ("assert(f(6) > 6)", "assert(f(6) >= 6)"),
+                ("assert(ok(1))", "assert(!ok(1))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("test/t.test.ts", &js(base), &js(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: t the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "test/t.test.ts",
+                    &js("expect(f(6)).toBeGreaterThanOrEqual(6)"),
+                    &js("expect(f(6)).toBeGreaterThan(6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",
