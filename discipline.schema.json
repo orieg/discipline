@@ -413,7 +413,7 @@
           "type": "string"
         },
         "command": {
-          "description": "Command string to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff; any other `{diff}`, `{changed}`, `{diff_…}` or `{changed_…}` stops the run (exit 2)",
+          "description": "Command string to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff, and `{changed_ranges}` by the lines it adds (`path:start-end`, joined by `,`); any other `{diff}`, `{changed}`, `{diff_…}` or `{changed_…}` stops the run (exit 2)",
           "type": "string"
         },
         "count_pattern": {
@@ -474,7 +474,7 @@
           "type": "string"
         },
         "command": {
-          "description": "Primary command to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff; any other `{diff}`, `{changed}`, `{diff_…}` or `{changed_…}` stops the run (exit 2)",
+          "description": "Primary command to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff, and `{changed_ranges}` by the lines it adds (`path:start-end`, joined by `,`); any other `{diff}`, `{changed}`, `{diff_…}` or `{changed_…}` stops the run (exit 2)",
           "type": "string"
         },
         "commands": {

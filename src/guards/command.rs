@@ -290,7 +290,96 @@ pub const DIFF_FILE_PLACEHOLDER: &str = "{diff_file}";
 /// Every placeholder a command's arguments may name. Each is part of the stable interface
 /// (`tests/fixtures/v1_surface.json`, `placeholders`): renamed or removed only with a
 /// major version.
-pub const PLACEHOLDERS: &[&str] = &[DIFF_FILE_PLACEHOLDER];
+pub const PLACEHOLDERS: &[&str] = &[DIFF_FILE_PLACEHOLDER, CHANGED_RANGES_PLACEHOLDER];
+
+/// Replaced by the lines the change adds, as `path:start-end` entries joined by `,`
+/// ([`changed_ranges`]): what Stryker's `--mutate` reads.
+pub const CHANGED_RANGES_PLACEHOLDER: &str = "{changed_ranges}";
+
+/// The longest argument a placeholder may expand into: Linux's limit on one argument
+/// (`MAX_ARG_STRLEN`, 32 pages of 4 KiB) less its terminating byte. A longer one is not
+/// run, and never cut.
+pub const MAX_ARGUMENT_BYTES: usize = 131_071;
+
+/// The lines `files` add, as [`CHANGED_RANGES_PLACEHOLDER`] expands them: one
+/// `path:start-end` entry for each run of consecutive added lines (a single line is
+/// `n-n`), joined by `,` with no spaces, in path order (bytes) and then line order. Line
+/// numbers are the head side's, 1-based and inclusive. A deleted file, and a file that
+/// adds no line (a pure deletion, a binary file, a rename with no edit), has no entry; a
+/// renamed and edited file is its new path. Empty when nothing is added.
+///
+/// A path that would change how the list reads is refused rather than escaped: one
+/// holding `,` (the entry separator), or starting with `-` (read as an option) or `!`
+/// (read as an exclusion by tools that take globs).
+pub fn changed_ranges(files: &[crate::gitctx::ChangedFile]) -> Result<String> {
+    let mut files: Vec<&crate::gitctx::ChangedFile> = files
+        .iter()
+        .filter(|f| !f.is_deleted() && !f.added_lines.is_empty())
+        .collect();
+    files.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+    let mut entries = Vec::new();
+    for f in files {
+        if f.path.contains(',') || f.path.starts_with(['-', '!']) {
+            bail!(
+                "`{CHANGED_RANGES_PLACEHOLDER}`: the changed path `{}` holds `,` or starts with `-` or `!`, which the list cannot carry",
+                f.path
+            );
+        }
+        let mut lines = f.added_lines.iter().copied();
+        let Some(mut start) = lines.next() else {
+            continue;
+        };
+        let mut end = start;
+        for line in lines {
+            if line == end + 1 {
+                end = line;
+            } else {
+                entries.push(format!("{}:{start}-{end}", f.path));
+                (start, end) = (line, line);
+            }
+        }
+        entries.push(format!("{}:{start}-{end}", f.path));
+    }
+    Ok(entries.join(","))
+}
+
+/// `argv` with each placeholder of `values` replaced by its value, in one pass over each
+/// argument: a value is never read again for a placeholder, so a path that spells one
+/// stays as written. Each element stays one argument. An argument longer than
+/// [`MAX_ARGUMENT_BYTES`] once expanded is refused.
+pub fn expand(argv: &[String], values: &[(&str, &str)]) -> Result<Vec<String>> {
+    argv.iter()
+        .map(|arg| {
+            let mut out = String::with_capacity(arg.len());
+            let mut rest = arg.as_str();
+            'scan: while !rest.is_empty() {
+                for (token, value) in values {
+                    if let Some(after) = rest.strip_prefix(token) {
+                        out.push_str(value);
+                        rest = after;
+                        continue 'scan;
+                    }
+                }
+                let next = rest.chars().next().map_or(1, char::len_utf8);
+                out.push_str(&rest[..next]);
+                rest = &rest[next..];
+            }
+            if out.len() > MAX_ARGUMENT_BYTES {
+                bail!(
+                    "an argument expands to {} bytes, past the {MAX_ARGUMENT_BYTES}-byte limit on one argument; it is not cut",
+                    out.len()
+                );
+            }
+            Ok(out)
+        })
+        .collect()
+}
+
+/// Whether an argument of `argv` names [`CHANGED_RANGES_PLACEHOLDER`].
+pub fn takes_changed_ranges(argv: &[String]) -> bool {
+    argv.iter()
+        .any(|arg| arg.contains(CHANGED_RANGES_PLACEHOLDER))
+}
 
 /// The first placeholder-shaped token in `argv` that is not one of [`PLACEHOLDERS`]:
 /// `{diff}`, `{changed}`, or a `{diff_…}` / `{changed_…}` name in lower case and
@@ -385,7 +474,10 @@ pub fn remove_diff_file(path: &str) -> Result<()> {
 /// Runs `cmd` for this gate in `dir`, as [`run_command_bounded`] does. A command whose
 /// arguments hold [`DIFF_FILE_PLACEHOLDER`] is given the path of a file holding the
 /// change's diff in its place; the file is written only for such a command and removed once
-/// it exits. A diff that cannot be read, written or removed stops the run (exit 2).
+/// it exits. A diff that cannot be read, written or removed stops the run (exit 2). One
+/// that holds [`CHANGED_RANGES_PLACEHOLDER`] is given [`changed_ranges`]; a list that is
+/// empty, refused or too long for one argument stops the run (exit 2), so a caller that
+/// skips a change with no added lines does so before ([`change_adds_no_lines`]).
 fn run_gate_command(
     ctx: &Context,
     name: &str,
@@ -401,8 +493,28 @@ fn run_gate_command(
             PLACEHOLDERS.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", ")
         );
     }
+    let ranges = if takes_changed_ranges(&argv) {
+        let ranges = ctx
+            .git
+            .changed_files()
+            .and_then(|files| changed_ranges(&files))
+            .with_context(|| format!("command `{name}`: cannot list the change's lines"))?;
+        if ranges.is_empty() {
+            bail!("command `{name}`: the change adds no line, so `{CHANGED_RANGES_PLACEHOLDER}` would be an empty argument");
+        }
+        Some(ranges)
+    } else {
+        None
+    };
+    let mut values: Vec<(&str, &str)> = Vec::new();
+    if let Some(ref ranges) = ranges {
+        values.push((CHANGED_RANGES_PLACEHOLDER, ranges));
+    }
+    let expanded = |values: &[(&str, &str)]| {
+        expand(&argv, values).with_context(|| format!("command `{name}`"))
+    };
     if !takes_diff_file(&argv) {
-        return run_argv_bounded(name, &argv, timeout_secs, dir);
+        return run_argv_bounded(name, &expanded(&values)?, timeout_secs, dir);
     }
     let path = ctx
         .git
@@ -413,7 +525,8 @@ fn run_gate_command(
                 "command `{name}`: cannot write the change's diff for `{DIFF_FILE_PLACEHOLDER}`"
             )
         })?;
-    let run = run_argv_bounded(name, &with_diff_file(&argv, &path), timeout_secs, dir);
+    values.push((DIFF_FILE_PLACEHOLDER, &path));
+    let run = expanded(&values).and_then(|argv| run_argv_bounded(name, &argv, timeout_secs, dir));
     let removed = remove_diff_file(&path);
     let run = run?;
     removed?;
@@ -1056,9 +1169,9 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             continue;
         }
 
-        evaluate_one_command(ctx, gate, item, &mut outcome)?;
-
-        outcome.examined += 1;
+        if evaluate_one_command(ctx, gate, item, &mut outcome)? {
+            outcome.examined += 1;
+        }
     }
 
     Ok(outcome)
@@ -1277,15 +1390,55 @@ fn resolve_entry_commands(
 /// Runs one resolved command and judges it: its policy files, its canary, the run itself,
 /// its snapshot and its count against the ratchet, then the findings or the directive that
 /// lifts them.
+/// Whether `item` names [`CHANGED_RANGES_PLACEHOLDER`] in its command or its canary and
+/// the change adds no line: such a command is not run, since an empty list would hand the
+/// tool an empty argument, which a tool can read as "the whole project".
+fn change_adds_no_lines(ctx: &Context, item: &ResolvedCommand) -> Result<bool> {
+    let names = |cmd: &str| -> Result<bool> {
+        Ok(takes_changed_ranges(
+            &split_command_line(cmd)
+                .with_context(|| format!("invalid command line for `{}`", item.name))?,
+        ))
+    };
+    let named = names(&item.command)?
+        || item
+            .canary_command
+            .as_deref()
+            .map(names)
+            .transpose()?
+            .unwrap_or(false);
+    if !named {
+        return Ok(false);
+    }
+    let files = ctx
+        .git
+        .changed_files()
+        .with_context(|| format!("command `{}`: cannot list the change's lines", item.name))?;
+    Ok(changed_ranges(&files)
+        .with_context(|| format!("command `{}`", item.name))?
+        .is_empty())
+}
+
+/// Runs one command and judges it; `false` when it was not run, which is not counted as
+/// examined.
 fn evaluate_one_command(
     ctx: &Context,
     gate: &crate::config::CommandGate,
     item: ResolvedCommand,
     outcome: &mut GateOutcome,
-) -> Result<()> {
+) -> Result<bool> {
     let mut command_violations: Vec<Violation> = Vec::new();
 
     check_policy_files(ctx, &item, &mut command_violations)?;
+
+    if change_adds_no_lines(ctx, &item)? {
+        outcome.notes.push(format!(
+            "command `{}`: the change adds no line for `{CHANGED_RANGES_PLACEHOLDER}`, so it was not run",
+            item.name
+        ));
+        apply_findings(ctx, gate, &item, command_violations, outcome);
+        return Ok(false);
+    }
 
     check_canary(ctx, &item, &mut command_violations)?;
 
@@ -1344,7 +1497,7 @@ fn evaluate_one_command(
 
     apply_findings(ctx, gate, &item, command_violations, outcome);
 
-    Ok(())
+    Ok(true)
 }
 
 /// A policy file the base has and the working tree does not.
@@ -2957,6 +3110,94 @@ mod tests {
         assert_eq!(with_diff_file(&plain, "/t/x.diff"), plain);
     }
 
+    fn changed(
+        path: &str,
+        kind: crate::gitctx::ChangeKind,
+        lines: &[usize],
+    ) -> crate::gitctx::ChangedFile {
+        crate::gitctx::ChangedFile {
+            path: path.to_string(),
+            old_path: format!("old/{path}"),
+            kind,
+            added_lines: lines.iter().copied().collect(),
+        }
+    }
+
+    #[test]
+    fn changed_ranges_lists_added_lines_by_path_and_run() {
+        use crate::gitctx::ChangeKind::*;
+        let files = [
+            changed("b.ts", Modified, &[9, 3, 4, 5]),
+            changed("a/x.ts", Added, &[1]),
+            changed("Z.ts", Modified, &[7, 8]),
+            changed("gone.ts", Deleted, &[]),
+            changed("logo.png", Modified, &[]),
+            changed("moved.ts", Renamed, &[]),
+            changed("renamed.ts", Renamed, &[2]),
+            changed("pages/[id].tsx", Modified, &[12]),
+        ];
+        assert_eq!(
+            changed_ranges(&files).unwrap(),
+            "Z.ts:7-8,a/x.ts:1-1,b.ts:3-5,b.ts:9-9,pages/[id].tsx:12-12,renamed.ts:2-2"
+        );
+        // Nothing added: an empty list.
+        assert_eq!(
+            changed_ranges(&[
+                changed("gone.ts", Deleted, &[]),
+                changed("a.ts", Modified, &[])
+            ])
+            .unwrap(),
+            ""
+        );
+        // A path the list cannot carry is refused, not escaped; a deleted one is not listed.
+        for path in ["x,y.ts", "-x.ts", "!x.ts"] {
+            let err = changed_ranges(&[changed(path, Modified, &[1])]).unwrap_err();
+            assert!(err.to_string().contains(path), "{err}");
+        }
+        assert_eq!(
+            changed_ranges(&[changed("x,y.ts", Deleted, &[])]).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn placeholders_expand_in_one_pass_and_an_argument_past_the_limit_is_refused() {
+        let argv = |s: &[&str]| s.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let values = [
+            (CHANGED_RANGES_PLACEHOLDER, "a{diff_file}.ts:1-1"),
+            (DIFF_FILE_PLACEHOLDER, "/t/d é.diff"),
+        ];
+        assert_eq!(
+            expand(
+                &argv(&["tool", "--mutate={changed_ranges}", "{diff_file}", "é{x}"]),
+                &values
+            )
+            .unwrap(),
+            argv(&[
+                "tool",
+                "--mutate=a{diff_file}.ts:1-1",
+                "/t/d é.diff",
+                "é{x}"
+            ])
+        );
+        let long = "p".repeat(MAX_ARGUMENT_BYTES);
+        assert_eq!(
+            expand(
+                &argv(&["{changed_ranges}"]),
+                &[(CHANGED_RANGES_PLACEHOLDER, &long)]
+            )
+            .unwrap()[0]
+                .len(),
+            MAX_ARGUMENT_BYTES
+        );
+        let err = expand(
+            &argv(&["x{changed_ranges}"]),
+            &[(CHANGED_RANGES_PLACEHOLDER, &long)],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not cut"), "{err}");
+    }
+
     #[test]
     fn a_misspelt_or_unknown_placeholder_is_named_and_other_braces_are_not() {
         let argv = |s: &[&str]| s.iter().map(|a| a.to_string()).collect::<Vec<_>>();
@@ -2964,8 +3205,8 @@ mod tests {
             (&["tool", "{diff_fil}"][..], "{diff_fil}"),
             (&["tool", "--diff={diff}"][..], "{diff}"),
             (
-                &["npx", "stryker", "run", "--mutate", "{changed_ranges}"][..],
-                "{changed_ranges}",
+                &["npx", "stryker", "run", "--mutate", "{changed_files}"][..],
+                "{changed_files}",
             ),
             (&["tool", "{diff_file}", "x{changed}y"][..], "{changed}"),
         ] {
@@ -2983,7 +3224,14 @@ mod tests {
         ] {
             assert_eq!(unknown_placeholder(&argv(args)), None, "{args:?}");
         }
-        assert_eq!(PLACEHOLDERS, [DIFF_FILE_PLACEHOLDER]);
+        assert_eq!(
+            PLACEHOLDERS,
+            [DIFF_FILE_PLACEHOLDER, CHANGED_RANGES_PLACEHOLDER]
+        );
+        assert_eq!(
+            unknown_placeholder(&argv(&["stryker", "--mutate={changed_ranges}"])),
+            None
+        );
     }
 
     /// The diff file holds the patch, is its owner's alone, and is gone once removed; a

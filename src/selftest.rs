@@ -5553,10 +5553,38 @@ const CASES: &[Case] = &[
             use crate::guards::command::{split_command_line, unknown_placeholder, PLACEHOLDERS};
             let read = |cmd: &str| -> Result<Option<String>> { Ok(unknown_placeholder(&split_command_line(cmd)?)) };
             Ok(read("tool --diff={diff_fil}")?.as_deref() == Some("{diff_fil}")
-                && read("npx stryker run --mutate {changed_ranges}")?.as_deref() == Some("{changed_ranges}")
+                && read("npx stryker run --mutate {changed_files}")?.as_deref() == Some("{changed_files}")
                 && read("cargo mutants --in-diff {diff_file}")?.is_none()
                 && read("jq '{different: .a}'")?.is_none()
-                && PLACEHOLDERS == ["{diff_file}"])
+                && read("npx stryker run --mutate {changed_ranges}")?.is_none()
+                && PLACEHOLDERS == ["{diff_file}", "{changed_ranges}"])
+        },
+    ),
+    (
+        "command: `{changed_ranges}` lists the added lines by path and run, expands once, and refuses a path the list cannot carry (#1068)",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::command::{changed_ranges, expand, split_command_line, CHANGED_RANGES_PLACEHOLDER};
+            let file = |path: &str, kind: ChangeKind, lines: &[usize]| ChangedFile {
+                path: path.to_string(),
+                old_path: path.to_string(),
+                kind,
+                added_lines: lines.iter().copied().collect(),
+            };
+            let ranges = changed_ranges(&[
+                file("src/b.ts", ChangeKind::Modified, &[4, 2, 3, 9]),
+                file("src/a.ts", ChangeKind::Added, &[1]),
+                file("src/gone.ts", ChangeKind::Deleted, &[]),
+            ])?;
+            let argv = expand(
+                &split_command_line("npx stryker run --mutate={changed_ranges}")?,
+                &[(CHANGED_RANGES_PLACEHOLDER, &ranges)],
+            )?;
+            Ok(ranges == "src/a.ts:1-1,src/b.ts:2-4,src/b.ts:9-9"
+                && argv[3] == "--mutate=src/a.ts:1-1,src/b.ts:2-4,src/b.ts:9-9"
+                && changed_ranges(&[file("src/gone.ts", ChangeKind::Deleted, &[])])?.is_empty()
+                && changed_ranges(&[file("a,b.ts", ChangeKind::Modified, &[1])]).is_err()
+                && changed_ranges(&[file("-a.ts", ChangeKind::Modified, &[1])]).is_err())
         },
     ),
     (
