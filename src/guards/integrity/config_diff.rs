@@ -1332,6 +1332,25 @@ mod tests {
     }
 
     #[test]
+    fn changed_line_coverage_report_repointed_or_removed_and_format_switched_are_weakenings() {
+        let table = |rest: &str| {
+            cfg(&format!(
+                "[gates.changed-line-coverage]\nenabled = true\n{rest}"
+            ))
+        };
+        let base = table("report = \"coverage/lcov.info\"\n");
+        let count = |head: &str| diff_configs(&base, &table(head)).unwrap().len();
+        // Control: the same report.
+        assert_eq!(count("report = \"coverage/lcov.info\"\n"), 0);
+        assert_eq!(count("report = \"coverage/other.info\"\n"), 1);
+        assert_eq!(count(""), 1);
+        assert_eq!(
+            count("report = \"coverage/lcov.info\"\nformat = \"cobertura\"\n"),
+            1
+        );
+    }
+
+    #[test]
     fn manifest_sync_rules_and_command_entries_follow_the_same_identity_rule() {
         let rules = |watched: &str, exclude: &str, regex: &str| {
             cfg(&format!(
@@ -2083,6 +2102,7 @@ mod tests {
         ("archive-contents", "archive_path", Unset::Required),
         ("archive-contents", "preset", Unset::NoCheck),
         ("bench-regression", "ratio_baseline", Unset::Required),
+        ("changed-line-coverage", "report", Unset::Required),
         ("ci-integrity", "documented_job_count_path", Unset::NoCheck),
         (
             "ci-integrity",

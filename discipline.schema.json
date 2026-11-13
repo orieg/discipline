@@ -220,6 +220,34 @@
       },
       "type": "object"
     },
+    "ChangedLineCoverageGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "format": {
+          "description": "The report's format: an LCOV tracefile or a Cobertura XML report",
+          "enum": [
+            "lcov",
+            "cobertura"
+          ],
+          "type": "string"
+        },
+        "report": {
+          "description": "Repository-relative path of the coverage report the test run writes; a tracked file, a symlink or a path outside the repository stops the run",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "CiIntegrityGate": {
       "additionalProperties": false,
       "properties": {
@@ -1803,6 +1831,14 @@
             }
           ],
           "description": "install and build hooks that gain network or shell access, and package-manager configuration edits, need a token"
+        },
+        "changed-line-coverage": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ChangedLineCoverageGate"
+            }
+          ],
+          "description": "a line the change adds that the coverage report lists as never run"
         },
         "ci-integrity": {
           "allOf": [

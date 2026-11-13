@@ -4,6 +4,7 @@
     "required": [
       "assertion-reduction",
       "build-hooks",
+      "changed-line-coverage",
       "ci-integrity",
       "citation-anchors",
       "command",
@@ -3240,6 +3241,62 @@
       },
       "gate": "assertion-reduction",
       "verdict": "clean"
+    },
+    {
+      "name": "coverage-new-function-never-run",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n",
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.changed-line-coverage]\nenabled = true\nreport = \"coverage/lcov.info\"\n",
+        ".gitignore": "coverage/\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n\npub fn halve(x: i32) -> i32 {\n    x / 2\n}\n"
+      },
+      "untracked": {
+        "coverage/lcov.info": "TN:\nSF:src/lib.rs\nDA:1,1\nDA:2,1\nDA:5,0\nDA:6,0\nend_of_record\n"
+      },
+      "verdict": {
+        "caught": [
+          "changed-line-coverage/uncovered-lines"
+        ]
+      }
+    },
+    {
+      "name": "coverage-new-function-run",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n",
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.changed-line-coverage]\nenabled = true\nreport = \"coverage/lcov.info\"\n",
+        ".gitignore": "coverage/\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n\npub fn halve(x: i32) -> i32 {\n    x / 2\n}\n"
+      },
+      "untracked": {
+        "coverage/lcov.info": "TN:\nSF:src/lib.rs\nDA:1,1\nDA:2,1\nDA:5,3\nDA:6,3\nend_of_record\n"
+      },
+      "gate": "changed-line-coverage",
+      "verdict": "clean"
+    },
+    {
+      "name": "coverage-line-excluded-by-lcov-marker",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n",
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.changed-line-coverage]\nenabled = true\nreport = \"coverage/lcov.info\"\n",
+        ".gitignore": "coverage/\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n\npub fn halve(x: i32) -> i32 { // LCOV_EXCL_LINE\n    x / 2 // LCOV_EXCL_LINE\n}\n"
+      },
+      "untracked": {
+        "coverage/lcov.info": "TN:\nSF:src/lib.rs\nDA:1,1\nDA:2,1\nend_of_record\n"
+      },
+      "gate": "changed-line-coverage",
+      "verdict": {
+        "known_miss": "#1068"
+      }
     }
   ]
 }
