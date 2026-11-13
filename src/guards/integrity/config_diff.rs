@@ -2073,6 +2073,9 @@ mod tests {
         Required,
         /// Another way of counting is used; there is no value the head could write down.
         OtherBasis,
+        /// The whole of what another key names is used; setting the key narrows it to a
+        /// part (`snapshot_marker`: one region of the snapshot file), which loosens.
+        Narrows,
     }
 
     /// Every evidence key a gate table can leave out, and what leaving it out means.
@@ -2095,6 +2098,7 @@ mod tests {
         ("command", "count_pattern", Unset::NoCheck),
         ("command", "preset", Unset::NoCheck),
         ("command", "snapshot", Unset::Default),
+        ("command", "snapshot_marker", Unset::Narrows),
         ("command", "zero_items_pattern", Unset::Default),
         ("issue-link", "pattern", Unset::Default),
         ("msrv", "command", Unset::NoCheck),

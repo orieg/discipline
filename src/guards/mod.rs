@@ -2522,6 +2522,7 @@ mod tests {
         // Text compared or printed as written.
         "description",
         "marker",
+        "snapshot_marker",
         "pinned_version",
         "provenance",
         "reason",
