@@ -11,7 +11,8 @@
 //! more.
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
-//! and Rust `assert!` / `debug_assert!` / `prop_assert!` conditions (#1070).
+//! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, and JS/TS `expect(..)`
+//! matchers and `assert(..)` calls (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -20,7 +21,10 @@
 //! whose polarity was inverted checks the outcome the test was written to reject. Rust
 //! records `assert!(x)` / `assert!(!x)` the same way, and reads `assert_eq!` /
 //! `assert_ne!` (any `debug_` or `prop_` prefix kept in the skeleton) as the comparisons
-//! `==` / `!=`, so `assert_eq!(n, 0)` -> `assert_ne!(n, 1)` is `== 0` -> `!= 1`.
+//! `==` / `!=`, so `assert_eq!(n, 0)` -> `assert_ne!(n, 1)` is `== 0` -> `!= 1`. JS/TS
+//! reads a comparison matcher (`toBe`, `toBeGreaterThan`, ..) as its operator, `.not`
+//! as its negation, the `.not` of any other matcher of a closed list as a polarity, and
+//! `assert(x)` / `assert(!x)` and the `assert.*` twins the same way.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -60,8 +64,14 @@ impl Record for Comparison {
     fn line(&self) -> usize {
         self.line
     }
+    /// The skeleton and the literal, or the operator when there is no literal: records
+    /// that differ only in their literal (`toBe(1)`, `toBe(2)`, .. on one line) hash
+    /// apart, so adding each is not a scan of the others.
     fn written(&self) -> (&str, &str) {
-        (&self.skeleton, &self.operator)
+        (
+            &self.skeleton,
+            self.literal.as_deref().unwrap_or(&self.operator),
+        )
     }
     fn of(test: &mut TestFn) -> &mut Vec<Self> {
         &mut test.comparisons
@@ -149,8 +159,31 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
         "assertNotRegex" | "assertNotRegexpMatches" => ("regex", true),
         RS_ASSERT => ("rs-assert", false),
         RS_ASSERT_NOT => ("rs-assert", true),
-        _ => return None,
+        JS_ASSERT => ("js-assert", false),
+        JS_ASSERT_NOT => ("js-assert", true),
+        "assert.match" => ("js-match", false),
+        "assert.doesNotMatch" => ("js-match", true),
+        "assert.throws" => ("js-throws", false),
+        "assert.doesNotThrow" => ("js-throws", true),
+        "assert.rejects" => ("js-rejects", false),
+        "assert.doesNotReject" => ("js-rejects", true),
+        _ => return js_matcher_polarity(operator),
     })
+}
+
+/// JS/TS: the polarity of an `expect(..)` matcher with a negated form, `.not` or its
+/// twin (`toBeTruthy` / `toBeFalsy`, `toBeDefined` / `toBeUndefined`).
+fn js_matcher_polarity(operator: &str) -> Option<(&'static str, bool)> {
+    let (matcher, not) = match operator.strip_prefix("not.") {
+        Some(m) => (m, true),
+        None => (operator, false),
+    };
+    let (family, negated) = match matcher {
+        "toBeFalsy" => ("toBeTruthy", true),
+        "toBeUndefined" => ("toBeDefined", true),
+        _ => (*JS_POLAR_MATCHERS.iter().find(|m| **m == matcher)?, false),
+    };
+    Some((family, negated != not))
 }
 
 /// Python: the polarity of a `self.assert*(..)` call statement whose method has a
@@ -460,9 +493,368 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+const JS_OPERATORS: &[&str] = &["===", "!==", "==", "!=", "<", "<=", ">", ">="];
+
+/// The operators written for a JS/TS `assert(..)` condition and its negation.
+const JS_ASSERT: &str = "assert(x)";
+const JS_ASSERT_NOT: &str = "assert(!x)";
+
+/// `expect(..)` matchers read as a comparison: the literal they are given is masked.
+const JS_COMPARISON_MATCHERS: &[&str] = &[
+    "toBe",
+    "toEqual",
+    "toStrictEqual",
+    "toBeGreaterThan",
+    "toBeGreaterThanOrEqual",
+    "toBeLessThan",
+    "toBeLessThanOrEqual",
+];
+
+/// `expect(..)` matchers whose `.not` form is read as the polarity inverted. A matcher
+/// outside both lists is not read: the operator a finding names is a closed set.
+const JS_POLAR_MATCHERS: &[&str] = &[
+    "toBeTruthy",
+    "toBeFalsy",
+    "toBeDefined",
+    "toBeUndefined",
+    "toBeNull",
+    "toBeNaN",
+    "toBeInstanceOf",
+    "toBeCloseTo",
+    "toContain",
+    "toContainEqual",
+    "toMatch",
+    "toMatchObject",
+    "toHaveProperty",
+    "toHaveLength",
+    "toThrow",
+    "toThrowError",
+    "toHaveBeenCalled",
+    "toHaveBeenCalledTimes",
+    "toHaveBeenCalledWith",
+    "toHaveBeenLastCalledWith",
+    "toHaveBeenNthCalledWith",
+    "toHaveReturned",
+    "toHaveReturnedWith",
+];
+
+/// `assert.*` methods read as `==` / `!=`, the literal they are given masked.
+const JS_ASSERT_EQUALITY: &[&str] = &[
+    "equal",
+    "strictEqual",
+    "deepEqual",
+    "deepStrictEqual",
+    "notEqual",
+    "notStrictEqual",
+    "notDeepEqual",
+    "notDeepStrictEqual",
+];
+
+/// `assert.*` methods with a negated twin.
+const JS_ASSERT_POLAR: &[&str] = &[
+    "match",
+    "doesNotMatch",
+    "throws",
+    "doesNotThrow",
+    "rejects",
+    "doesNotReject",
+];
+
+fn js_literal(n: Node, src: &str) -> bool {
+    match n.kind() {
+        "number" | "string" | "true" | "false" | "null" | "undefined" => true,
+        "identifier" => text(n, src) == "undefined",
+        "template_string" => {
+            let mut cursor = n.walk();
+            let plain = !n
+                .named_children(&mut cursor)
+                .any(|c| c.kind() == "template_substitution");
+            plain
+        }
+        "unary_expression" => {
+            n.child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "-")
+                && n.child_by_field_name("argument")
+                    .is_some_and(|a| a.kind() == "number")
+        }
+        _ => false,
+    }
+}
+
+/// The text of `whole` with each byte range of `holes` replaced by its mark (an empty
+/// range inserts it), whitespace collapsed.
+fn spliced(whole: Node, holes: &mut [(usize, usize, &str)], src: &str) -> String {
+    holes.sort_by_key(|(s, _, _)| *s);
+    let (s, e) = (whole.start_byte(), whole.end_byte());
+    count(e.saturating_sub(s));
+    let mut raw = String::with_capacity(e.saturating_sub(s));
+    let mut at = s;
+    for (start, end, mark) in holes.iter() {
+        raw.push_str(src.get(at..*start).unwrap_or(""));
+        raw.push_str(mark);
+        at = *end;
+    }
+    raw.push_str(src.get(at..e).unwrap_or(""));
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn js_args(call: Node) -> Vec<Node> {
+    call.child_by_field_name("arguments")
+        .map(|a| {
+            let mut c = a.walk();
+            a.named_children(&mut c).map(unparenthesized).collect()
+        })
+        .unwrap_or_default()
+}
+
+/// JS/TS: an `expect(..)` chain ending in a matcher of [`JS_COMPARISON_MATCHERS`] or
+/// [`JS_POLAR_MATCHERS`], `.not`, `.resolves` and `.rejects` between them. The matcher
+/// and its `.not` are masked, and for a comparison matcher its literal argument.
+fn js_expect(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let Some(func) = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_expression")
+    else {
+        return false;
+    };
+    let Some(prop) = func.child_by_field_name("property") else {
+        return false;
+    };
+    let mut holes = vec![(prop.start_byte(), prop.end_byte(), "@")];
+    let mut not = false;
+    let mut obj = func.child_by_field_name("object");
+    loop {
+        let Some(o) = obj else {
+            return false;
+        };
+        match o.kind() {
+            "member_expression" => {
+                let (Some(p), Some(inner)) = (
+                    o.child_by_field_name("property"),
+                    o.child_by_field_name("object"),
+                ) else {
+                    return false;
+                };
+                match text(p, src) {
+                    "not" => {
+                        not = !not;
+                        holes.push((inner.end_byte(), o.end_byte(), ""));
+                    }
+                    "resolves" | "rejects" => {}
+                    _ => return false,
+                }
+                obj = Some(inner);
+            }
+            "call_expression" => {
+                let callee = o
+                    .child_by_field_name("function")
+                    .map_or("", |f| text(f, src));
+                if matches!(callee, "expect" | "expect.soft") {
+                    break;
+                }
+                return false;
+            }
+            _ => return false,
+        }
+    }
+    let name = text(prop, src);
+    let (matcher, compared) = match JS_COMPARISON_MATCHERS.iter().find(|m| **m == name) {
+        Some(m) => (*m, true),
+        None => match JS_POLAR_MATCHERS.iter().find(|m| **m == name) {
+            Some(m) => (*m, false),
+            None => return true,
+        },
+    };
+    let literal = js_args(call)
+        .first()
+        .copied()
+        .filter(|a| compared && js_literal(*a, src));
+    if let Some(l) = literal {
+        holes.push((l.start_byte(), l.end_byte(), "#"));
+    }
+    records.add(Comparison {
+        line: prop.start_position().row + 1,
+        skeleton: spliced(stmt, &mut holes, src),
+        operator: if not {
+            format!("not.{matcher}")
+        } else {
+            matcher.to_string()
+        },
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    true
+}
+
+/// JS/TS: each comparison that is a whole operand of an `assert(..)` condition, through
+/// `&&`, `||` and parentheses. One inside a call's arguments or after `!` is not read.
+fn js_operands(records: &mut Records<Comparison>, stmt: Node, cond: Node, src: &str) {
+    let cond = unparenthesized(cond);
+    if cond.kind() != "binary_expression" {
+        return;
+    }
+    let (Some(l), Some(op), Some(r)) = (
+        cond.child_by_field_name("left").map(unparenthesized),
+        cond.child_by_field_name("operator"),
+        cond.child_by_field_name("right").map(unparenthesized),
+    ) else {
+        return;
+    };
+    match text(op, src) {
+        "&&" | "||" => {
+            js_operands(records, stmt, l, src);
+            js_operands(records, stmt, r, src);
+        }
+        o if JS_OPERATORS.contains(&o) => {
+            record(
+                records,
+                stmt,
+                (l, op, r),
+                &|n| js_literal(n, src),
+                src,
+                false,
+            );
+        }
+        _ => {}
+    }
+}
+
+/// JS/TS: `assert(..)` / `assert.ok(..)`: the polarity of a condition that is one value
+/// (`assert(x)` / `assert(!x)`) and its comparisons ([`js_operands`]); `assert.equal`
+/// and its family as `==` / `!=`; `assert.match` / `throws` / `rejects` and their
+/// negated twins as a polarity.
+fn js_assert(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let method = match func.kind() {
+        "identifier" if text(func, src) == "assert" => None,
+        "member_expression" => {
+            let (Some(o), Some(p)) = (
+                func.child_by_field_name("object"),
+                func.child_by_field_name("property"),
+            ) else {
+                return false;
+            };
+            if o.kind() != "identifier" || text(o, src) != "assert" {
+                return false;
+            }
+            Some(p)
+        }
+        _ => return false,
+    };
+    let args = js_args(call);
+    let name = method.map(|p| text(p, src));
+    if name.is_none() || name == Some("ok") {
+        let (Some(cond), Some(list)) = (args.first(), call.child_by_field_name("arguments")) else {
+            return true;
+        };
+        let (negated, checked) = match cond.kind() {
+            "unary_expression"
+                if cond
+                    .child_by_field_name("operator")
+                    .is_some_and(|o| text(o, src) == "!") =>
+            {
+                match cond.child_by_field_name("argument").map(unparenthesized) {
+                    Some(a) => (true, a),
+                    None => return true,
+                }
+            }
+            _ => (false, *cond),
+        };
+        let double = checked.kind() == "unary_expression"
+            && checked
+                .child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "!");
+        let joined = matches!(
+            checked.kind(),
+            "binary_expression" | "ternary_expression" | "sequence_expression"
+        ) && !negated;
+        if !double && !joined {
+            let callee = text(func, src);
+            let rest = src.get(cond.end_byte()..list.end_byte()).unwrap_or("");
+            count(rest.len() + checked.end_byte().saturating_sub(checked.start_byte()));
+            let written = format!("{callee}(@ {} {rest}", text(checked, src));
+            records.add(Comparison {
+                line: call.start_position().row + 1,
+                skeleton: written.split_whitespace().collect::<Vec<_>>().join(" "),
+                operator: (if negated { JS_ASSERT_NOT } else { JS_ASSERT }).to_string(),
+                literal: None,
+                fails_when_true: false,
+            });
+        }
+        if !negated {
+            js_operands(records, stmt, *cond, src);
+        }
+        return true;
+    }
+    let (Some(p), Some(name)) = (method, name) else {
+        return true;
+    };
+    let equality = JS_ASSERT_EQUALITY.iter().find(|m| **m == name);
+    let polar = JS_ASSERT_POLAR.iter().find(|m| **m == name);
+    let Some(m) = equality.or(polar) else {
+        return true;
+    };
+    let mut holes = vec![(p.start_byte(), p.end_byte(), "@")];
+    let literal = if equality.is_some() {
+        [args.get(1), args.first()]
+            .into_iter()
+            .flatten()
+            .copied()
+            .find(|a| js_literal(*a, src))
+    } else {
+        None
+    };
+    if let Some(l) = literal {
+        holes.push((l.start_byte(), l.end_byte(), "#"));
+    }
+    records.add(Comparison {
+        line: p.start_position().row + 1,
+        skeleton: spliced(stmt, &mut holes, src),
+        operator: format!("assert.{m}"),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    true
+}
+
+/// JS/TS: comparisons and polarity in `expect(..)` matchers ([`js_expect`]) and in
+/// `assert(..)` calls ([`js_assert`]), each read from a statement that is the call,
+/// awaited or in parentheses or not.
+pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if node.kind() != "expression_statement" {
+            return true;
+        }
+        let mut curr = node;
+        while let Some(child) = match curr.kind() {
+            "expression_statement" | "await_expression" | "parenthesized_expression" => {
+                curr.named_child(0)
+            }
+            _ => None,
+        } {
+            curr = child;
+        }
+        if curr.kind() != "call_expression" {
+            return true;
+        }
+        !(js_expect(records, node, curr, src) || js_assert(records, node, curr, src))
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
+    // A JS/TS matcher after `.not` checks the negation.
+    let (operator, not) = match operator.strip_prefix("not.") {
+        Some(m) => (m, true),
+        None => (operator, false),
+    };
     let (op, negated) = match operator {
         "==" => ("==", "!="),
         "!=" => ("!=", "=="),
@@ -474,9 +866,23 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         "not in" => ("not in", "in"),
         "assert_eq!" => ("==", "!="),
         "assert_ne!" => ("!=", "=="),
+        "===" => ("==", "!="),
+        "!==" => ("!=", "=="),
+        "toBe" | "toEqual" | "toStrictEqual" => ("==", "!="),
+        "toBeGreaterThan" => (">", "<="),
+        "toBeGreaterThanOrEqual" => (">=", "<"),
+        "toBeLessThan" => ("<", ">="),
+        "toBeLessThanOrEqual" => ("<=", ">"),
+        "assert.equal" | "assert.strictEqual" | "assert.deepEqual" | "assert.deepStrictEqual" => {
+            ("==", "!=")
+        }
+        "assert.notEqual"
+        | "assert.notStrictEqual"
+        | "assert.notDeepEqual"
+        | "assert.notDeepStrictEqual" => ("!=", "=="),
         _ => return None,
     };
-    Some(if fails_when_true { negated } else { op })
+    Some(if fails_when_true != not { negated } else { op })
 }
 
 /// The smallest (for a lower bound) or largest (for an upper bound) value the bound
@@ -955,5 +1361,176 @@ mod tests {
         // value that changed is not paired.
         assert_eq!(inverted("assert!(a && b);", "assert!(!a && b);"), vec![]);
         assert_eq!(inverted("assert!(ok(1));", "assert!(!ok(2));"), vec![]);
+    }
+
+    fn js(check: &str) -> Vec<Comparison> {
+        let src = format!(
+            "import {{ f }} from '../src/f.js';\n\nit('x', async () => {{\n  const rows = [1];\n  {check}\n}});\n"
+        );
+        comparisons(
+            &crate::ast::javascript::JavaScriptPack,
+            "test/x.test.ts",
+            &src,
+        )
+    }
+
+    fn js_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&js(a), &js(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn js_one(from: &str, to: &str, inverted: bool) -> Vec<(String, String, bool)> {
+        vec![(from.to_string(), to.to_string(), inverted)]
+    }
+
+    #[test]
+    fn javascript_records_matchers_and_assert_comparisons_with_literals_masked() {
+        let got = js("expect(f(rows)).toBeGreaterThan(6);");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].skeleton, "expect(f(rows)).@(#);");
+        assert_eq!(got[0].operator, "toBeGreaterThan");
+        assert_eq!(got[0].literal.as_deref(), Some("6"));
+        assert_eq!(got[0].line, 5);
+        let got = js("await expect(f(rows)).resolves.not.toBe(-1);");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].skeleton, "await expect(f(rows)).resolves.@(#);");
+        assert_eq!(got[0].operator, "not.toBe");
+        assert_eq!(got[0].literal.as_deref(), Some("-1"));
+        let got = js("assert(f(rows) === 'a' && rows.length < 2, 'msg');");
+        let ops: Vec<_> = got
+            .iter()
+            .map(|c| (c.operator.as_str(), c.literal.as_deref()))
+            .collect();
+        assert_eq!(ops, vec![("===", Some("'a'")), ("<", Some("2"))]);
+        let got = js("assert.strictEqual(f(rows), 3);");
+        assert_eq!(got[0].skeleton, "assert.@(f(rows), #);");
+        assert_eq!(got[0].operator, "assert.strictEqual");
+        // A matcher outside the closed lists, a comparison inside a call's arguments or
+        // after `!`, and a call that is not an assertion are not read.
+        assert_eq!(js("expect(f(rows)).toSatisfy(ok);"), vec![]);
+        assert_eq!(js("assert.ok(check(f(rows) > 6));").len(), 1);
+        assert_eq!(js("assert.ok(check(f(rows) > 6));")[0].operator, JS_ASSERT);
+        assert!(js("assert(!(f(rows) > 6));")
+            .iter()
+            .all(|c| c.operator == JS_ASSERT_NOT));
+        assert_eq!(js("console.log(f(rows) > 6);"), vec![]);
+        assert_eq!(js("other(f(rows)).toBe(6);"), vec![]);
+    }
+
+    #[test]
+    fn javascript_comparisons_report_an_operator_that_accepts_more() {
+        assert_eq!(
+            js_weakened(
+                "expect(f(rows)).toBeGreaterThan(6);",
+                "expect(f(rows)).toBeGreaterThanOrEqual(6);"
+            ),
+            js_one("toBeGreaterThan", "toBeGreaterThanOrEqual", false)
+        );
+        assert_eq!(
+            js_weakened("expect(f(rows)).toBe(0);", "expect(f(rows)).not.toBe(1);"),
+            js_one("toBe", "not.toBe", false)
+        );
+        assert_eq!(
+            js_weakened(
+                "expect(f(rows)).toEqual(7);",
+                "expect(f(rows)).toBeLessThanOrEqual(7);"
+            ),
+            js_one("toEqual", "toBeLessThanOrEqual", false)
+        );
+        // `.not` of a bound is the opposite bound: `not.toBeLessThan(6)` is `>= 6`.
+        assert_eq!(
+            js_weakened(
+                "expect(f(rows)).toBeGreaterThan(6);",
+                "expect(f(rows)).not.toBeLessThan(6);"
+            ),
+            js_one("toBeGreaterThan", "not.toBeLessThan", false)
+        );
+        assert_eq!(
+            js_weakened("assert(f(rows) > 6, 'm');", "assert(f(rows) >= 6, 'm');"),
+            js_one(">", ">=", false)
+        );
+        assert_eq!(
+            js_weakened("assert.ok(f(rows) === 3);", "assert.ok(f(rows) !== 4);"),
+            js_one("===", "!==", false)
+        );
+        assert_eq!(
+            js_weakened(
+                "assert.deepStrictEqual(f(rows), 3);",
+                "assert.notDeepStrictEqual(f(rows), 4);"
+            ),
+            js_one("assert.deepStrictEqual", "assert.notDeepStrictEqual", false)
+        );
+        // Kept, tightened, `==` / `===` swapped, or integers that accept the same values.
+        for (a, b) in [
+            (
+                "expect(f(rows)).toBeGreaterThanOrEqual(6);",
+                "expect(f(rows)).toBeGreaterThan(6);",
+            ),
+            ("expect(f(rows)).toBe(6);", "expect(f(rows)).toBe(6);"),
+            ("expect(f(rows)).toBe(6);", "expect(f(rows)).toEqual(6);"),
+            ("assert(f(rows) == 6);", "assert(f(rows) === 6);"),
+            ("assert(f(rows) > 5);", "assert(f(rows) >= 6);"),
+            ("expect(f(rows)).not.toBe(1);", "expect(f(rows)).toBe(0);"),
+        ] {
+            assert_eq!(js_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn javascript_polarity_inversions_are_reported() {
+        assert_eq!(
+            js_weakened(
+                "expect(rows).toContain(1);",
+                "expect(rows).not.toContain(1);"
+            ),
+            js_one("toContain", "not.toContain", true)
+        );
+        assert_eq!(
+            js_weakened(
+                "expect(f(rows)).toBeTruthy();",
+                "expect(f(rows)).toBeFalsy();"
+            ),
+            js_one("toBeTruthy", "toBeFalsy", true)
+        );
+        assert_eq!(
+            js_weakened(
+                "expect(f(rows)).not.toBeUndefined();",
+                "expect(f(rows)).toBeUndefined();"
+            ),
+            js_one("not.toBeUndefined", "toBeUndefined", true)
+        );
+        assert_eq!(
+            js_weakened("assert(f(rows), 'm');", "assert(!f(rows), 'm');"),
+            js_one(JS_ASSERT, JS_ASSERT_NOT, true)
+        );
+        assert_eq!(
+            js_weakened(
+                "assert.throws(() => f(rows));",
+                "assert.doesNotThrow(() => f(rows));"
+            ),
+            js_one("assert.throws", "assert.doesNotThrow", true)
+        );
+        // `!a && b` does not negate `a && b`; `!!x` is not read; a checked value that
+        // changed is not paired; the same polarity twice is kept.
+        for (a, b) in [
+            ("assert(a && b);", "assert(!a && b);"),
+            ("assert(f(rows));", "assert(!!f(rows));"),
+            (
+                "expect(rows).toContain(1);",
+                "expect(rows).not.toContain(2);",
+            ),
+            (
+                "expect(f(rows)).toBeTruthy();",
+                "expect(f(rows)).not.toBeFalsy();",
+            ),
+            (
+                "expect(f(rows)).toBeTruthy();",
+                "expect(f(rows)).toBeDefined();",
+            ),
+        ] {
+            assert_eq!(js_weakened(a, b), vec![], "{a} -> {b}");
+        }
     }
 }

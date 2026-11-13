@@ -3445,6 +3445,63 @@
       "verdict": {
         "known_miss": "#1087"
       }
+    },
+    {
+      "name": "js-matcher-bound-widened",
+      "base": {
+        "src/rows.js": "export function count(x) { return x.length; }\n",
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count(rows)).toBeGreaterThan(6);\n  });\n});\n"
+      },
+      "head": {
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count(rows)).toBeGreaterThanOrEqual(6);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "js-matcher-negated",
+      "base": {
+        "src/rows.js": "export function count(x) { return x.length; }\n",
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(rows).toContain(3);\n  });\n});\n"
+      },
+      "head": {
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(rows).not.toContain(3);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ts-assert-comparison-widened",
+      "base": {
+        "src/rows.js": "export function count(x) { return x.length; }\n",
+        "test/rows.test.ts": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    assert(count(rows) > 6, 'seven rows');\n  });\n});\n"
+      },
+      "head": {
+        "test/rows.test.ts": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    assert(count(rows) >= 6, 'seven rows');\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "js-matcher-bound-tightened",
+      "base": {
+        "src/rows.js": "export function count(x) { return x.length; }\n",
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count(rows)).toBeGreaterThanOrEqual(6);\n  });\n});\n"
+      },
+      "head": {
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count(rows)).toBeGreaterThan(6);\n  });\n});\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }

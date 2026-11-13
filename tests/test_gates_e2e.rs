@@ -1432,6 +1432,86 @@ fn a_rust_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     assert_eq!((code, codes), (0, vec![]));
 }
 
+/// A JS/TS assertion of an existing test weakened or inverted is reported as
+/// `weakened-bound` (#1070): a comparison matcher moved the loose way, a matcher negated
+/// with `.not`, an `assert(..)` comparison widened, and `assert(x)` -> `assert(!x)`.
+#[test]
+fn a_js_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let js = |check: &str| {
+        format!(
+            "import {{ count, ok }} from '../src/rows.js';\n\ndescribe('rows', () => {{\n  it('counts', () => {{\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    {check}\n  }});\n}});\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "src/rows.js",
+            "export function count(x) { return x.length; }\nexport function ok(x) { return x > 0; }\n",
+        );
+        repo.commit_base("test/rows.test.ts", &js(base), "test: counts");
+        repo.write("test/rows.test.ts", &js(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "expect(count(rows)).toBeGreaterThan(6);",
+            "expect(count(rows)).toBeGreaterThanOrEqual(6);",
+            "`toBeGreaterThan` to `toBeGreaterThanOrEqual`",
+        ),
+        (
+            "expect(count([])).toBe(0);",
+            "expect(count([])).not.toBe(1);",
+            "`toBe` to `not.toBe`",
+        ),
+        (
+            "expect(rows).toContain(3);",
+            "expect(rows).not.toContain(3);",
+            "`toContain` to `not.toContain`",
+        ),
+        (
+            "assert(count(rows) > 6, 'seven rows');",
+            "assert(count(rows) >= 6, 'seven rows');",
+            "`>` to `>=`",
+        ),
+        (
+            "assert.ok(ok(1));",
+            "assert.ok(!ok(1));",
+            "`assert(x)` to `assert(!x)`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("count("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: counts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, and `==` written as `===`.
+    for (base, head) in [
+        (
+            "expect(count(rows)).toBeGreaterThanOrEqual(6);",
+            "expect(count(rows)).toBeGreaterThan(6);",
+        ),
+        ("assert(count(rows) == 7);", "assert(count(rows) === 7);"),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
