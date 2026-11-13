@@ -2074,7 +2074,7 @@ mod tests {
         /// Another way of counting is used; there is no value the head could write down.
         OtherBasis,
         /// The whole of what another key names is used; setting the key narrows it to a
-        /// part (`snapshot_marker`: one region of the snapshot file), which loosens.
+        /// part (`snapshot_marker`, `example_marker`: one region of the file), which loosens.
         Narrows,
     }
 
@@ -2096,6 +2096,8 @@ mod tests {
         ("command", "canary_expected_diagnostic", Unset::Default),
         ("command", "command", Unset::Default),
         ("command", "count_pattern", Unset::NoCheck),
+        ("command", "example", Unset::NoCheck),
+        ("command", "example_marker", Unset::Narrows),
         ("command", "preset", Unset::NoCheck),
         ("command", "snapshot", Unset::Default),
         ("command", "snapshot_marker", Unset::Narrows),

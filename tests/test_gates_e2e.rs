@@ -17188,6 +17188,156 @@ fn command_snapshot_marker_changed_on_head_is_a_gate_weakening() {
     );
 }
 
+/// A repository whose base runs the shell example of `docs/guide.md`'s `step` region
+/// through `{example_file}` (#1088).
+fn example_repo(script: &str, extra: &str) -> Repo {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("docs/guide.md", &example_doc(script)),
+            (
+                "discipline.toml",
+                &format!(
+                    "[meta]\nversion = 1\nname = \"test-repo\"\n\n\
+                     [gates.deletion-rationale]\nenabled = false\n\n\
+                     [gates.command]\ncommand = \"sh {{example_file}}\"\n\
+                     example = \"docs/guide.md\"\nexample_marker = \"step\"\n{extra}"
+                ),
+            ),
+        ],
+        "base: a documented example that must still run",
+    );
+    repo
+}
+
+fn example_doc(script: &str) -> String {
+    format!("# Guide\n\nRun this:\n\n<!-- generated:step -->\n```sh\n{script}```\n<!-- /generated -->\n")
+}
+
+#[test]
+fn command_example_runs_the_documented_example() {
+    // The fence body is what the command reads: the script prints and exits 0.
+    let repo = example_repo("printf 'ok\\n'\n", "snapshot = \"out.txt\"\n");
+    repo.write("out.txt", "ok\n");
+    repo.commit("test: the example's expected output");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+
+    // The documented example stops working: the command fails on it.
+    repo.write("docs/guide.md", &example_doc("printf 'ok\\n'\nexit 3\n"));
+    repo.commit("docs: an example that no longer runs");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<_> = run
+        .violations("command")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, ["command/command-failed"]);
+
+    // It runs and prints something else: the snapshot of its output catches it.
+    repo.write("docs/guide.md", &example_doc("printf 'changed\\n'\n"));
+    repo.commit("docs: an example whose output changed");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.violations("command")[0]["code"],
+        "command/snapshot-mismatch"
+    );
+}
+
+#[test]
+fn command_example_fails_closed_without_its_region_or_its_placeholder() {
+    let exit_2 = |run: &Run, reason: &str, needle: &str| {
+        assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.could_not_check(),
+            (reason.to_string(), Some("command".to_string()))
+        );
+        assert!(run.stderr.contains(needle), "{}", run.stderr);
+    };
+
+    // The change deletes the markers: there is no example to run, which is not a pass.
+    let repo = example_repo("exit 0\n", "");
+    repo.write("docs/guide.md", "# Guide\n\n```sh\nexit 0\n```\n");
+    repo.commit("docs: drop the markers");
+    exit_2(
+        &repo.check(&[]),
+        "gate",
+        "has no `<!-- generated:step -->` region",
+    );
+
+    // The document is gone.
+    let repo = example_repo("exit 0\n", "");
+    repo.git(&["rm", "-q", "docs/guide.md"]);
+    repo.commit("docs: drop the guide");
+    exit_2(&repo.check(&[]), "gate", "does not exist");
+
+    // `example` with no command that reads it, the placeholder with no `example`, and a
+    // marker with no `example` are configuration errors.
+    for (toml, needle) in [
+        (
+            "command = \"true\"\nexample = \"docs/guide.md\"\n",
+            "never run",
+        ),
+        ("command = \"sh {example_file}\"\n", "sets no `example`"),
+        (
+            "command = \"true\"\nexample_marker = \"step\"\n",
+            "`example_marker` without `example`",
+        ),
+        (
+            "command = \"sh {example_file} {example_fil}\"\nexample = \"docs/guide.md\"\nexample_marker = \"step\"\n",
+            "`{example_fil}` is not a placeholder",
+        ),
+    ] {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                ("docs/guide.md", &example_doc("exit 0\n")),
+                (
+                    "discipline.toml",
+                    &format!(
+                        "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n{toml}"
+                    ),
+                ),
+            ],
+            "base: an example misconfigured",
+        );
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 2, "{toml}: {}{}", run.stdout, run.stderr);
+        assert!(run.stderr.contains(needle), "{toml}: {}", run.stderr);
+    }
+}
+
+#[test]
+fn command_example_changed_on_head_is_a_gate_weakening() {
+    let repo = example_repo("exit 0\n", "");
+    let toml = std::fs::read_to_string(repo.file("discipline.toml")).unwrap();
+    repo.write(
+        "discipline.toml",
+        &toml.replace("example_marker = \"step\"", "example_marker = \"other\""),
+    );
+    repo.write(
+        "docs/guide.md",
+        &format!(
+            "{}\n<!-- generated:other -->\n```sh\nexit 0\n```\n<!-- /generated -->\n",
+            example_doc("exit 0\n")
+        ),
+    );
+    repo.commit("chore: run another example");
+    let run = repo.check(&[]);
+    let found = run.violations("config-integrity");
+    assert!(
+        found
+            .iter()
+            .any(|v| v["message"].as_str().unwrap().contains("example_marker")),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+}
+
 #[test]
 fn command_snapshot_on_base_tests_is_a_configuration_error() {
     // `base-tests` never reaches the snapshot comparison: a snapshot on it would be

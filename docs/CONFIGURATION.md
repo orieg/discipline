@@ -161,6 +161,8 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.commands[].canary_expected_diagnostic` | string | *(per entry)* | Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.commands[].command` | string | *(per entry)* | Command string to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff, and `{changed_ranges}` by the lines it adds (`path:start-end`, joined by `,`); any other `{diff}`, `{changed}`, `{diff_…}` or `{changed_…}` stops the run (exit 2) |
 | `gates.command.commands[].count_pattern` | string | *(per entry)* | Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
+| `gates.command.commands[].example` | string | *(per entry)* | Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}` |
+| `gates.command.commands[].example_marker` | string | *(per entry)* | Name of the `&lt;!-- generated:&lt;name&gt; --&gt;` ... `&lt;!-- /generated --&gt;` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example` |
 | `gates.command.commands[].forbid_output` | list | *(per entry)* | Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.commands[].min_count` | integer | *(per entry)* | Minimum count required |
 | `gates.command.commands[].name` | string | *(required)* | Name or identifier of the command |
@@ -172,6 +174,8 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.commands[].zero_items_pattern` | string | *(per entry)* | Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.count_pattern` | string | *(unset)* | Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
 | `gates.command.enabled` | boolean | `true` | Whether this gate is active |
+| `gates.command.example` | string | *(unset)* | Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}` |
+| `gates.command.example_marker` | string | *(unset)* | Name of the `&lt;!-- generated:&lt;name&gt; --&gt;` ... `&lt;!-- /generated --&gt;` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example` |
 | `gates.command.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.command.forbid_output` | list | `[]` | Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.min_count` | integer | *(unset)* | Minimum count required |

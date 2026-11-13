@@ -420,6 +420,14 @@
           "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error",
           "type": "string"
         },
+        "example": {
+          "description": "Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}`",
+          "type": "string"
+        },
+        "example_marker": {
+          "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`",
+          "type": "string"
+        },
         "forbid_output": {
           "$ref": "#/$defs/StringList",
           "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text"
@@ -495,6 +503,14 @@
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"
+        },
+        "example": {
+          "description": "Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}`",
+          "type": "string"
+        },
+        "example_marker": {
+          "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`",
+          "type": "string"
         },
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"

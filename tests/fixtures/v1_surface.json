@@ -490,6 +490,8 @@
       "gates.command.commands[].canary_expected_diagnostic",
       "gates.command.commands[].command",
       "gates.command.commands[].count_pattern",
+      "gates.command.commands[].example",
+      "gates.command.commands[].example_marker",
       "gates.command.commands[].forbid_output",
       "gates.command.commands[].min_count",
       "gates.command.commands[].name",
@@ -501,6 +503,8 @@
       "gates.command.commands[].zero_items_pattern",
       "gates.command.count_pattern",
       "gates.command.enabled",
+      "gates.command.example",
+      "gates.command.example_marker",
       "gates.command.exempt_paths",
       "gates.command.exempt_paths.items",
       "gates.command.exempt_paths.reset",
@@ -1583,7 +1587,8 @@
     ],
     "placeholders": [
       "{changed_ranges}",
-      "{diff_file}"
+      "{diff_file}",
+      "{example_file}"
     ],
     "policy_refusals": [
       "policy/approval-required",

@@ -20,6 +20,9 @@
 //! - `{diff_file}` in a command's arguments: the path of a file holding the change's diff,
 //!   written only for a command that names it and removed after it ran (exit 2 when the
 //!   diff cannot be read, written or removed)
+//! - `example` (+ `example_marker`) with `{example_file}`: a document's example handed to
+//!   the command as a file, so the example must still run (exit 2 when the region is
+//!   missing, or the key and the placeholder do not come together)
 
 use crate::config::{DisciplineConfig, GateSettings};
 use crate::could_not_check::{tag, Reason};
@@ -292,7 +295,21 @@ pub const DIFF_FILE_PLACEHOLDER: &str = "{diff_file}";
 /// Every placeholder a command's arguments may name. Each is part of the stable interface
 /// (`tests/fixtures/v1_surface.json`, `placeholders`): renamed or removed only with a
 /// major version.
-pub const PLACEHOLDERS: &[&str] = &[DIFF_FILE_PLACEHOLDER, CHANGED_RANGES_PLACEHOLDER];
+pub const PLACEHOLDERS: &[&str] = &[
+    DIFF_FILE_PLACEHOLDER,
+    CHANGED_RANGES_PLACEHOLDER,
+    EXAMPLE_FILE_PLACEHOLDER,
+];
+
+/// Replaced by the path of a file holding the command's `example`: the region named by
+/// `example_marker` (its fenced block's body, when it holds one), else the whole file.
+pub const EXAMPLE_FILE_PLACEHOLDER: &str = "{example_file}";
+
+/// Whether an argument of `argv` names [`EXAMPLE_FILE_PLACEHOLDER`].
+pub fn takes_example_file(argv: &[String]) -> bool {
+    argv.iter()
+        .any(|arg| arg.contains(EXAMPLE_FILE_PLACEHOLDER))
+}
 
 /// Replaced by the lines the change adds, as `path:start-end` entries joined by `,`
 /// ([`changed_ranges`]): what Stryker's `--mutate` reads.
@@ -384,7 +401,7 @@ pub fn takes_changed_ranges(argv: &[String]) -> bool {
 }
 
 /// The first placeholder-shaped token in `argv` that is not one of [`PLACEHOLDERS`]:
-/// `{diff}`, `{changed}`, or a `{diff_…}` / `{changed_…}` name in lower case and
+/// `{diff}`, `{changed}`, `{example}`, or a `{diff_…}` / `{changed_…}` / `{example_…}` name in lower case and
 /// underscores (`{diff_fil}`, `{changed_ranges}`). Such a token would otherwise reach the tool as literal text, and
 /// the tool would read it as a path that does not exist. Other braces (`jq '{a}'`,
 /// `{different}`, `{DIFF_FILE}`) are the tool's own and are left alone.
@@ -397,7 +414,7 @@ pub fn unknown_placeholder(argv: &[String]) -> Option<String> {
                 break;
             };
             let name = &rest[..close];
-            let reserved = ["diff", "changed"]
+            let reserved = ["diff", "changed", "example"]
                 .iter()
                 .any(|stem| name == *stem || name.starts_with(&format!("{stem}_")))
                 && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
@@ -426,7 +443,15 @@ pub fn with_diff_file(argv: &[String], path: &str) -> Vec<String> {
 /// Writes `patch` to a new file in the temporary directory, outside the working tree and
 /// readable by its owner only, and returns its path. [`remove_diff_file`] removes it.
 pub fn write_diff_file(patch: &[u8]) -> Result<String> {
+    write_temp_file("diff", "diff", patch)
+}
+
+/// Writes `bytes` to a new file `discipline-<stem>-….<ext>` in the temporary directory,
+/// outside the working tree and readable by its owner only, and returns its path.
+/// [`remove_diff_file`] removes it.
+fn write_temp_file(stem: &str, ext: &str, bytes: &[u8]) -> Result<String> {
     use std::io::Write;
+    let patch = bytes;
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
@@ -434,7 +459,7 @@ pub fn write_diff_file(patch: &[u8]) -> Result<String> {
         .unwrap_or_default()
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "discipline-diff-{}-{nanos}-{count}.diff",
+        "discipline-{stem}-{}-{nanos}-{count}.{ext}",
         std::process::id()
     ));
     let path = path
@@ -463,6 +488,19 @@ pub fn write_diff_file(patch: &[u8]) -> Result<String> {
     }
 }
 
+/// Removes all of `paths`, attempting each; the first failure is returned.
+fn remove_temp_files(paths: &[&String]) -> Result<()> {
+    let mut first = Ok(());
+    for path in paths {
+        if let Err(e) = remove_diff_file(path) {
+            if first.is_ok() {
+                first = Err(e);
+            }
+        }
+    }
+    first
+}
+
 /// Removes the file [`write_diff_file`] wrote. One already gone (the command removed it)
 /// is no error.
 pub fn remove_diff_file(path: &str) -> Result<()> {
@@ -486,6 +524,7 @@ fn run_gate_command(
     cmd: &str,
     timeout_secs: u64,
     dir: &Path,
+    example: Option<&str>,
 ) -> Result<CommandRunResult> {
     let argv =
         split_command_line(cmd).with_context(|| format!("invalid command line for `{name}`"))?;
@@ -515,21 +554,60 @@ fn run_gate_command(
     let expanded = |values: &[(&str, &str)]| {
         expand(&argv, values).with_context(|| format!("command `{name}`"))
     };
-    if !takes_diff_file(&argv) {
+    if !takes_diff_file(&argv) && !takes_example_file(&argv) {
         return run_argv_bounded(name, &expanded(&values)?, timeout_secs, dir);
     }
-    let path = ctx
-        .git
-        .patch()
-        .and_then(|patch| write_diff_file(&patch))
-        .with_context(|| {
-            format!(
-                "command `{name}`: cannot write the change's diff for `{DIFF_FILE_PLACEHOLDER}`"
-            )
-        })?;
-    values.push((DIFF_FILE_PLACEHOLDER, &path));
+    let diff_path = if takes_diff_file(&argv) {
+        Some(
+            ctx.git
+                .patch()
+                .and_then(|patch| write_diff_file(&patch))
+                .with_context(|| {
+                    format!(
+                        "command `{name}`: cannot write the change's diff for `{DIFF_FILE_PLACEHOLDER}`"
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+    let example_path = if takes_example_file(&argv) {
+        let written = match example {
+            Some(text) => write_temp_file("example", "txt", text.as_bytes()).with_context(|| {
+                format!("command `{name}`: cannot write the example for `{EXAMPLE_FILE_PLACEHOLDER}`")
+            }),
+            None => Err(tag(
+                Reason::Configuration,
+                anyhow!("command `{name}` names `{EXAMPLE_FILE_PLACEHOLDER}`, and no `example` is configured for it"),
+            )),
+        };
+        match written {
+            Ok(path) => Some(path),
+            Err(e) => {
+                return Err(
+                    match remove_temp_files(&diff_path.iter().collect::<Vec<_>>()) {
+                        Ok(()) => e,
+                        Err(left) => e.context(left.to_string()),
+                    },
+                )
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(ref path) = diff_path {
+        values.push((DIFF_FILE_PLACEHOLDER, path));
+    }
+    if let Some(ref path) = example_path {
+        values.push((EXAMPLE_FILE_PLACEHOLDER, path));
+    }
     let run = expanded(&values).and_then(|argv| run_argv_bounded(name, &argv, timeout_secs, dir));
-    let removed = remove_diff_file(&path);
+    let removed = remove_temp_files(
+        &diff_path
+            .iter()
+            .chain(example_path.iter())
+            .collect::<Vec<_>>(),
+    );
     let run = run?;
     removed?;
     Ok(run)
@@ -863,6 +941,8 @@ struct ResolvedCommand {
     snapshot: Option<Snapshot>,
     /// What `snapshot` held before any command of this run started.
     committed_snapshot: Option<CommittedSnapshot>,
+    /// `example`, with what it held before any command of this run started.
+    example: Option<(Snapshot, CommittedSnapshot)>,
 }
 
 /// A committed file the command's stdout must match, or one marked region of it.
@@ -1147,6 +1227,85 @@ fn resolve_snapshot(
     }))
 }
 
+/// Resolves the `example` of one command table and reads it from the head side before any
+/// command runs. `example` and `{example_file}` come together: a command or canary that
+/// names the placeholder with no `example`, an `example` no command reads, an
+/// `example_marker` without `example`, and an example on a `base-tests` command (which
+/// runs the base side) are configuration errors (exit 2).
+fn resolve_example(
+    ctx: &Context,
+    owner: &str,
+    example: Option<&String>,
+    example_marker: Option<&String>,
+    commands: &[Option<&String>],
+    is_base_tests: bool,
+) -> Result<Option<(Snapshot, CommittedSnapshot)>> {
+    let config_error = |msg: String| Err(tag(Reason::Configuration, anyhow!(msg)));
+    let named = commands
+        .iter()
+        .flatten()
+        .any(|c| c.contains(EXAMPLE_FILE_PLACEHOLDER));
+    let Some(path) = example else {
+        if example_marker.is_some() {
+            return config_error(format!(
+                "{owner} sets `example_marker` without `example`: there is no example to read"
+            ));
+        }
+        if named {
+            return config_error(format!(
+                "{owner} names `{EXAMPLE_FILE_PLACEHOLDER}` and sets no `example`: set `example = \"<document>\"` (and `example_marker`) to say which example it reads"
+            ));
+        }
+        return Ok(None);
+    };
+    if !named {
+        return config_error(format!(
+            "{owner} sets `example = \"{path}\"`, and neither its command nor its canary names `{EXAMPLE_FILE_PLACEHOLDER}`, so the example is never run"
+        ));
+    }
+    if is_base_tests {
+        return config_error(format!(
+            "{owner} runs the base tests, which never read a head-side example: remove `example = \"{path}\"` or move it to its own command"
+        ));
+    }
+    // The path and region-name rules are those of `snapshot` / `snapshot_marker`.
+    let snap = resolve_snapshot(owner, Some(path), example_marker, &[], None)
+        .map_err(|e| {
+            tag(
+                Reason::Configuration,
+                anyhow!(e.to_string().replace("snapshot", "example")),
+            )
+        })?
+        .expect("a path was given");
+    let committed = read_committed_snapshot(ctx, &snap.path, snap.marker.as_deref())?;
+    Ok(Some((snap, committed)))
+}
+
+/// The text `{example_file}` holds for `item`, when it has an example. An example that is
+/// missing or cannot be read stops the run (exit 2): a command that cannot read its
+/// example has checked nothing.
+fn example_text(item: &ResolvedCommand) -> Result<Option<&str>> {
+    let Some((snap, committed)) = &item.example else {
+        return Ok(None);
+    };
+    let what = snap.describe().replacen("snapshot", "example", 1);
+    match committed {
+        CommittedSnapshot::Text { text, .. } => Ok(Some(text)),
+        CommittedSnapshot::Missing => Err(tag(
+            Reason::Gate,
+            anyhow!("command `{}`: {what} does not exist", item.name),
+        )),
+        CommittedSnapshot::Unusable(why) => Err(tag(
+            Reason::Gate,
+            anyhow!(
+                "command `{}`: {}",
+                item.name,
+                why.replacen("snapshot", "example", 1)
+            ),
+        )),
+    }
+}
+
 /// The policy files of a command: the preset's, with the preset's own snapshot replaced by
 /// the snapshot the command actually compares against.
 fn policy_files_for(
@@ -1374,6 +1533,14 @@ fn resolve_table_command(
             .as_deref()
             .is_some_and(presets::is_resolve_locked_preset);
         refuse_snapshot_on_base_tests("`[gates.command]`", is_base, snapshot.as_ref())?;
+        let example = resolve_example(
+            ctx,
+            "`[gates.command]`",
+            gate.example.as_ref(),
+            gate.example_marker.as_ref(),
+            &[Some(&cmd), canary_cmd.as_ref()],
+            is_base,
+        )?;
         resolved.push(ResolvedCommand {
             name: gate.preset.clone().unwrap_or_else(|| "default".to_string()),
             is_base_tests: is_base,
@@ -1390,7 +1557,20 @@ fn resolve_table_command(
             policy_files,
             committed_snapshot: committed_snapshot(ctx, snapshot.as_ref())?,
             snapshot,
+            example,
         });
+    } else if gate.example.is_some() || gate.example_marker.is_some() {
+        let key = if gate.example.is_some() {
+            "example"
+        } else {
+            "example_marker"
+        };
+        return Err(tag(
+            Reason::Configuration,
+            anyhow!(
+                "`[gates.command]` sets `{key}` but declares no `command` or `preset` of its own, so no command reads it: entries do not inherit the table's example; set `example` on the `[[gates.command.commands]]` entry it is for"
+            ),
+        ));
     } else if gate.snapshot.is_some()
         || gate.snapshot_marker.is_some()
         || !gate.snapshot_ignore.is_empty()
@@ -1507,6 +1687,14 @@ fn resolve_entry_commands(
             is_base,
             snapshot.as_ref(),
         )?;
+        let example = resolve_example(
+            ctx,
+            &format!("command entry `{}`", entry.name),
+            entry.example.as_ref(),
+            entry.example_marker.as_ref(),
+            &[Some(&effective_cmd), canary_cmd.as_ref()],
+            is_base,
+        )?;
         resolved.push(ResolvedCommand {
             name: entry.name.clone(),
             is_base_tests: is_base,
@@ -1526,6 +1714,7 @@ fn resolve_entry_commands(
             policy_files,
             committed_snapshot: committed_snapshot(ctx, snapshot.as_ref())?,
             snapshot,
+            example,
         });
     }
 
@@ -1594,6 +1783,7 @@ fn evaluate_one_command(
         &item.command,
         item.timeout_seconds,
         ctx.git.root(),
+        example_text(&item)?,
     )?;
     if run_res.stdout_truncated || run_res.stderr_truncated {
         // Every pattern is matched against stdout and stderr together.
@@ -1689,6 +1879,7 @@ fn check_canary(
             canary_cmd,
             item.timeout_seconds,
             ctx.git.root(),
+            example_text(item)?,
         )?;
         let canary_output = format!("{}\n{}", canary_res.stdout, canary_res.stderr);
         if let Some(ref expected_diag) = item.canary_expected_diagnostic {
@@ -2485,6 +2676,7 @@ fn evaluate_base_tests(
         &cmd.command,
         cmd.timeout_seconds,
         &temp_path,
+        None,
     )?;
     outcome.examined += 1;
     // The failed cases are read from the output: a report cut off may have lost them.
@@ -3111,6 +3303,34 @@ mod tests {
             .is_none());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn example_file_holds_the_example_and_is_removed_after_the_run() {
+        let (dir, git) = crate::gitctx::test_support::repo_with_changed_file("a.txt", "a\n", "b\n");
+        let config = DisciplineConfig::default();
+        let ctx = crate::guards::test_support::context(&config, &git);
+        let run = run_gate_command(
+            &ctx,
+            "ex",
+            r#"sh -c 'printf "%s\n" "$1"; cat "$1"' sh {example_file}"#,
+            5,
+            dir.path(),
+            Some("usage: x\n"),
+        )
+        .unwrap();
+        let (path, text) = run.stdout.split_once('\n').unwrap();
+        assert!(path.contains("discipline-example-"), "{path}");
+        assert_eq!(text, "usage: x\n");
+        assert!(!Path::new(path).exists(), "{path} left behind");
+        // The placeholder with no example is a configuration error, and nothing runs.
+        let err =
+            run_gate_command(&ctx, "ex", "sh {example_file}", 5, dir.path(), None).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no `example` is configured"),
+            "{err:#}"
+        );
+    }
+
     #[test]
     fn snapshot_marker_needs_a_snapshot_and_a_region_name() {
         let s = |p: &str| Some(p.to_string());
@@ -3462,6 +3682,8 @@ mod tests {
                 "{changed_files}",
             ),
             (&["tool", "{diff_file}", "x{changed}y"][..], "{changed}"),
+            (&["sh", "{example_fil}"][..], "{example_fil}"),
+            (&["sh", "{example}"][..], "{example}"),
         ] {
             assert_eq!(
                 unknown_placeholder(&argv(args)).as_deref(),
@@ -3472,14 +3694,19 @@ mod tests {
         // Controls: the known placeholder, a tool's own braces, an unclosed brace.
         for args in [
             &["cargo", "mutants", "--in-diff", "{diff_file}"][..],
-            &["jq", "{a: .diff}", "{different}"][..],
+            &["jq", "{a: .diff}", "{different}", "{examples}"][..],
+            &["sh", "{example_file}"][..],
             &["tool", "{DIFF_FILE}", "{diff-file}", "{", "{diff_file"][..],
         ] {
             assert_eq!(unknown_placeholder(&argv(args)), None, "{args:?}");
         }
         assert_eq!(
             PLACEHOLDERS,
-            [DIFF_FILE_PLACEHOLDER, CHANGED_RANGES_PLACEHOLDER]
+            [
+                DIFF_FILE_PLACEHOLDER,
+                CHANGED_RANGES_PLACEHOLDER,
+                EXAMPLE_FILE_PLACEHOLDER
+            ]
         );
         assert_eq!(
             unknown_placeholder(&argv(&["stryker", "--mutate={changed_ranges}"])),
@@ -3528,6 +3755,7 @@ mod tests {
             r#"sh -c 'printf "%s\n" "$1"; cat "$1"' sh {diff_file}"#,
             5,
             dir.path(),
+            None,
         )
         .unwrap();
         assert!(run.status.success(), "{}", run.stderr);
@@ -3549,6 +3777,7 @@ mod tests {
             r#"sh -c 'printf "%s" "$1"' sh diff_file"#,
             5,
             dir.path(),
+            None,
         )
         .unwrap();
         assert_eq!(run.stdout, "diff_file");
