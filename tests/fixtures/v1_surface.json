@@ -1551,6 +1551,7 @@
       "list_gates"
     ],
     "placeholders": [
+      "{changed_ranges}",
       "{diff_file}"
     ],
     "policy_refusals": [

@@ -13875,14 +13875,14 @@ fn an_unknown_placeholder_in_a_command_stops_the_run_and_is_named() {
     };
     for table in [
         "command = \"echo {diff_fil}\"\n",
-        "command = \"echo ok\"\ncanary_command = \"echo --mutate={changed_ranges}\"\n",
+        "command = \"echo ok\"\ncanary_command = \"echo --mutate={changed_files}\"\n",
     ] {
         let out = run(table);
         assert_eq!(out.code, 2, "{table}: {}{}", out.stdout, out.stderr);
         let token = if table.contains("diff_fil") {
             "`{diff_fil}`"
         } else {
-            "`{changed_ranges}`"
+            "`{changed_files}`"
         };
         let said = format!("{}{}", out.stdout, out.stderr);
         assert!(
@@ -13892,6 +13892,88 @@ fn an_unknown_placeholder_in_a_command_stops_the_run_and_is_named() {
     }
     let known = run("command = \"echo {diff_file}\"\n");
     assert_eq!(known.code, 0, "{}{}", known.stdout, known.stderr);
+}
+
+/// `{changed_ranges}` is given the lines the change adds, as `path:start-end` entries
+/// (#1068): the tool receives the exact list in one argument. A change that adds no line
+/// does not run the command (examined 0, with a note), and a changed path the list cannot
+/// carry stops the run (exit 2).
+#[cfg(unix)]
+#[test]
+fn changed_ranges_is_given_the_added_lines_and_a_change_with_none_is_not_run() {
+    let logs = tempfile::tempdir().unwrap();
+    let log = logs.path().join("ranges.log");
+    let setup = || {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                (
+                    "discipline.toml",
+                    &format!(
+                        "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommand = \"sh -c 'printf %s \\\"$1\\\" > {}' sh --mutate={{changed_ranges}}\"\n",
+                        log.display()
+                    ),
+                ),
+                ("src/old.rs", "pub fn old() {}\npub fn older() {}\n"),
+            ],
+            "ci: configure a scoped command",
+        );
+        repo
+    };
+    let given = || std::fs::read_to_string(&log).ok();
+
+    let repo = setup();
+    let lib_lines = GOOD_LIB.lines().count();
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}// one\n// two\n"));
+    repo.write("src/new.rs", "pub fn a() {}\npub fn b() {}\n");
+    repo.commit("feat: add lines");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+    assert_eq!(
+        given().as_deref(),
+        Some(
+            format!(
+                "--mutate=src/lib.rs:{}-{},src/new.rs:1-2",
+                lib_lines + 1,
+                lib_lines + 2
+            )
+            .as_str()
+        )
+    );
+    std::fs::remove_file(&log).unwrap();
+
+    // A change that adds no line: the command is not run.
+    let repo = setup();
+    repo.write("src/old.rs", "pub fn old() {}\n");
+    repo.commit("chore: remove a function");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("command");
+    assert_eq!(outcome["examined"], 0);
+    assert!(
+        outcome["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("adds no line")),
+        "{outcome}"
+    );
+    assert_eq!(given(), None);
+
+    // A path that would read as an option is refused.
+    let repo = setup();
+    repo.write("-x.rs", "pub fn x() {}\n");
+    repo.commit("feat: add a file");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        format!("{}{}", run.stdout, run.stderr).contains("`-x.rs`"),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(given(), None);
 }
 
 /// The `cargo-mutants` preset's own command is given the change's diff (#844): the file
