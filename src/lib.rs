@@ -50,6 +50,7 @@ pub mod ratification;
 pub mod references;
 pub mod refusals;
 pub mod replay;
+pub mod replay_html;
 pub mod report;
 pub mod review_threads;
 pub mod routing;

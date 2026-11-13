@@ -223,12 +223,15 @@
       "lease take --steal",
       "lease take --ttl",
       "replay --config",
+      "replay --format",
       "replay --jobs",
       "replay --json",
       "replay --last",
       "replay --no-cache",
+      "replay --output",
       "replay --ref",
-      "replay -c"
+      "replay -c",
+      "replay -o"
     ],
     "cli.values": [
       "audit --format=html",
@@ -300,7 +303,10 @@
       "hook run --event=session-start",
       "hook run --event=stop",
       "init --profile=agent-guard",
-      "init --profile=observe"
+      "init --profile=observe",
+      "replay --format=html",
+      "replay --format=json",
+      "replay --format=text"
     ],
     "config.keys": [
       "audit",

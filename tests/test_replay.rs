@@ -612,3 +612,82 @@ fn a_second_replay_of_the_same_changes_reads_cached_verdicts() {
     let offline = replay(&repo, &[], &[("DISCIPLINE_ALLOW_COMMAND_CHANGE", "1")]);
     assert_eq!(cached(&offline), [false, false]);
 }
+
+#[test]
+fn replay_writes_one_self_contained_html_page_from_its_json() {
+    let (repo, weakening) = history();
+    // A subject that would run as markup or reorder the page if it were written raw.
+    repo.write("docs/more.md", "# More\n");
+    repo.commit("docs: <script>alert(1)</script> & \u{202E}more (#4)");
+
+    // No forge: the page names the blocked change and its finding, unlinked.
+    let page_path = repo.file("replay.html");
+    let run = repo.run(
+        &[
+            "replay",
+            "--last",
+            "3",
+            "--ref",
+            "main",
+            "--format",
+            "html",
+            "-o",
+            page_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    let page = std::fs::read_to_string(&page_path).unwrap();
+    std::fs::remove_file(&page_path).unwrap();
+    assert!(page.starts_with("<!doctype html>"), "{page}");
+    assert!(
+        page.contains("2 of the last 3 merged changes would have been blocked."),
+        "{page}"
+    );
+    assert!(page.contains(r#"id="g-assertion-reduction""#), "{page}");
+    assert!(page.contains("<code>assertion-reduction/"), "{page}");
+    assert!(page.contains("tests/a.rs:"), "{page}");
+    // The bidirectional override is itself what blocks #4.
+    assert!(page.contains(r#"id="g-instruction-smuggling""#), "{page}");
+    assert!(page.contains("none: the <code>origin</code> remote names no known forge"));
+    assert!(page.contains("Every change was checked."), "{page}");
+    // The hostile subject is escaped and its bidirectional override neutralised.
+    assert!(!page.contains("<script"), "{page}");
+    assert!(!page.contains('\u{202E}'), "{page}");
+    assert!(page.contains("docs: &lt;script&gt;alert(1)&lt;/script&gt; &amp; \u{FFFD}more"));
+
+    // `--format json` is `--json`.
+    let json = |args: &[&str]| {
+        let mut a = vec!["replay", "--last", "3", "--ref", "main"];
+        a.extend_from_slice(args);
+        let r = repo.run(&a, &[]);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        serde_json::from_str::<Value>(&r.stdout).unwrap()
+    };
+    assert_eq!(json(&["--json"]), json(&["--format", "json"]));
+
+    // On a known forge that cannot be read, each change links to the forge and the
+    // change that would be blocked is listed as could not check, with why.
+    let run = repo.run(
+        &["replay", "--last", "3", "--ref", "main", "--format", "html"],
+        &[("GITHUB_REPOSITORY", "o/r"), ("DISCIPLINE_NO_NETWORK", "1")],
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let page = run.stdout;
+    assert!(
+        page.contains(r#"<a href="https://github.com/o/r/pull/3">#3</a>"#),
+        "{page}"
+    );
+    assert!(
+        page.contains(&format!(
+            r#"href="https://github.com/o/r/commit/{weakening}""#
+        )),
+        "{page}"
+    );
+    assert!(page.contains(r#"id="r-forge""#), "{page}");
+    assert!(
+        page.contains("No change would have been blocked."),
+        "{page}"
+    );
+}

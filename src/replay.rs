@@ -373,7 +373,7 @@ fn lookup_failed_detail(error: &str, hint: Option<&str>) -> String {
 
 /// The error a case stopped on: the last line of its detail, without the
 /// `discipline check: error: ` prefix.
-fn last_line(detail: &str) -> String {
+pub(crate) fn last_line(detail: &str) -> String {
     let last = detail
         .lines()
         .rev()
@@ -954,6 +954,15 @@ fn check_change(
         detail,
         cached: false,
     })
+}
+
+/// The forge's web links for the repository in the working directory, from its `origin`
+/// remote (no request is made); `None` when it names no known forge.
+pub fn links() -> Option<crate::audit::Links> {
+    let repo = crate::gitctx::discover_repository(".").ok()?;
+    crate::forge::detect_for_repo(&repo)
+        .ok()
+        .map(|f| crate::audit::Links::for_forge(&f))
 }
 
 pub fn run(opts: &Options) -> Result<Summary> {

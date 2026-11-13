@@ -871,7 +871,7 @@ Replay the last N merged changes through a configuration: what it would have blo
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline replay\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-json\fR] [\fB\-\-no\-cache\fR] [\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline replay\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-no\-cache\fR] [\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -887,7 +887,25 @@ Branch whose history is replayed (default: origin\*(Aqs default branch, else mai
 Configuration under test (default: discipline.toml in the working tree)
 .TP
 \fB\-\-json\fR
-Print the summary as JSON
+Print the summary as JSON (the same as `\-\-format json`)
+.TP
+\fB\-\-format\fR \fI<FORMAT>\fR [default: text]
+Output format: `text`, `json`, or `html` (one self\-contained page, each change linked to the forge)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+text
+.IP \(bu 2
+json
+.IP \(bu 2
+html
+.RE
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
+Write the output to this file instead of stdout
 .TP
 \fB\-\-no\-cache\fR
 Check every change again: read no verdict from the replay cache and record none

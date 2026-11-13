@@ -310,8 +310,11 @@ _arguments "${_arguments_options[@]}" : \
 '--ref=[Branch whose history is replayed (default\: origin'\''s default branch, else main / master)]:REFERENCE:_default' \
 '-c+[Configuration under test (default\: discipline.toml in the working tree)]:CONFIG:_files' \
 '--config=[Configuration under test (default\: discipline.toml in the working tree)]:CONFIG:_files' \
+'--format=[Output format\: \`text\`, \`json\`, or \`html\` (one self-contained page, each change linked to the forge)]:FORMAT:(text json html)' \
+'-o+[Write the output to this file instead of stdout]:OUTPUT:_files' \
+'--output=[Write the output to this file instead of stdout]:OUTPUT:_files' \
 '--jobs=[Changes checked at once (default\: one per core, at most 4)]:N:_default' \
-'--json[Print the summary as JSON]' \
+'--json[Print the summary as JSON (the same as \`--format json\`)]' \
 '--no-cache[Check every change again\: read no verdict from the replay cache and record none]' \
 '-h[Print help]' \
 '--help[Print help]' \
