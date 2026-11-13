@@ -5548,6 +5548,18 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: a `{diff…}` / `{changed…}` placeholder discipline does not expand is named, and other braces are the tool's",
+        || {
+            use crate::guards::command::{split_command_line, unknown_placeholder, PLACEHOLDERS};
+            let read = |cmd: &str| -> Result<Option<String>> { Ok(unknown_placeholder(&split_command_line(cmd)?)) };
+            Ok(read("tool --diff={diff_fil}")?.as_deref() == Some("{diff_fil}")
+                && read("npx stryker run --mutate {changed_ranges}")?.as_deref() == Some("{changed_ranges}")
+                && read("cargo mutants --in-diff {diff_file}")?.is_none()
+                && read("jq '{different: .a}'")?.is_none()
+                && PLACEHOLDERS == ["{diff_file}"])
+        },
+    ),
+    (
         "command: base-tests overlays no test inside a source file, and names a changed source that holds one",
         || {
             use crate::guards::command::{base_test_files, inline_test_sources};

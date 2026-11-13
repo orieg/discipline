@@ -13857,6 +13857,43 @@ fn in_diff_cargo(log: &std::path::Path) -> tempfile::TempDir {
     dir
 }
 
+/// A `{diff…}` / `{changed…}` placeholder discipline does not expand stops the run
+/// (exit 2) and is named, in `command` and in `canary_command`, rather than reaching the
+/// tool as literal text. The control is the known `{diff_file}`, which runs.
+#[test]
+fn an_unknown_placeholder_in_a_command_stops_the_run_and_is_named() {
+    let run = |table: &str| {
+        let repo = Repo::new();
+        repo.commit_base(
+            "discipline.toml",
+            &format!("{CONFIG_HEAD}\n[gates.command]\nenabled = true\n{table}"),
+            "ci: configure a command",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// touched\n"));
+        repo.commit("chore: touch the library");
+        repo.run(&["check", "--format", "json", "--base", "main"], &[])
+    };
+    for table in [
+        "command = \"echo {diff_fil}\"\n",
+        "command = \"echo ok\"\ncanary_command = \"echo --mutate={changed_ranges}\"\n",
+    ] {
+        let out = run(table);
+        assert_eq!(out.code, 2, "{table}: {}{}", out.stdout, out.stderr);
+        let token = if table.contains("diff_fil") {
+            "`{diff_fil}`"
+        } else {
+            "`{changed_ranges}`"
+        };
+        let said = format!("{}{}", out.stdout, out.stderr);
+        assert!(
+            said.contains(token) && said.contains("`{diff_file}`"),
+            "{said}"
+        );
+    }
+    let known = run("command = \"echo {diff_file}\"\n");
+    assert_eq!(known.code, 0, "{}{}", known.stdout, known.stderr);
+}
+
 /// The `cargo-mutants` preset's own command is given the change's diff (#844): the file
 /// named after `--in-diff` holds it, under a plain run and under `--staged`, lies outside
 /// the working tree and is gone after the run. The control is the previous default, which
