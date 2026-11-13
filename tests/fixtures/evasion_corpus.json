@@ -3371,6 +3371,80 @@
       "verdict": {
         "known_miss": "#1088"
       }
+    },
+    {
+      "name": "md-link-to-deleted-file",
+      "base": {
+        "README.md": "# p\n\nSee [the guide](docs/guide.md).\n",
+        "docs/guide.md": "# guide\n"
+      },
+      "head": {
+        "docs/guide.md": null
+      },
+      "body": "removes: docs/guide.md folded into the README\n",
+      "enable": [
+        "citation-anchors"
+      ],
+      "verdict": {
+        "caught": [
+          "citation-anchors/link-target-removed"
+        ]
+      }
+    },
+    {
+      "name": "md-code-span-to-renamed-file",
+      "base": {
+        "README.md": "# p\n\nEdit `src/old.rs` to add a rule.\n",
+        "src/old.rs": "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n"
+      },
+      "head": {
+        "src/old.rs": null,
+        "src/new.rs": "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n"
+      },
+      "enable": [
+        "citation-anchors"
+      ],
+      "verdict": {
+        "caught": [
+          "citation-anchors/link-target-removed"
+        ]
+      }
+    },
+    {
+      "name": "md-link-follows-a-rename",
+      "base": {
+        "README.md": "# p\n\nEdit [the rules](src/old.rs).\n",
+        "src/old.rs": "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n"
+      },
+      "head": {
+        "src/old.rs": null,
+        "src/new.rs": "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n",
+        "README.md": "# p\n\nEdit [the rules](src/new.rs).\n"
+      },
+      "enable": [
+        "citation-anchors"
+      ],
+      "gate": "citation-anchors",
+      "verdict": "clean"
+    },
+    {
+      "name": "md-stale-link-line-deleted",
+      "base": {
+        "README.md": "# p\n\nSee [the guide](docs/guide.md) for the setup steps.\n",
+        "docs/guide.md": "# guide\n"
+      },
+      "head": {
+        "docs/guide.md": null,
+        "README.md": "# p\n"
+      },
+      "body": "removes: docs/guide.md folded into the README\n",
+      "enable": [
+        "citation-anchors"
+      ],
+      "gate": "citation-anchors",
+      "verdict": {
+        "known_miss": "#1087"
+      }
     }
   ]
 }

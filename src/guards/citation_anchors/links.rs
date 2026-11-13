@@ -7,8 +7,11 @@
 //! outside a list), code spans and HTML comments are not read. It reads inline links
 //! `[text](target "title")`, images `![alt](target)` and reference definitions
 //! `[label]: target`. A link or code span that wraps onto a second line is not read.
+//!
+//! It also gives the code spans of the same prose lines, for the paths a change removes
+//! (`citation-anchors/link-target-removed`, [`RemovedPaths`]).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// A link, image or reference-definition target, on a 1-based line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,8 +62,9 @@ fn is_list_item(trimmed: &str) -> bool {
 }
 
 /// `line` with code spans and HTML comments replaced by spaces. `in_comment` carries an
-/// HTML comment that is still open at the end of the line into the next one.
-fn mask_line(line: &str, in_comment: &mut bool) -> Vec<char> {
+/// HTML comment that is still open at the end of the line into the next one. The content
+/// of each code span is pushed onto `spans`.
+fn mask_line(line: &str, in_comment: &mut bool, spans: &mut Vec<String>) -> Vec<char> {
     let chars: Vec<char> = line.chars().collect();
     let mut out = Vec::with_capacity(chars.len());
     let mut i = 0;
@@ -110,6 +114,7 @@ fn mask_line(line: &str, in_comment: &mut bool) -> Vec<char> {
                 }
                 match close {
                     Some(end) => {
+                        spans.push(chars[i + run..end - run].iter().collect());
                         out.extend(std::iter::repeat_n(' ', end - i));
                         i = end;
                     }
@@ -265,7 +270,20 @@ fn inline_targets(chars: &[char]) -> Vec<String> {
 /// Every link, image and reference-definition target of a Markdown text, outside code
 /// and HTML comments, in order.
 pub fn extract_markdown_links(content: &str) -> Vec<MarkdownLink> {
+    extract_markdown_references(content).0
+}
+
+/// The content of every code span of a Markdown text, outside code blocks and HTML
+/// comments, in order, trimmed.
+pub fn extract_code_spans(content: &str) -> Vec<MarkdownLink> {
+    extract_markdown_references(content).1
+}
+
+/// The links ([`extract_markdown_links`]) and the code spans ([`extract_code_spans`]) of
+/// a Markdown text, read in one pass.
+pub fn extract_markdown_references(content: &str) -> (Vec<MarkdownLink>, Vec<MarkdownLink>) {
     let mut links = Vec::new();
+    let mut code_spans = Vec::new();
     let mut fence: Option<(char, usize)> = None;
     let mut in_comment = false;
     let mut prev_blank = true;
@@ -310,8 +328,13 @@ pub fn extract_markdown_links(content: &str) -> Vec<MarkdownLink> {
         }
         prev_blank = false;
 
-        let masked = mask_line(line, &mut in_comment);
+        let mut spans = Vec::new();
+        let masked = mask_line(line, &mut in_comment, &mut spans);
         let line_num = idx + 1;
+        code_spans.extend(spans.into_iter().map(|span| MarkdownLink {
+            line_num,
+            target: span.trim().to_string(),
+        }));
         if let Some(target) = reference_definition(&masked) {
             links.push(MarkdownLink { line_num, target });
             continue;
@@ -320,7 +343,7 @@ pub fn extract_markdown_links(content: &str) -> Vec<MarkdownLink> {
             links.push(MarkdownLink { line_num, target });
         }
     }
-    links
+    (links, code_spans)
 }
 
 /// Where a link target leads, for [`resolve_link_target`].
@@ -407,6 +430,110 @@ pub fn resolve_link_target(doc_path: &str, target: &str) -> LinkResolution {
     LinkResolution::Path {
         path: segments.join("/"),
         directory,
+    }
+}
+
+/// The repository path a code span names, read as a path only when the whole span is
+/// one: no whitespace, no scheme, no template syntax, not absolute. A span starting with
+/// `./` or `../` is resolved against the document's directory, like a link; any other is
+/// a repository-relative path. A trailing `:<line>` or `:<line>-<line>` is dropped
+/// (`src/lib.rs:12`). Nothing else is cut: prose is never searched for a path.
+pub fn resolve_code_span(doc_path: &str, span: &str) -> LinkResolution {
+    let span = span.trim();
+    if span.is_empty() || span.chars().any(char::is_whitespace) {
+        return LinkResolution::NotChecked;
+    }
+    let span = strip_line_suffix(span);
+    if span.starts_with("./") || span.starts_with("../") {
+        return resolve_link_target(doc_path, span);
+    }
+    if span.starts_with(['/', '\\', '#', '?', '-'])
+        || ["{{", "{%", "<%", "${"].iter().any(|t| span.contains(t))
+        || has_scheme(span)
+    {
+        return LinkResolution::NotChecked;
+    }
+    let directory = span.ends_with('/');
+    let mut segments = Vec::new();
+    for seg in span.split('/') {
+        match seg {
+            "" => {}
+            "." | ".." => return LinkResolution::NotChecked,
+            s => segments.push(s),
+        }
+    }
+    if segments.is_empty() {
+        return LinkResolution::NotChecked;
+    }
+    LinkResolution::Path {
+        path: segments.join("/"),
+        directory,
+    }
+}
+
+/// `text` without a trailing `:<digits>` or `:<digits>-<digits>`.
+fn strip_line_suffix(text: &str) -> &str {
+    let Some((head, tail)) = text.rsplit_once(':') else {
+        return text;
+    };
+    let numbers = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    let is_range = match tail.split_once('-') {
+        Some((a, b)) => numbers(a) && numbers(b),
+        None => numbers(tail),
+    };
+    if is_range && !head.is_empty() {
+        head
+    } else {
+        text
+    }
+}
+
+/// How a change removed a path a document still names ([`RemovedPaths::find`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Removal<'a> {
+    /// The file was deleted.
+    Deleted,
+    /// The file was renamed; the path it has now.
+    Renamed(&'a str),
+    /// A directory whose every file the change deleted or moved out.
+    Directory,
+}
+
+/// The paths a change removes: each deleted file, and the old path of each rename.
+#[derive(Debug, Default)]
+pub struct RemovedPaths(BTreeMap<String, Option<String>>);
+
+impl RemovedPaths {
+    /// From `(old path, Some(new path))` for a rename and `(path, None)` for a deletion.
+    pub fn new(removals: impl IntoIterator<Item = (String, Option<String>)>) -> Self {
+        RemovedPaths(removals.into_iter().collect())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// How the change removed `path`: the path itself (unless a directory was asked
+    /// for), or a directory holding a removed path. The caller checks that the head
+    /// tree no longer holds it.
+    pub fn find(&self, path: &str, directory: bool) -> Option<Removal<'_>> {
+        if path.is_empty() {
+            return None;
+        }
+        if !directory {
+            if let Some(renamed) = self.0.get(path) {
+                return Some(match renamed {
+                    Some(new) => Removal::Renamed(new),
+                    None => Removal::Deleted,
+                });
+            }
+        }
+        let prefix = format!("{path}/");
+        self.0
+            .range(prefix.clone()..)
+            .next()
+            .filter(|(p, _)| p.starts_with(&prefix))
+            .map(|_| Removal::Directory)
     }
 }
 
@@ -642,5 +769,98 @@ mod tests {
         let long = "x".repeat(200);
         assert_eq!(shown_target(&long).chars().count(), 120);
         assert!(shown_target(&long).ends_with("..."));
+    }
+
+    #[test]
+    fn code_spans_are_read_from_prose_only() {
+        let spans = |c: &str| -> Vec<(usize, String)> {
+            extract_code_spans(c)
+                .into_iter()
+                .map(|l| (l.line_num, l.target))
+                .collect()
+        };
+        assert_eq!(
+            spans("Edit `src/a.rs` and `` b`c ``.\n"),
+            vec![(1, "src/a.rs".to_string()), (1, "b`c".to_string())]
+        );
+        assert!(spans("```\n`src/a.rs`\n```\n").is_empty());
+        assert!(spans("<!-- `src/a.rs` -->\n").is_empty());
+        assert!(spans("text\n\n    `src/a.rs`\n").is_empty());
+        assert!(spans("an unclosed ` src/a.rs\n").is_empty());
+    }
+
+    #[test]
+    fn a_code_span_is_a_path_only_when_the_whole_span_is_one() {
+        assert_eq!(
+            resolve_code_span("docs/x.md", "src/lib.rs"),
+            path("src/lib.rs")
+        );
+        assert_eq!(
+            resolve_code_span("docs/x.md", "src/lib.rs:12"),
+            path("src/lib.rs")
+        );
+        assert_eq!(
+            resolve_code_span("docs/x.md", "src/lib.rs:12-20"),
+            path("src/lib.rs")
+        );
+        assert_eq!(
+            resolve_code_span("docs/x.md", "../src/lib.rs"),
+            path("src/lib.rs")
+        );
+        assert_eq!(resolve_code_span("docs/x.md", "./y.md"), path("docs/y.md"));
+        assert_eq!(
+            resolve_code_span("docs/x.md", "src/"),
+            LinkResolution::Path {
+                path: "src".to_string(),
+                directory: true
+            }
+        );
+        // `README.md:3` is a path with a line, not a scheme.
+        assert_eq!(resolve_code_span("x.md", "README.md:3"), path("README.md"));
+        // A colon that is not a line suffix stays part of the text.
+        assert_eq!(resolve_code_span("x.md", "a:b"), LinkResolution::NotChecked);
+        for span in [
+            "",
+            "cargo test",
+            "src/lib.rs and more",
+            "https://example.com/a.md",
+            "/etc/hosts",
+            "--config",
+            "#usage",
+            "{{ x }}/a.md",
+            "src/../lib.rs",
+        ] {
+            assert!(
+                !matches!(
+                    resolve_code_span("docs/x.md", span),
+                    LinkResolution::Path { ref path, .. } if !path.is_empty()
+                ),
+                "`{span}`"
+            );
+        }
+    }
+
+    #[test]
+    fn removed_paths_find_files_renames_and_emptied_directories() {
+        let removed = RemovedPaths::new([
+            ("docs/old.md".to_string(), None),
+            ("src/a.rs".to_string(), Some("src/b.rs".to_string())),
+            ("lib/gone/x.rs".to_string(), None),
+        ]);
+        assert_eq!(removed.find("docs/old.md", false), Some(Removal::Deleted));
+        assert_eq!(
+            removed.find("src/a.rs", false),
+            Some(Removal::Renamed("src/b.rs"))
+        );
+        assert_eq!(removed.find("lib/gone", true), Some(Removal::Directory));
+        assert_eq!(removed.find("lib/gone", false), Some(Removal::Directory));
+        assert_eq!(removed.find("lib", true), Some(Removal::Directory));
+        // Negative controls: a file asked for as a directory, a sibling that shares a
+        // prefix, a path the change kept, and the repository root.
+        assert_eq!(removed.find("docs/old.md", true), None);
+        assert_eq!(removed.find("lib/gon", true), None);
+        assert_eq!(removed.find("docs/new.md", false), None);
+        assert_eq!(removed.find("", true), None);
+        assert!(RemovedPaths::default().is_empty());
     }
 }

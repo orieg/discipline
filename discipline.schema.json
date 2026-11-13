@@ -358,6 +358,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "removed_link_exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Glob patterns of documents not read for link-target-removed: documents that name removed paths on purpose, such as changelogs, migration notes and archives"
+        },
         "require_online": {
           "description": "Whether offline operation fails closed when verifying tracker titles",
           "type": "boolean"

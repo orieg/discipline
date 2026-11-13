@@ -269,6 +269,7 @@ findings! {
     TRACKER_TITLE_MISMATCH = ["citation-anchors"], "tracker-title-mismatch", "Tracker Title Mismatch", Same;
     QUOTE_TOO_SHORT = ["citation-anchors"], "quote-too-short", "Quoted Text Too Short", Same;
     LINK_TARGET_MISSING = ["citation-anchors"], "link-target-missing", "Link Target Missing", Same;
+    LINK_TARGET_REMOVED = ["citation-anchors"], "link-target-removed", "Link Target Removed", Same;
 
     // suppression-delta
     SUPPRESSION_ADDED = ["suppression-delta"], "suppression-added", "Suppression Added", Message;
