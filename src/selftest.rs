@@ -5424,6 +5424,20 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: snapshot_marker reads one region's fence body, and a missing region is no text",
+        || {
+            use crate::guards::command::generated_region;
+
+            let doc = "intro\n<!-- generated:cli -->\n```text\nusage: x\n```\n<!-- /generated -->\n";
+            let body = generated_region(doc, "cli")
+                .is_ok_and(|(text, offset)| text == "usage: x" && offset == 3);
+            let missing = generated_region("intro\n", "cli").is_err();
+            let other = generated_region(doc, "cl").is_err();
+            let unclosed = generated_region("<!-- generated:cli -->\nx\n", "cli").is_err();
+            Ok(body && missing && other && unclosed)
+        },
+    ),
+    (
         "ci-integrity: a job, a step and a pin are located by their own key and value, not by text that contains them",
         || {
             use crate::guards::ci_integrity::{

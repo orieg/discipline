@@ -3240,6 +3240,37 @@
       },
       "gate": "assertion-reduction",
       "verdict": "clean"
+    },
+    {
+      "name": "cmd-snapshot-region-markers-deleted",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"cat out.txt\"\nsnapshot = \"docs/cli.md\"\nsnapshot_marker = \"cli\"\n",
+        "out.txt": "usage: x\n  -h\n",
+        "docs/cli.md": "# CLI\n\n<!-- generated:cli -->\n```text\nusage: x\n  -h\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "docs/cli.md": "# CLI\n\n```text\nusage: x\n  -v\n```\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "exit": 2
+      }
+    },
+    {
+      "name": "cmd-snapshot-region-rewritten-with-the-regression",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"cat out.txt\"\nsnapshot = \"docs/cli.md\"\nsnapshot_marker = \"cli\"\n",
+        "out.txt": "usage: x\n  -h\n",
+        "docs/cli.md": "# CLI\n\n<!-- generated:cli -->\n```text\nusage: x\n  -h\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "out.txt": "usage: x\n",
+        "docs/cli.md": "# CLI\n\n<!-- generated:cli -->\n```text\nusage: x\n```\n<!-- /generated -->\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "known_miss": "#1088"
+      }
     }
   ]
 }

@@ -217,6 +217,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("count_pattern", Direction::Evidence),
     ("zero_items_pattern", Direction::Evidence),
     ("snapshot", Direction::Evidence),
+    ("snapshot_marker", Direction::Evidence),
     ("constant_file", Direction::Evidence),
     ("constant_name", Direction::Evidence),
     ("deny_file", Direction::Evidence),

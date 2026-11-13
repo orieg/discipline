@@ -167,6 +167,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.commands[].preset` | string | *(per entry)* | Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom) |
 | `gates.command.commands[].snapshot` | string | *(per entry)* | Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs |
 | `gates.command.commands[].snapshot_ignore` | list | *(per entry)* | Regexes for lines left out of the snapshot comparison, on both sides |
+| `gates.command.commands[].snapshot_marker` | string | *(per entry)* | Name of the `&lt;!-- generated:&lt;name&gt; --&gt;` ... `&lt;!-- /generated --&gt;` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot` |
 | `gates.command.commands[].timeout_seconds` | integer | *(per entry)* | Execution timeout in seconds |
 | `gates.command.commands[].zero_items_pattern` | string | *(per entry)* | Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.count_pattern` | string | *(unset)* | Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
@@ -178,6 +179,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.command.snapshot` | string | *(unset)* | Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs. Needs the table's own command or preset: entries do not inherit it |
 | `gates.command.snapshot_ignore` | list | `[]` | Regexes for lines left out of the snapshot comparison, on both sides |
+| `gates.command.snapshot_marker` | string | *(unset)* | Name of the `&lt;!-- generated:&lt;name&gt; --&gt;` ... `&lt;!-- /generated --&gt;` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot` |
 | `gates.command.timeout_seconds` | integer | *(unset)* | Execution timeout in seconds (default: 60s) |
 | `gates.command.zero_items_pattern` | string | *(unset)* | Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.commit-provenance.agent_markers` | list | *(12 entries)* | Substrings of a trailer line, author name or author email that identify an agent-produced commit |

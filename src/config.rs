@@ -1833,6 +1833,9 @@ pub struct CommandGate {
     pub canary_expected_diagnostic: Option<String>,
     /// Repository-relative path of a committed file the command's stdout must match.
     pub snapshot: Option<String>,
+    /// Name of the `<!-- generated:<name> -->` region of `snapshot` the stdout must
+    /// match, in place of the whole file.
+    pub snapshot_marker: Option<String>,
     /// Regexes for lines left out of the snapshot comparison, on both sides.
     pub snapshot_ignore: Vec<String>,
     /// Multi-command suite support.
@@ -1856,6 +1859,7 @@ impl Default for CommandGate {
             canary_command: None,
             canary_expected_diagnostic: None,
             snapshot: None,
+            snapshot_marker: None,
             snapshot_ignore: Vec::new(),
             commands: Vec::new(),
         }
@@ -1878,6 +1882,9 @@ pub struct CommandEntry {
     pub canary_expected_diagnostic: Option<String>,
     /// Repository-relative path of a committed file the command's stdout must match.
     pub snapshot: Option<String>,
+    /// Name of the `<!-- generated:<name> -->` region of `snapshot` the stdout must
+    /// match, in place of the whole file.
+    pub snapshot_marker: Option<String>,
     /// Regexes for lines left out of the snapshot comparison, on both sides.
     pub snapshot_ignore: Vec<String>,
 }

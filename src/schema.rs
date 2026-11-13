@@ -479,6 +479,7 @@ pub fn generate_schema() -> Value {
                 "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
                 "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs. Needs the table's own command or preset: entries do not inherit it" },
                 "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" },
+                "snapshot_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`" },
                 "commands": {
                     "type": "array",
                     "items": { "$ref": "#/$defs/CommandEntry" },
@@ -502,7 +503,8 @@ pub fn generate_schema() -> Value {
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
                     "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
                     "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs" },
-                    "snapshot_ignore": { "$ref": "#/$defs/StringList", "description": "Regexes for lines left out of the snapshot comparison, on both sides" }
+                    "snapshot_ignore": { "$ref": "#/$defs/StringList", "description": "Regexes for lines left out of the snapshot comparison, on both sides" },
+                    "snapshot_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`" }
                 }
             },
             "DependencyDeltaGate": gate_table(json!({

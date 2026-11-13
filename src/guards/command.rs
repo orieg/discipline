@@ -15,6 +15,8 @@
 //! - `snapshot`: stdout must match a committed file, line by line, read before any command
 //!   runs (exit 2 when the output cannot be compared: cut off at the capture limit, not
 //!   UTF-8, empty, no file, a symbolic link, or a file past the capture limit)
+//! - `snapshot_marker`: the same comparison against one `<!-- generated:<name> -->` region
+//!   of the snapshot file (exit 2 when the region is missing, duplicated or unclosed)
 //! - `{diff_file}` in a command's arguments: the path of a file holding the change's diff,
 //!   written only for a command that names it and removed after it ran (exit 2 when the
 //!   diff cannot be read, written or removed)
@@ -863,16 +865,32 @@ struct ResolvedCommand {
     committed_snapshot: Option<CommittedSnapshot>,
 }
 
-/// A committed file the command's stdout must match.
+/// A committed file the command's stdout must match, or one marked region of it.
 struct Snapshot {
     path: String,
+    /// `snapshot_marker`: the name of the region compared in place of the whole file.
+    marker: Option<String>,
     ignore: Vec<regex::Regex>,
+}
+
+impl Snapshot {
+    /// How findings and errors name what is compared: the file, or its region.
+    fn describe(&self) -> String {
+        match &self.marker {
+            Some(m) => format!("snapshot `{}` (region `{m}`)", self.path),
+            None => format!("snapshot `{}`", self.path),
+        }
+    }
 }
 
 /// What the head side holds at a snapshot's path, read before any command runs so that
 /// no command of the run can write the file it is compared with.
 enum CommittedSnapshot {
-    Text(String),
+    /// The text compared, and how many lines of the file come before its first line.
+    Text {
+        text: String,
+        offset: usize,
+    },
     Missing,
     /// Present, and not a file the output can be compared with; the sentence says why.
     Unusable(String),
@@ -882,7 +900,11 @@ enum CommittedSnapshot {
 /// working tree), the side every gate reads the change from. A symbolic link is refused:
 /// it would compare the output with whatever the link names. A file larger than
 /// [`MAX_CAPTURE_BYTES`] is refused unread: no captured output can equal it.
-fn read_committed_snapshot(ctx: &Context, path: &str) -> Result<CommittedSnapshot> {
+fn read_committed_snapshot(
+    ctx: &Context,
+    path: &str,
+    marker: Option<&str>,
+) -> Result<CommittedSnapshot> {
     let unusable = |why: String| Ok(CommittedSnapshot::Unusable(why));
     let on_disk = std::fs::symlink_metadata(ctx.git.root().join(path)).ok();
     if ctx.git.is_symlink(path)? || on_disk.as_ref().is_some_and(|m| m.file_type().is_symlink()) {
@@ -911,10 +933,106 @@ fn read_committed_snapshot(ctx: &Context, path: &str) -> Result<CommittedSnapsho
     if bytes.len() as u64 > MAX_CAPTURE_BYTES {
         return unusable(too_large(bytes.len() as u64));
     }
-    match String::from_utf8(bytes) {
-        Ok(text) => Ok(CommittedSnapshot::Text(text)),
-        Err(_) => unusable(format!("snapshot `{path}` is not valid UTF-8")),
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(_) => return unusable(format!("snapshot `{path}` is not valid UTF-8")),
+    };
+    let Some(marker) = marker else {
+        return Ok(CommittedSnapshot::Text { text, offset: 0 });
+    };
+    match generated_region(&text, marker) {
+        Ok((text, offset)) => Ok(CommittedSnapshot::Text { text, offset }),
+        Err(why) => unusable(format!("snapshot `{path}`: {why}")),
     }
+}
+
+/// The line that opens the region named `marker`: `<!-- generated:<marker> -->`, with
+/// any space around the name, as `discipline docs` writes its own regions.
+fn opens_region(line: &str) -> Option<&str> {
+    line.trim()
+        .strip_prefix("<!-- generated:")
+        .and_then(|rest| rest.strip_suffix("-->"))
+        .map(str::trim)
+}
+
+/// The line that closes a region.
+const REGION_END: &str = "<!-- /generated -->";
+
+/// The content of the region `marker` of `text`, between its opening line and the next
+/// [`REGION_END`], with the number of lines of `text` before the content's first line.
+/// A region whose content is one fenced code block (blank lines around it aside) gives the
+/// block's body: Markdown shows command output in a fence, and the command prints none.
+/// A region that is missing, opened twice or never closed is an error, never an empty
+/// text: deleting the markers must not turn the comparison into a pass.
+pub fn generated_region(text: &str, marker: &str) -> std::result::Result<(String, usize), String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let opens: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| opens_region(l) == Some(marker))
+        .map(|(i, _)| i)
+        .collect();
+    let start = match opens.as_slice() {
+        [] => return Err(format!("has no `<!-- generated:{marker} -->` region")),
+        [one] => one + 1,
+        _ => {
+            return Err(format!(
+                "opens the region `{marker}` {} times; a region is opened once",
+                opens.len()
+            ))
+        }
+    };
+    let Some(len) = lines[start..].iter().position(|l| l.trim() == REGION_END) else {
+        return Err(format!(
+            "the region `{marker}` is not closed by `{REGION_END}`"
+        ));
+    };
+    let mut body = &lines[start..start + len];
+    let mut offset = start;
+    while body.first().is_some_and(|l| l.trim().is_empty()) {
+        body = &body[1..];
+        offset += 1;
+    }
+    while body.last().is_some_and(|l| l.trim().is_empty()) {
+        body = &body[..body.len() - 1];
+    }
+    if let Some(inner) = fence_body(body) {
+        body = &body[1..=inner];
+        offset += 1;
+    } else {
+        // Not one fenced block: the whole region, blank edges included, is compared.
+        body = &lines[start..start + len];
+        offset = start;
+    }
+    Ok((body.join("\n"), offset))
+}
+
+/// When `lines` is exactly one fenced code block (an opening fence of three or more
+/// backticks or tildes, its closing fence as the last line, and no closing fence of that
+/// kind between), the index of the last line of its body; `Some(0)` for an empty block.
+fn fence_body(lines: &[&str]) -> Option<usize> {
+    let fence = |l: &str| -> Option<(char, usize)> {
+        let t = l.trim_start();
+        let c = t.chars().next().filter(|c| *c == '`' || *c == '~')?;
+        let n = t.chars().take_while(|x| *x == c).count();
+        (n >= 3).then_some((c, n))
+    };
+    let (first, last) = (lines.first()?, lines.last()?);
+    if lines.len() < 2 {
+        return None;
+    }
+    let (c, n) = fence(first)?;
+    let closes = |l: &str| {
+        fence(l).is_some_and(|(k, m)| k == c && m >= n) && l.trim().chars().all(|x| x == c)
+    };
+    if !closes(last) {
+        return None;
+    }
+    let inner = &lines[1..lines.len() - 1];
+    if inner.iter().any(|l| closes(l)) {
+        return None;
+    }
+    Some(inner.len())
 }
 
 /// [`read_committed_snapshot`] for a command's snapshot, when it has one.
@@ -923,7 +1041,7 @@ fn committed_snapshot(
     snapshot: Option<&Snapshot>,
 ) -> Result<Option<CommittedSnapshot>> {
     snapshot
-        .map(|s| read_committed_snapshot(ctx, &s.path))
+        .map(|s| read_committed_snapshot(ctx, &s.path, s.marker.as_deref()))
         .transpose()
 }
 
@@ -965,6 +1083,7 @@ fn refuse_snapshot_on_base_tests(
 fn resolve_snapshot(
     owner: &str,
     snapshot: Option<&String>,
+    snapshot_marker: Option<&String>,
     snapshot_ignore: &[String],
     preset_def: Option<&presets::PresetDefinition>,
 ) -> Result<Option<Snapshot>> {
@@ -973,13 +1092,28 @@ fn resolve_snapshot(
         .cloned()
         .or_else(|| preset_def.and_then(|d| d.snapshot.map(str::to_string)));
     let Some(path) = path else {
-        if !snapshot_ignore.is_empty() {
-            return Err(config_error(format!(
-                "{owner} sets `snapshot_ignore` without `snapshot`: there is no snapshot to compare"
-            )));
+        for (key, set) in [
+            ("snapshot_ignore", !snapshot_ignore.is_empty()),
+            ("snapshot_marker", snapshot_marker.is_some()),
+        ] {
+            if set {
+                return Err(config_error(format!(
+                    "{owner} sets `{key}` without `snapshot`: there is no snapshot to compare"
+                )));
+            }
         }
         return Ok(None);
     };
+    if let Some(m) = snapshot_marker {
+        let valid = !m.is_empty()
+            && m.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'));
+        if !valid {
+            return Err(config_error(format!(
+                "{owner} `snapshot_marker = \"{m}\"` must be a region name of letters, digits, `-`, `_`, `.` or `:`, as in `<!-- generated:<name> -->`"
+            )));
+        }
+    }
     let as_path = Path::new(&path);
     let escapes = as_path.components().any(|c| {
         !matches!(
@@ -1006,7 +1140,11 @@ fn resolve_snapshot(
         })?;
         ignore.push(re);
     }
-    Ok(Some(Snapshot { path, ignore }))
+    Ok(Some(Snapshot {
+        path,
+        marker: snapshot_marker.cloned(),
+        ignore,
+    }))
 }
 
 /// The policy files of a command: the preset's, with the preset's own snapshot replaced by
@@ -1224,6 +1362,7 @@ fn resolve_table_command(
         let snapshot = resolve_snapshot(
             "`[gates.command]`",
             gate.snapshot.as_ref(),
+            gate.snapshot_marker.as_ref(),
             &gate.snapshot_ignore,
             preset_def,
         )?;
@@ -1252,11 +1391,16 @@ fn resolve_table_command(
             committed_snapshot: committed_snapshot(ctx, snapshot.as_ref())?,
             snapshot,
         });
-    } else if gate.snapshot.is_some() || !gate.snapshot_ignore.is_empty() {
+    } else if gate.snapshot.is_some()
+        || gate.snapshot_marker.is_some()
+        || !gate.snapshot_ignore.is_empty()
+    {
         // Nothing would compare it: the table runs no command of its own, and an entry
         // does not inherit the table's snapshot.
         let key = if gate.snapshot.is_some() {
             "snapshot"
+        } else if gate.snapshot_marker.is_some() {
+            "snapshot_marker"
         } else {
             "snapshot_ignore"
         };
@@ -1346,6 +1490,7 @@ fn resolve_entry_commands(
         let snapshot = resolve_snapshot(
             &format!("command entry `{}`", entry.name),
             entry.snapshot.as_ref(),
+            entry.snapshot_marker.as_ref(),
             &entry.snapshot_ignore,
             preset_def,
         )?;
@@ -1481,8 +1626,9 @@ fn evaluate_one_command(
             }
         } else {
             outcome.notes.push(format!(
-                "command `{}`: snapshot `{}` not compared: the command failed",
-                item.name, snap.path
+                "command `{}`: {} not compared: the command failed",
+                item.name,
+                snap.describe()
             ));
         }
     }
@@ -1863,22 +2009,22 @@ fn check_snapshot(
     let name = &item.name;
     if run.stdout_truncated {
         return cannot(format!(
-            "command `{name}`: stdout went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read, so it cannot be compared with snapshot `{}`",
-            snap.path
+            "command `{name}`: stdout went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read, so it cannot be compared with {}",
+            snap.describe()
         ));
     }
     if run.stdout_lossy {
         return cannot(format!(
-            "command `{name}`: stdout is not valid UTF-8, so it cannot be compared with snapshot `{}`",
-            snap.path
+            "command `{name}`: stdout is not valid UTF-8, so it cannot be compared with {}",
+            snap.describe()
         ));
     }
-    let text = match item
+    let (text, offset) = match item
         .committed_snapshot
         .as_ref()
         .unwrap_or(&CommittedSnapshot::Missing)
     {
-        CommittedSnapshot::Text(text) => text,
+        CommittedSnapshot::Text { text, offset } => (text, *offset),
         CommittedSnapshot::Missing => {
             if ctx.git.base_content(&snap.path)?.is_some() {
                 // Reported as `policy-file-deleted`.
@@ -1894,8 +2040,8 @@ fn check_snapshot(
     let output = snapshot_lines(&run.stdout, &snap.ignore);
     if output.is_empty() && !item.allow_zero {
         return cannot(format!(
-            "command `{name}`: stdout has no lines to compare with snapshot `{}`; an empty output never matches (set `allow_zero = true` if the snapshot is meant to be empty)",
-            snap.path
+            "command `{name}`: stdout has no lines to compare with {}; an empty output never matches (set `allow_zero = true` if the snapshot is meant to be empty)",
+            snap.describe()
         ));
     }
     let snapshot = snapshot_lines(text, &snap.ignore);
@@ -1912,21 +2058,27 @@ fn check_snapshot(
     let mut v = Violation::new(
         &crate::findings::SNAPSHOT_MISMATCH,
         format!(
-            "Command `{name}` output differs from snapshot `{}`: {} line(s) only in the output, {} only in the snapshot{order}; first difference at snapshot {}, output {}.",
-            snap.path,
+            "Command `{name}` output differs from {}: {} line(s) only in the output, {} only in the snapshot{order}; first difference at snapshot {}, output {}.",
+            snap.describe(),
             diff.only_in_output,
             diff.only_in_snapshot,
-            at(diff.first_difference.0),
+            at(diff.first_difference.0.map(|n| n + offset)),
             at(diff.first_difference.1),
         ),
         "",
     );
-    v.remediation = format!(
-        "Run `{}`, review the difference, and commit its output as `{}`.",
-        item.command, snap.path
-    );
+    v.remediation = match &snap.marker {
+        Some(m) => format!(
+            "Run `{}`, review the difference, and paste its output into `{}` between `<!-- generated:{m} -->` and `{REGION_END}` (inside the fenced block, when the region holds one).",
+            item.command, snap.path
+        ),
+        None => format!(
+            "Run `{}`, review the difference, and commit its output as `{}`.",
+            item.command, snap.path
+        ),
+    };
     v.file = Some(snap.path.clone());
-    v.line = diff.first_difference.0;
+    v.line = diff.first_difference.0.map(|n| n + offset);
     Ok(Some(v))
 }
 
@@ -2932,24 +3084,119 @@ mod tests {
     fn resolve_snapshot_refuses_bad_paths_bad_patterns_and_orphan_ignores() {
         let s = |p: &str| Some(p.to_string());
         let err = |r: Result<Option<Snapshot>>| format!("{:#}", r.err().expect("refused"));
-        assert!(err(resolve_snapshot("t", s("../x").as_ref(), &[], None)).contains("relative"));
-        assert!(err(resolve_snapshot("t", s("/etc/x").as_ref(), &[], None)).contains("relative"));
-        assert!(err(resolve_snapshot("t", s("").as_ref(), &[], None)).contains("relative"));
+        assert!(
+            err(resolve_snapshot("t", s("../x").as_ref(), None, &[], None)).contains("relative")
+        );
+        assert!(
+            err(resolve_snapshot("t", s("/etc/x").as_ref(), None, &[], None)).contains("relative")
+        );
+        assert!(err(resolve_snapshot("t", s("").as_ref(), None, &[], None)).contains("relative"));
         assert!(err(resolve_snapshot(
             "t",
             s("a.txt").as_ref(),
+            None,
             &["(".into()],
             None
         ))
         .contains("not a valid regex"));
-        assert!(err(resolve_snapshot("t", None, &["^#".into()], None)).contains("without"));
+        assert!(err(resolve_snapshot("t", None, None, &["^#".into()], None)).contains("without"));
 
-        let ok = resolve_snapshot("t", s("api/a.txt").as_ref(), &["^#".into()], None)
+        let ok = resolve_snapshot("t", s("api/a.txt").as_ref(), None, &["^#".into()], None)
             .unwrap()
             .unwrap();
         assert_eq!(ok.path, "api/a.txt");
         assert_eq!(ok.ignore.len(), 1);
-        assert!(resolve_snapshot("t", None, &[], None).unwrap().is_none());
+        assert!(resolve_snapshot("t", None, None, &[], None)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn snapshot_marker_needs_a_snapshot_and_a_region_name() {
+        let s = |p: &str| Some(p.to_string());
+        let err = |r: Result<Option<Snapshot>>| format!("{:#}", r.err().expect("refused"));
+        assert!(
+            err(resolve_snapshot("t", None, s("cli").as_ref(), &[], None))
+                .contains("`snapshot_marker` without `snapshot`")
+        );
+        for bad in ["", "a b", "x-->", "<!--"] {
+            assert!(
+                err(resolve_snapshot(
+                    "t",
+                    s("d.md").as_ref(),
+                    s(bad).as_ref(),
+                    &[],
+                    None
+                ))
+                .contains("region name"),
+                "{bad:?}"
+            );
+        }
+        let ok = resolve_snapshot(
+            "t",
+            s("d.md").as_ref(),
+            s("gates:cli-help").as_ref(),
+            &[],
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(ok.marker.as_deref(), Some("gates:cli-help"));
+        assert_eq!(ok.describe(), "snapshot `d.md` (region `gates:cli-help`)");
+    }
+
+    #[test]
+    fn generated_region_reads_the_fence_body_or_the_whole_region() {
+        // One fenced block: its body, offset to the body's first line in the file.
+        let doc = "# T\n\n<!-- generated:cli -->\n\n```text\nusage: x\n  -h\n```\n\n<!-- /generated -->\nafter\n";
+        assert_eq!(
+            generated_region(doc, "cli").unwrap(),
+            ("usage: x\n  -h".to_string(), 5)
+        );
+        // Spaces around the name, and tildes.
+        let doc = "<!-- generated: cli -->\n~~~~\na\n~~~~\n<!-- /generated -->\n";
+        assert_eq!(generated_region(doc, "cli").unwrap(), ("a".to_string(), 2));
+        // An empty block is an empty body, not the fence lines.
+        let doc = "<!-- generated:cli -->\n```\n```\n<!-- /generated -->\n";
+        assert_eq!(generated_region(doc, "cli").unwrap(), (String::new(), 2));
+        // Not one block (prose beside it, two blocks, an unclosed fence): the whole region.
+        for inner in [
+            "intro\n```\na\n```",
+            "```\na\n```\n```\nb\n```",
+            "```\na",
+            "| a | b |",
+        ] {
+            let doc = format!("<!-- generated:cli -->\n{inner}\n<!-- /generated -->\n");
+            assert_eq!(
+                generated_region(&doc, "cli").unwrap(),
+                (inner.to_string(), 1),
+                "{inner:?}"
+            );
+        }
+        // A shorter closing fence does not close a longer opening one.
+        let doc = "<!-- generated:cli -->\n````\na\n```\n<!-- /generated -->\n";
+        assert_eq!(generated_region(doc, "cli").unwrap().0, "````\na\n```");
+    }
+
+    #[test]
+    fn generated_region_refuses_a_missing_repeated_or_unclosed_region() {
+        let missing = generated_region("<!-- generated:other -->\nx\n<!-- /generated -->\n", "cli");
+        assert!(missing
+            .unwrap_err()
+            .contains("has no `<!-- generated:cli -->` region"));
+        let twice = generated_region(
+            "<!-- generated:cli -->\na\n<!-- /generated -->\n<!-- generated:cli -->\nb\n<!-- /generated -->\n",
+            "cli",
+        );
+        assert!(twice.unwrap_err().contains("2 times"));
+        let open = generated_region("<!-- generated:cli -->\na\n", "cli");
+        assert!(open.unwrap_err().contains("not closed"));
+        // A marker that names another region with this one as a prefix is not this one.
+        let prefix = generated_region(
+            "<!-- generated:cli-help -->\na\n<!-- /generated -->\n",
+            "cli",
+        );
+        assert!(prefix.is_err());
     }
 
     #[test]
@@ -2958,7 +3205,7 @@ mod tests {
         assert_eq!(preset.default_command, "cargo public-api --simplified");
         assert_eq!(preset.snapshot, Some("public-api.txt"));
 
-        let snap = resolve_snapshot("t", None, &[], Some(preset))
+        let snap = resolve_snapshot("t", None, None, &[], Some(preset))
             .unwrap()
             .unwrap();
         assert_eq!(snap.path, "public-api.txt");
@@ -2968,9 +3215,15 @@ mod tests {
         );
 
         // A configured path replaces the preset's file as the protected policy file.
-        let moved = resolve_snapshot("t", Some(&"api/surface.txt".to_string()), &[], Some(preset))
-            .unwrap()
-            .unwrap();
+        let moved = resolve_snapshot(
+            "t",
+            Some(&"api/surface.txt".to_string()),
+            None,
+            &[],
+            Some(preset),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             policy_files_for(Some(preset), Some(&moved)),
             ["api/surface.txt"]
@@ -2978,7 +3231,7 @@ mod tests {
 
         // Presets without a snapshot keep their policy files and compare nothing.
         let deny = presets::resolve_preset("cargo-deny").unwrap();
-        assert!(resolve_snapshot("t", None, &[], Some(deny))
+        assert!(resolve_snapshot("t", None, None, &[], Some(deny))
             .unwrap()
             .is_none());
         assert_eq!(policy_files_for(Some(deny), None), ["deny.toml"]);

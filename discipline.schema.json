@@ -444,6 +444,10 @@
           "$ref": "#/$defs/StringList",
           "description": "Regexes for lines left out of the snapshot comparison, on both sides"
         },
+        "snapshot_marker": {
+          "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`",
+          "type": "string"
+        },
         "timeout_seconds": {
           "description": "Execution timeout in seconds",
           "type": "integer"
@@ -517,6 +521,10 @@
         "snapshot_ignore": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Regexes for lines left out of the snapshot comparison, on both sides"
+        },
+        "snapshot_marker": {
+          "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`",
+          "type": "string"
         },
         "timeout_seconds": {
           "description": "Execution timeout in seconds (default: 60s)",
