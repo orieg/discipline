@@ -1350,6 +1350,18 @@
       "verdict": "holds"
     },
     {
+      "id": "gate-changed-line-coverage",
+      "category": "gates",
+      "claim": "a line the change adds that the coverage report lists as never run",
+      "source": "docs/GATES.md:changed-line-coverage",
+      "code": "src/guards/changed_line_coverage.rs:evaluate_changed_line_coverage",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::changed_line_coverage_reports_a_never_run_added_line_and_honours_its_waiver",
+        "tests/test_gates_e2e.rs::changed_line_coverage_refuses_a_report_the_change_could_have_written"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "gate-version-lockstep",
       "category": "gates",
       "claim": "version declarations across headers, manifests, and files must remain in lockstep",

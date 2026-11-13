@@ -86,6 +86,7 @@ pub fn generate_schema() -> Value {
             "citation-anchors" => "#/$defs/CitationAnchorsGate",
             "claim-labels" => "#/$defs/ClaimLabelsGate",
             "companion-edit" => "#/$defs/CompanionEditGate",
+            "changed-line-coverage" => "#/$defs/ChangedLineCoverageGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -700,6 +701,10 @@ pub fn generate_schema() -> Value {
                 "diff_only": { "type": "boolean", "description": "Whether to inspect changed lines only rather than the whole file" },
                 "extra_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional regex patterns treated as verification claims" },
                 "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns that exempt a matching line from verification claim inspection" }
+            })),
+            "ChangedLineCoverageGate": gate_table(json!({
+                "report": { "type": "string", "description": "Repository-relative path of the coverage report the test run writes; a tracked file, a symlink or a path outside the repository stops the run" },
+                "format": { "type": "string", "enum": ["lcov", "cobertura"], "description": "The report's format: an LCOV tracefile or a Cobertura XML report" }
             })),
             "CompanionEditGate": gate_table(json!({
                 "rules": {

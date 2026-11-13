@@ -25,6 +25,7 @@ fn dogfood_config_loads_with_every_available_gate_on() {
             || gate.id == "mechanism-sections"
             || gate.id == "claim-labels"
             || gate.id == "companion-edit"
+            || gate.id == "changed-line-coverage"
         {
             continue;
         }
@@ -322,6 +323,7 @@ name = "my-test-proj"
             || g.id == "mechanism-sections"
             || g.id == "claim-labels"
             || g.id == "companion-edit"
+            || g.id == "changed-line-coverage"
         {
             assert!(
                 !cfg.gates.settings(g.id).unwrap().enabled(),
@@ -769,6 +771,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("mechanism-sections", false, Severity::Error),
     ("claim-labels", false, Severity::Warning),
     ("companion-edit", false, Severity::Error),
+    ("changed-line-coverage", false, Severity::Error),
 ];
 
 #[test]

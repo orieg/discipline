@@ -124,6 +124,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("min_tests", Direction::Floor),
     ("min_quote_chars", Direction::Floor),
     ("test_report", Direction::Evidence),
+    ("report", Direction::Evidence),
+    ("format", Direction::Evidence),
     ("base_report", Direction::Evidence),
     ("head_report", Direction::Evidence),
     ("min_assertions_per_test", Direction::Floor),
