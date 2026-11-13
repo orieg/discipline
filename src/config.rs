@@ -1852,6 +1852,12 @@ pub struct CommandGate {
     pub snapshot_marker: Option<String>,
     /// Regexes for lines left out of the snapshot comparison, on both sides.
     pub snapshot_ignore: Vec<String>,
+    /// Repository-relative path of a document whose example `{example_file}` hands to the
+    /// command as a file.
+    pub example: Option<String>,
+    /// Name of the `<!-- generated:<name> -->` region of `example` that is the example, in
+    /// place of the whole file.
+    pub example_marker: Option<String>,
     /// Multi-command suite support.
     pub commands: Vec<CommandEntry>,
 }
@@ -1875,6 +1881,8 @@ impl Default for CommandGate {
             snapshot: None,
             snapshot_marker: None,
             snapshot_ignore: Vec::new(),
+            example: None,
+            example_marker: None,
             commands: Vec::new(),
         }
     }
@@ -1901,6 +1909,12 @@ pub struct CommandEntry {
     pub snapshot_marker: Option<String>,
     /// Regexes for lines left out of the snapshot comparison, on both sides.
     pub snapshot_ignore: Vec<String>,
+    /// Repository-relative path of a document whose example `{example_file}` hands to the
+    /// command as a file.
+    pub example: Option<String>,
+    /// Name of the `<!-- generated:<name> -->` region of `example` that is the example, in
+    /// place of the whole file.
+    pub example_marker: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

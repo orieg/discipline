@@ -5424,6 +5424,18 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: `{example_file}` is a placeholder, and `{example_…}` typos are refused",
+        || {
+            use crate::guards::command::{split_command_line, takes_example_file, unknown_placeholder};
+            let named = takes_example_file(&split_command_line("sh {example_file}")?);
+            let typo = unknown_placeholder(&split_command_line("sh {example_fil}")?).as_deref()
+                == Some("{example_fil}");
+            let known = unknown_placeholder(&split_command_line("sh {example_file}")?).is_none();
+            let other = unknown_placeholder(&split_command_line("jq '{examples}'")?).is_none();
+            Ok(named && typo && known && other)
+        },
+    ),
+    (
         "command: snapshot_marker reads one region's fence body, and a missing region is no text",
         || {
             use crate::guards::command::generated_region;
@@ -5562,7 +5574,7 @@ const CASES: &[Case] = &[
         },
     ),
     (
-        "command: a `{diff…}` / `{changed…}` placeholder discipline does not expand is named, and other braces are the tool's",
+        "command: a `{diff…}` / `{changed…}` / `{example…}` placeholder discipline does not expand is named, and other braces are the tool's",
         || {
             use crate::guards::command::{split_command_line, unknown_placeholder, PLACEHOLDERS};
             let read = |cmd: &str| -> Result<Option<String>> { Ok(unknown_placeholder(&split_command_line(cmd)?)) };
@@ -5571,7 +5583,7 @@ const CASES: &[Case] = &[
                 && read("cargo mutants --in-diff {diff_file}")?.is_none()
                 && read("jq '{different: .a}'")?.is_none()
                 && read("npx stryker run --mutate {changed_ranges}")?.is_none()
-                && PLACEHOLDERS == ["{diff_file}", "{changed_ranges}"])
+                && PLACEHOLDERS == ["{diff_file}", "{changed_ranges}", "{example_file}"])
         },
     ),
     (

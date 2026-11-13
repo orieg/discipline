@@ -3328,6 +3328,49 @@
       "verdict": {
         "known_miss": "#1088"
       }
+    },
+    {
+      "name": "cmd-example-markers-deleted",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"sh {example_file}\"\nexample = \"docs/guide.md\"\nexample_marker = \"step\"\n",
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\ntest -f docs/guide.md\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "docs/guide.md": "# Guide\n\n```sh\nexit 1\n```\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "exit": 2
+      }
+    },
+    {
+      "name": "cmd-example-broken",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"sh {example_file}\"\nexample = \"docs/guide.md\"\nexample_marker = \"step\"\n",
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\ntest -f docs/guide.md\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\ntest -f docs/missing.md\n```\n<!-- /generated -->\n"
+      },
+      "verdict": {
+        "caught": [
+          "command/command-failed"
+        ]
+      }
+    },
+    {
+      "name": "cmd-example-rewritten-to-a-no-op",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"sh {example_file}\"\nexample = \"docs/guide.md\"\nexample_marker = \"step\"\n",
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\ntest -f docs/guide.md\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\nexit 0\n```\n<!-- /generated -->\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "known_miss": "#1088"
+      }
     }
   ]
 }
