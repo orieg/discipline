@@ -65,6 +65,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`citation-anchors`](#citation-anchors) | hygiene | **shipped** | markdown, any | verify path:line@sha citations against quoted text and git history, and relative Markdown links against the tree |
 | [`claim-labels`](#claim-labels) | hygiene | **shipped** | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 | [`companion-edit`](#companion-edit) | integrity | **shipped** | any | a change to one path set must also change its companion path set |
+| [`changed-line-coverage`](#changed-line-coverage) | integrity | **shipped** | any (LCOV, Cobertura) | a line the change adds that the coverage report lists as never run |
 <!-- /generated -->
 
 ### Scope on an Agent Edit
@@ -80,6 +81,7 @@ An agent's edit hook (`discipline hook run` after an edit) runs the gates about 
 | [`assertion-reduction`](#assertion-reduction) | file | runs |
 | [`bench-regression`](#bench-regression) | repository | not evaluated; end of turn and CI |
 | [`build-hooks`](#build-hooks) | file | runs |
+| [`changed-line-coverage`](#changed-line-coverage) | repository | not evaluated; end of turn and CI |
 | [`ci-integrity`](#ci-integrity) | repository | runs when the change touches `.github/workflows/**`, `.gitea/workflows/**`, `.forgejo/workflows/**`, `.gitlab-ci.yml`, `.gitlab-ci.yaml`, `**/action.yml`, `**/action.yaml`; otherwise end of turn and CI |
 | [`ci-skip-set`](#ci-skip-set) | repository | runs when the change touches `.github/workflows/**`, `.gitea/workflows/**`, `.forgejo/workflows/**`, `.gitlab-ci.yml`, `.gitlab-ci.yaml`, `**/action.yml`, `**/action.yaml`; otherwise end of turn and CI |
 | [`citation-anchors`](#citation-anchors) | file | runs |
@@ -418,6 +420,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `claim-labels/label-placeholder` | Verification Label Placeholder |
 | `claim-labels/read-label-unresolvable` | Unresolvable Read Label |
 | `companion-edit/companion-not-edited` | Companion Path Not Edited |
+| `changed-line-coverage/uncovered-lines` | Changed Lines Not Covered |
 | `engine/could-not-run` | Check Could Not Run |
 <!-- /generated -->
 
@@ -2159,6 +2162,31 @@ One rule holds for the count and one for the finding, and neither changes the ot
 - **Baseline:** the finding has no line and is located at the rule's first `require_edits_to` entry. The first rule with that entry is identified by its code and that path; a later rule with the same first entry is anchored on a hash of its globs (`rule:<sha256>` over `trigger_paths`, `require_edits_to` and `require_all`).
 - **Default:** off, severity `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `rules` (`trigger_paths`, `require_edits_to`, `require_all`, `reason`).
+
+#### `changed-line-coverage`
+- **Rule:** A line the change adds to a source file must not be one the project's coverage report lists as executable and never run (zero hits). There is no threshold: the report's own fact for each changed line is the rule. A changed line that a listed file does not list is not executable to the tool, and is not reported.
+- **Languages:** Any the report covers; the report is LCOV (`format = "lcov"`, the default) or Cobertura XML (`format = "cobertura"`). A changed file is judged when it is in a language discipline reads, outside the test paths (its language's convention and `[tests] paths`) and `exempt_paths`.
+- **Where the report comes from:** the project's own test run writes it before discipline runs; discipline runs no test. `report` is its repository-relative path.
+  - The report is not trusted when the change could have written it. A report that is tracked by git (on the base side, in the index, or in the change), a symlink, a path that is absolute or holds `..`, or larger than 256 MiB stops the run (exit 2), and so does one that is missing, unreadable or malformed (an LCOV file with no `SF:` record, a `DA:` outside one; a Cobertura file with no `<class>`, a `<line>` without numeric `number` and `hits`).
+  - Report paths are made repository-relative: an absolute path under the repository root loses the root, `./` is dropped, and a Cobertura `filename` is also read under each `<source>` root. A line listed twice (two records for one file) is covered when either record ran it. Only line hits are read, not branch or function data.
+- **What it catches:** each changed source file with added lines the report lists with zero hits (`uncovered-lines`), one finding per file at its first such line; the message lists the lines as `start-end` runs joined by `,`.
+- **Could not check (exit 2):** besides the report rules above, `report` unset while the gate is enabled, and a change whose changed source files are all absent from the report: nothing was checked, and report paths relative to another directory (a package root) read that way. A changed source file the report has no entry for while others are listed is named in a note and not checked.
+- **Failing diff example (rejected):** a change adds `pub fn halve` to `src/lib.rs` (lines 5-7) and `coverage/lcov.info`, written by the test run, has `DA:5,0` and `DA:6,0`: lines 5-6 are reported.
+- **Passing PR description (accepted):**
+  ```text
+  allow-uncovered: src/lib.rs the new branch is exercised by the integration suite, which does not write coverage
+  ```
+- **What it does NOT catch:**
+  - A line the project's own coverage configuration excludes, which the report then does not list: `LCOV_EXCL_LINE` / `LCOV_EXCL_START` markers, Rust `#[coverage(off)]`, JaCoCo `<excludes>`, a `.nycrc` or c8 `exclude`, or a whole file left out of the report (#1068). Python `pragma: no cover` and JS `istanbul ignore` / `node:coverage` comments added by the change are [`suppression-delta`](#suppression-delta)'s, and coverage settings in `.coveragerc`, `[tool.coverage]` and Jest / Vitest configuration are [`toolchain-config`](#toolchain-config)'s.
+  - A line run by a test that checks nothing about it: a hit is a run, not an assertion.
+  - A report written by a test run that is not the change's own (a stale file left in the working tree): the gate reads the file it is given.
+  - A whole-tree run (`baseline --whole-tree`): there is no change to judge, so the gate is not evaluated there. An agent's edit hook leaves it to the end of the turn, since the report is written after the edits.
+- **No change:** when the change adds no line to a source file outside the test paths and `exempt_paths`, the gate passes with a note and `examined` is 0. `examined` counts the changed files the report lists.
+- **Weakening the gate:** disabling it, lowering its severity, growing `exempt_paths`, and removing or repointing `report` or `format` are weakenings [`config-integrity`](#config-integrity) reports (`allow-gate-weakening:`).
+- **Lifting directive:** `allow-uncovered: <path> <reason>` in PR description or commit message lifts that file's finding, and counts against `max_overrides`.
+- **Baseline:** the finding is located at the file and its first uncovered line.
+- **Default:** off, severity `error`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `report`, `format`.
 
 #### `version-lockstep`
 - **Rule:** Version declarations across multiple files (C header `#define`, packaging manifest `<release><version>`, `Cargo.toml`, `pyproject.toml`, documentation, etc.) must remain in lockstep.

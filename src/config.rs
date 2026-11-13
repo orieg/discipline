@@ -640,6 +640,18 @@ pub const GATES: &[GateInfo] = &[
         scope: Scope::Repository,
         triggers: &[],
     },
+    GateInfo {
+        id: "changed-line-coverage",
+        suite: Suite::Integrity,
+        summary: "a line the change adds that the coverage report lists as never run",
+        coverage: Coverage::Stated("any (LCOV, Cobertura)"),
+        available: true,
+        delta_only: true,
+        // The report is written by the test run, after the agent's edits: the rule is
+        // about the finished change.
+        scope: Scope::Repository,
+        triggers: &[],
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -1104,6 +1116,7 @@ pub struct Gates {
     pub citation_anchors: CitationAnchorsGate,
     pub claim_labels: ClaimLabelsGate,
     pub companion_edit: CompanionEditGate,
+    pub changed_line_coverage: ChangedLineCoverageGate,
 }
 
 /// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
@@ -1214,7 +1227,8 @@ impl_gate_settings!(
     MechanismSectionsGate,
     CitationAnchorsGate,
     ClaimLabelsGate,
-    CompanionEditGate
+    CompanionEditGate,
+    ChangedLineCoverageGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2920,6 +2934,42 @@ impl Default for CompanionEditGate {
     }
 }
 
+/// The format of a coverage report `changed-line-coverage` reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverageFormat {
+    /// An LCOV tracefile (`SF:` / `DA:` records).
+    #[default]
+    Lcov,
+    /// A Cobertura XML report (`<class filename>` / `<line number hits>`).
+    Cobertura,
+}
+
+/// `changed-line-coverage`: the project's coverage report, read for the lines the change
+/// adds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ChangedLineCoverageGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Repository-relative path of the report the test run writes; untracked.
+    pub report: Option<String>,
+    pub format: CoverageFormat,
+}
+
+impl Default for ChangedLineCoverageGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            report: None,
+            format: CoverageFormat::Lcov,
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -2970,6 +3020,7 @@ impl Gates {
             "citation-anchors" => &self.citation_anchors,
             "claim-labels" => &self.claim_labels,
             "companion-edit" => &self.companion_edit,
+            "changed-line-coverage" => &self.changed_line_coverage,
             _ => return None,
         })
     }

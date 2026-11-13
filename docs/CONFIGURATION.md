@@ -112,6 +112,11 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.build-hooks.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.build-hooks.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.build-hooks.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.changed-line-coverage.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.changed-line-coverage.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.changed-line-coverage.format` | string | `"lcov"` | The report's format: an LCOV tracefile or a Cobertura XML report |
+| `gates.changed-line-coverage.report` | string | *(unset)* | Repository-relative path of the coverage report the test run writes; a tracked file, a symlink or a path outside the repository stops the run |
+| `gates.changed-line-coverage.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ci-integrity.banned_actions` | array of tables | `[]` | Actions and reusable workflows that must not be referenced anywhere in the scanned files, whatever diff_only says: `owner/repo` (every ref), `owner/repo@ref`, or { uses, reason }. No directive lifts the finding |
 | `gates.ci-integrity.banned_actions[].reason` | string | *(per entry)* | Why the action is banned; echoed in the finding |
 | `gates.ci-integrity.banned_actions[].uses` | string | *(required)* | `owner/repo`, `owner/repo/path`, optionally `@ref`; without a ref every ref is banned |
@@ -876,6 +881,7 @@ Where a gate's subject is a keyword (`allow-unsafe`, `allow-msrv`, `allow-miri`,
 | `allow-vacuous-test:` / `discipline:allow(vacuous-tests)` / `allow(vacuous-tests)` | `vacuous-tests` | Name of the new test the vacuous-tests finding is on |
 | `allow-claim-label:` / `discipline:allow(claim-labels)` / `allow(claim-labels)` | `claim-labels` | Source identifier (`pr-body`, `commit:<sha>`, or Markdown file path) |
 | `allow-companion-edit:` / `discipline:allow(companion-edit)` / `allow(companion-edit)` | `companion-edit` | The rule's first `require_edits_to` entry |
+| `allow-uncovered:` / `discipline:allow(changed-line-coverage)` / `allow(changed-line-coverage)` | `changed-line-coverage` | The changed source file whose uncovered lines are accepted |
 
 ### Inline Line Exemptions
 
