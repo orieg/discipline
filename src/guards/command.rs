@@ -287,6 +287,38 @@ pub fn run_argv_bounded(
 /// ([`crate::gitctx::GitCtx::patch`]), as cargo-mutants' `--in-diff` reads one (#844).
 pub const DIFF_FILE_PLACEHOLDER: &str = "{diff_file}";
 
+/// Every placeholder a command's arguments may name. Each is part of the stable interface
+/// (`tests/fixtures/v1_surface.json`, `placeholders`): renamed or removed only with a
+/// major version.
+pub const PLACEHOLDERS: &[&str] = &[DIFF_FILE_PLACEHOLDER];
+
+/// The first placeholder-shaped token in `argv` that is not one of [`PLACEHOLDERS`]:
+/// `{diff}`, `{changed}`, or a `{diff_…}` / `{changed_…}` name in lower case and
+/// underscores (`{diff_fil}`, `{changed_ranges}`). Such a token would otherwise reach the tool as literal text, and
+/// the tool would read it as a path that does not exist. Other braces (`jq '{a}'`,
+/// `{different}`, `{DIFF_FILE}`) are the tool's own and are left alone.
+pub fn unknown_placeholder(argv: &[String]) -> Option<String> {
+    for arg in argv {
+        let mut rest = arg.as_str();
+        while let Some(open) = rest.find('{') {
+            rest = &rest[open + 1..];
+            let Some(close) = rest.find('}') else {
+                break;
+            };
+            let name = &rest[..close];
+            let reserved = ["diff", "changed"]
+                .iter()
+                .any(|stem| name == *stem || name.starts_with(&format!("{stem}_")))
+                && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+            let token = format!("{{{name}}}");
+            if reserved && !PLACEHOLDERS.contains(&token.as_str()) {
+                return Some(token);
+            }
+        }
+    }
+    None
+}
+
 /// Whether an argument of `argv` names the change's diff file.
 pub fn takes_diff_file(argv: &[String]) -> bool {
     argv.iter().any(|arg| arg.contains(DIFF_FILE_PLACEHOLDER))
@@ -363,6 +395,12 @@ fn run_gate_command(
 ) -> Result<CommandRunResult> {
     let argv =
         split_command_line(cmd).with_context(|| format!("invalid command line for `{name}`"))?;
+    if let Some(token) = unknown_placeholder(&argv) {
+        bail!(
+            "command `{name}`: `{token}` is not a placeholder discipline expands (known: {}); it would reach the tool as literal text",
+            PLACEHOLDERS.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", ")
+        );
+    }
     if !takes_diff_file(&argv) {
         return run_argv_bounded(name, &argv, timeout_secs, dir);
     }
@@ -2917,6 +2955,35 @@ mod tests {
         let plain = argv(&["cargo", "mutants", "--in-diff", "{diff}", "diff_file"]);
         assert!(!takes_diff_file(&plain));
         assert_eq!(with_diff_file(&plain, "/t/x.diff"), plain);
+    }
+
+    #[test]
+    fn a_misspelt_or_unknown_placeholder_is_named_and_other_braces_are_not() {
+        let argv = |s: &[&str]| s.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        for (args, token) in [
+            (&["tool", "{diff_fil}"][..], "{diff_fil}"),
+            (&["tool", "--diff={diff}"][..], "{diff}"),
+            (
+                &["npx", "stryker", "run", "--mutate", "{changed_ranges}"][..],
+                "{changed_ranges}",
+            ),
+            (&["tool", "{diff_file}", "x{changed}y"][..], "{changed}"),
+        ] {
+            assert_eq!(
+                unknown_placeholder(&argv(args)).as_deref(),
+                Some(token),
+                "{args:?}"
+            );
+        }
+        // Controls: the known placeholder, a tool's own braces, an unclosed brace.
+        for args in [
+            &["cargo", "mutants", "--in-diff", "{diff_file}"][..],
+            &["jq", "{a: .diff}", "{different}"][..],
+            &["tool", "{DIFF_FILE}", "{diff-file}", "{", "{diff_file"][..],
+        ] {
+            assert_eq!(unknown_placeholder(&argv(args)), None, "{args:?}");
+        }
+        assert_eq!(PLACEHOLDERS, [DIFF_FILE_PLACEHOLDER]);
     }
 
     /// The diff file holds the patch, is its owner's alone, and is gone once removed; a

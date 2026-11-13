@@ -1550,6 +1550,9 @@
       "explain_finding",
       "list_gates"
     ],
+    "placeholders": [
+      "{diff_file}"
+    ],
     "policy_refusals": [
       "policy/approval-required",
       "policy/hidden-directive-refused",
