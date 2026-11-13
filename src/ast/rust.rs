@@ -151,6 +151,7 @@ fn extract_rust(
         &mut cx.facts,
     );
     super::bounds::rust(root, src, &mut cx.facts.tests);
+    super::comparisons::rust(root, src, &mut cx.facts.tests);
     super::expectations::rust(root, src, &mut cx.facts.tests);
     super::caught_assertions::rust(root, &anc, src, &mut cx.facts.tests, vocab);
     super::caught_assertions::through_helpers(root, src, &mut cx.facts, 1, |helpers| {
@@ -1231,6 +1232,7 @@ impl<'a> Extractor<'a> {
             ..Default::default()
         }];
         super::bounds::rust(root, &fake_fn, &mut read);
+        super::comparisons::rust(root, &fake_fn, &mut read);
         super::expectations::rust(root, &fake_fn, &mut read);
         super::caught_assertions::rust(root, &part, &fake_fn, &mut read, self.vocab);
         let [read] = read;
@@ -1240,6 +1242,13 @@ impl<'a> Extractor<'a> {
             read.bounds.into_iter().map(|mut bound| {
                 bound.line += first_row;
                 bound
+            }),
+        );
+        super::bounds::add_new(
+            &mut test.comparisons,
+            read.comparisons.into_iter().map(|mut comparison| {
+                comparison.line += first_row;
+                comparison
             }),
         );
         super::bounds::add_new(

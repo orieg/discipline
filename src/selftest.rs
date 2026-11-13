@@ -4633,6 +4633,33 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    (
+        "assertion-reduction: a Rust assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let rs = |check: &str| format!("#[test]\nfn t() {{\n    {check};\n}}\n");
+            let mut ok = true;
+            for (base, head) in [
+                ("assert!(f(6) > 6)", "assert!(f(6) >= 6)"),
+                ("assert_eq!(f(0), 0)", "assert_ne!(f(0), 1)"),
+                ("assert!(ok(1))", "assert!(!ok(1))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("tests/t.rs", &rs(base), &rs(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: t the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[("tests/t.rs", &rs("assert!(f(6) >= 6)"), &rs("assert!(f(6) > 6)"))],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

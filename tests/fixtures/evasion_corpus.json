@@ -3176,6 +3176,70 @@
           "config-integrity/gate-weakened"
         ]
       }
+    },
+    {
+      "name": "rs-comparison-bound-widened",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn count(x: &[i32]) -> usize {\n    x.len()\n}\n\npub fn ok(x: i32) -> bool {\n    x > 0\n}\n",
+        "tests/rows.rs": "#[test]\nfn counts() {\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    assert!(p::count(&rows) > 6, \"seven rows\");\n}\n"
+      },
+      "head": {
+        "tests/rows.rs": "#[test]\nfn counts() {\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    assert!(p::count(&rows) >= 6, \"seven rows\");\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "rs-assert-eq-swapped-to-ne",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn count(x: &[i32]) -> usize {\n    x.len()\n}\n\npub fn ok(x: i32) -> bool {\n    x > 0\n}\n",
+        "tests/rows.rs": "#[test]\nfn counts() {\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    assert_eq!(p::count(&[]), 0);\n}\n"
+      },
+      "head": {
+        "tests/rows.rs": "#[test]\nfn counts() {\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    assert_ne!(p::count(&[]), 1);\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "rs-assert-condition-negated",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn count(x: &[i32]) -> usize {\n    x.len()\n}\n\npub fn ok(x: i32) -> bool {\n    x > 0\n}\n",
+        "tests/rows.rs": "#[test]\nfn counts() {\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    assert!(p::ok(1));\n}\n"
+      },
+      "head": {
+        "tests/rows.rs": "#[test]\nfn counts() {\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    assert!(!p::ok(1));\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "rs-comparison-bound-tightened",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn count(x: &[i32]) -> usize {\n    x.len()\n}\n\npub fn ok(x: i32) -> bool {\n    x > 0\n}\n",
+        "tests/rows.rs": "#[test]\nfn counts() {\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    assert!(p::count(&rows) >= 6, \"seven rows\");\n}\n"
+      },
+      "head": {
+        "tests/rows.rs": "#[test]\nfn counts() {\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    assert!(p::count(&rows) > 6, \"seven rows\");\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }

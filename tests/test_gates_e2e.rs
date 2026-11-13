@@ -1360,6 +1360,78 @@ fn a_comparison_operator_moved_the_loose_way_fails_as_a_weakened_bound() {
     assert_eq!(codes, ["assertion-reduction/expected-value-changed"]);
 }
 
+/// Rust assertions read the same way (#1070): an `assert!` comparison moved the loose
+/// way, `assert_eq!` turned into `assert_ne!` (the literal free to move), and an
+/// `assert!` condition negated each fail the run as `weakened-bound`, naming the two
+/// operators and not the assertion's text; `allow-assertion-drop:` lifts it, and a
+/// tightened bound is not reported.
+#[test]
+fn a_rust_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let rs = |check: &str| {
+        format!(
+            "#[test]\nfn counts() {{\n    let rows = vec![1, 2, 3, 4, 5, 6, 7];\n    {check}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "Cargo.toml",
+            "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        repo.write(
+            "src/lib.rs",
+            "pub fn count(x: &[i32]) -> usize {\n    x.len()\n}\n\npub fn ok(x: i32) -> bool {\n    x > 0\n}\n",
+        );
+        repo.commit_base("tests/rows.rs", &rs(base), "test: counts");
+        repo.write("tests/rows.rs", &rs(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "assert!(p::count(&rows) > 6, \"seven rows\");",
+            "assert!(p::count(&rows) >= 6, \"seven rows\");",
+            "`>` to `>=`",
+        ),
+        (
+            "assert_eq!(p::count(&[]), 0);",
+            "assert_ne!(p::count(&[]), 1);",
+            "`assert_eq!` to `assert_ne!`",
+        ),
+        (
+            "assert!(p::ok(1));",
+            "assert!(!p::ok(1));",
+            "`assert!(x)` to `assert!(!x)`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("p::"), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: counts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative control: the bound tightened.
+    let (code, codes, _) = run(
+        "assert!(p::count(&rows) >= 6);",
+        "assert!(p::count(&rows) > 6);",
+        "",
+    );
+    assert_eq!((code, codes), (0, vec![]));
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
