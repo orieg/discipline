@@ -10,13 +10,17 @@
 //! test's base and head comparisons by skeleton and reports an operator that now accepts
 //! more.
 //!
-//! Read for Python `assert` statements and Go `if` conditions whose block fails the test.
+//! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
+//! and Rust `assert!` / `debug_assert!` / `prop_assert!` conditions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
 //! `assertIsNot`, `assertIn` / `assertNotIn`, ..) with the method name as the operator, and
 //! a bare `assert x` / `assert not x` with `assert` / `assert not` as the operator. A pair
-//! whose polarity was inverted checks the outcome the test was written to reject.
+//! whose polarity was inverted checks the outcome the test was written to reject. Rust
+//! records `assert!(x)` / `assert!(!x)` the same way, and reads `assert_eq!` /
+//! `assert_ne!` (any `debug_` or `prop_` prefix kept in the skeleton) as the comparisons
+//! `==` / `!=`, so `assert_eq!(n, 0)` -> `assert_ne!(n, 1)` is `== 0` -> `!= 1`.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -143,6 +147,8 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
         "assertNotIsInstance" => ("instance", true),
         "assertRegex" | "assertRegexpMatches" => ("regex", false),
         "assertNotRegex" | "assertNotRegexpMatches" => ("regex", true),
+        RS_ASSERT => ("rs-assert", false),
+        RS_ASSERT_NOT => ("rs-assert", true),
         _ => return None,
     })
 }
@@ -292,6 +298,168 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+const RS_OPERATORS: &[&str] = &["==", "!=", "<", "<=", ">", ">="];
+
+/// The operators written for a Rust `assert!` condition and its negation.
+const RS_ASSERT: &str = "assert!(x)";
+const RS_ASSERT_NOT: &str = "assert!(!x)";
+
+/// Tokens that join two operands: a condition holding one at its top level is more than
+/// one value, and its `!` would not negate the whole of it.
+const RS_BINARY: &[&str] = &[
+    "&&", "||", "==", "!=", "<", "<=", ">", ">=", "&", "|", "^", "+", "-", "*", "/", "%", "<<",
+    ">>", "..", "..=", "as",
+];
+
+/// The literal a Rust operand is, sign included, and the token to mask: `6`, `-1.5`,
+/// `"a"`, `'c'`, `true`, in parentheses or not.
+fn rs_literal<'t>(toks: &[Node<'t>], src: &str) -> Option<(Node<'t>, String)> {
+    let num = |n: Node| matches!(n.kind(), "integer_literal" | "float_literal");
+    match super::bounds::rs_unparenthesized(toks).as_slice() {
+        [l] if num(*l)
+            || matches!(
+                l.kind(),
+                "string_literal" | "raw_string_literal" | "char_literal" | "boolean_literal"
+            )
+            || matches!(text(*l, src), "true" | "false") =>
+        {
+            Some((*l, text(*l, src).to_string()))
+        }
+        [m, l] if text(*m, src) == "-" && num(*l) => Some((*l, format!("-{}", text(*l, src)))),
+        _ => None,
+    }
+}
+
+/// The text from the first to the last of `toks`, whitespace collapsed.
+fn rs_span(toks: &[Node], src: &str) -> String {
+    let (Some(first), Some(last)) = (toks.first(), toks.last()) else {
+        return String::new();
+    };
+    count(last.end_byte().saturating_sub(first.start_byte()));
+    src.get(first.start_byte()..last.end_byte())
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Rust: the polarity of an `assert!(x)` / `assert!(!x)` condition, when the condition is
+/// one value (no operator joins two at its top level), and each comparison that is a
+/// whole operand of an `assert!` condition (`assert!(n > 6)`, `assert!(ok && n > 6)`,
+/// `assert!((n > 6))`). A comparison inside a call's arguments (`f(n > 6)`) or after `!`
+/// is not read, and neither is a run holding more than one comparison operator, which is
+/// how a turbofish (`parse::<u32>()`) reads in a token tree.
+fn rs_assert(records: &mut Records<Comparison>, node: Node, tt: Node, prefix: &str, src: &str) {
+    let inside = super::bounds::rs_inside(tt);
+    let comma = inside.iter().position(|t| text(*t, src) == ",");
+    let cond = &inside[..comma.unwrap_or(inside.len())];
+    let (negated, rest) = match cond.split_first() {
+        Some((bang, rest)) if text(*bang, src) == "!" => (true, rest),
+        _ => (false, cond),
+    };
+    let checked = super::bounds::rs_unparenthesized(rest);
+    let one_value = !rest.is_empty()
+        && (checked.len() < rest.len() || !rest.iter().any(|t| RS_BINARY.contains(&text(*t, src))));
+    if one_value {
+        let message = comma.map_or(String::new(), |c| rs_span(&inside[c..], src));
+        records.add(Comparison {
+            line: node.start_position().row + 1,
+            skeleton: format!("{prefix}assert!(@ {} {message})", rs_span(&checked, src)),
+            operator: (if negated { RS_ASSERT_NOT } else { RS_ASSERT }).to_string(),
+            literal: None,
+            fails_when_true: false,
+        });
+    }
+    for (at, run) in super::bounds::rs_conditions(tt, src)
+        .into_iter()
+        .enumerate()
+    {
+        // The macro's own run ends at its message.
+        let run = if at == 0 {
+            &run[..cond.len().min(run.len())]
+        } else {
+            &run[..]
+        };
+        for operand in run.split(|t| matches!(text(*t, src), "&&" | "||" | ",")) {
+            let ops: Vec<usize> = operand
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| RS_OPERATORS.contains(&text(**t, src)))
+                .map(|(i, _)| i)
+                .collect();
+            let [i] = ops.as_slice() else {
+                continue;
+            };
+            let (left, op, right) = (&operand[..*i], operand[*i], &operand[*i + 1..]);
+            if left.is_empty() || right.is_empty() {
+                continue;
+            }
+            let literal = rs_literal(right, src).or_else(|| rs_literal(left, src));
+            let mut holes = vec![(op, '@')];
+            holes.extend(literal.as_ref().map(|(l, _)| (*l, '#')));
+            records.add(Comparison {
+                line: op.start_position().row + 1,
+                skeleton: format!("{prefix}{}", skeleton(node, &mut holes, src)),
+                operator: text(op, src).to_string(),
+                literal: literal.map(|(_, t)| t),
+                fails_when_true: false,
+            });
+        }
+    }
+}
+
+/// Rust: comparisons and polarity in `assert!`-family macros ([`rs_assert`]), and
+/// `assert_eq!` / `assert_ne!` as `==` / `!=` ([`passing`]), the macro name and a literal
+/// argument masked.
+pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if node.kind() != "macro_invocation" {
+            return true;
+        }
+        let Some(name_node) = node.child_by_field_name("macro") else {
+            return false;
+        };
+        let name = text(name_node, src);
+        let name = name.rsplit("::").next().unwrap_or(name);
+        let Some(tt) = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "token_tree")
+        else {
+            return false;
+        };
+        if let Some(prefix) = name.strip_suffix("assert") {
+            if prefix.is_empty() || prefix.ends_with('_') {
+                rs_assert(records, node, tt, prefix, src);
+            }
+        } else if let Some((prefix, eq)) = name
+            .strip_suffix("assert_eq")
+            .map(|p| (p, "assert_eq!"))
+            .or_else(|| name.strip_suffix("assert_ne").map(|p| (p, "assert_ne!")))
+        {
+            if prefix.is_empty() || prefix.ends_with('_') {
+                let inside = super::bounds::rs_inside(tt);
+                let mut args = inside.split(|t| text(*t, src) == ",");
+                let (left, right) = (args.next().unwrap_or(&[]), args.next().unwrap_or(&[]));
+                let literal = rs_literal(right, src).or_else(|| rs_literal(left, src));
+                let mut holes = vec![(name_node, '@')];
+                holes.extend(literal.as_ref().map(|(l, _)| (*l, '#')));
+                records.add(Comparison {
+                    line: node.start_position().row + 1,
+                    skeleton: format!("{prefix}{}", skeleton(node, &mut holes, src)),
+                    operator: eq.to_string(),
+                    literal: literal.map(|(_, t)| t),
+                    fails_when_true: false,
+                });
+            }
+        }
+        false
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
@@ -304,6 +472,8 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         ">=" => (">=", "<"),
         "in" => ("in", "not in"),
         "not in" => ("not in", "in"),
+        "assert_eq!" => ("==", "!="),
+        "assert_ne!" => ("!=", "=="),
         _ => return None,
     };
     Some(if fails_when_true { negated } else { op })
@@ -661,5 +831,129 @@ mod tests {
         // A block that does not fail the test is not a guard.
         let src = "package p\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {\n\tif got != 3 {\n\t\tt.Log(\"x\")\n\t}\n}\n";
         assert!(comparisons(&crate::ast::r#go::GoPack, "p_test.go", src).is_empty());
+    }
+
+    fn rs(check: &str) -> Vec<Comparison> {
+        let src = format!("#[test]\nfn x() {{\n    let rows = vec![1];\n    {check}\n}}\n");
+        comparisons(&crate::ast::rust::RustPack, "tests/x.rs", &src)
+    }
+
+    fn rs_ops(check: &str) -> Vec<(String, Option<String>)> {
+        rs(check)
+            .into_iter()
+            .filter(|c| !c.operator.starts_with("assert"))
+            .map(|c| (c.operator, c.literal))
+            .collect()
+    }
+
+    fn op(o: &str, lit: Option<&str>) -> (String, Option<String>) {
+        (o.to_string(), lit.map(str::to_string))
+    }
+
+    #[test]
+    fn rust_records_each_comparison_of_an_assert_condition_with_its_literal() {
+        assert_eq!(
+            rs_ops("assert!(count(&rows) > 6, \"seven rows\");"),
+            vec![op(">", Some("6"))]
+        );
+        assert_eq!(
+            rs_ops("debug_assert!(ok && rows.len() >= -2);"),
+            vec![op(">=", Some("-2"))]
+        );
+        assert_eq!(
+            rs_ops("assert!((rows.len() == 1));"),
+            vec![op("==", Some("1"))]
+        );
+        assert_eq!(rs_ops("assert!(a != b);"), vec![op("!=", None)]);
+        // Not a comparison of the condition: a call's arguments, a turbofish, a negated
+        // group, the message after the condition, a macro outside the `assert!` family.
+        for check in [
+            "assert!(check(rows.len() > 6));",
+            "assert!(s.parse::<u32>().unwrap() > 6);",
+            "assert!(!(rows.len() > 6));",
+            "assert!(ok, \"{}\", rows.len() > 6);",
+            "reassert!(rows.len() > 6);",
+        ] {
+            assert_eq!(rs_ops(check), vec![], "{check}");
+        }
+    }
+
+    #[test]
+    fn rust_comparisons_report_an_operator_that_accepts_more() {
+        let w = |a: &str, b: &str| ops(&rs(a), &rs(b));
+        assert_eq!(
+            w("assert!(n(&rows) > 6);", "assert!(n(&rows) >= 6);"),
+            pair(">", ">=")
+        );
+        assert_eq!(
+            w("assert!(n(&rows) == 0);", "assert!(n(&rows) != 1);"),
+            pair("==", "!=")
+        );
+        assert_eq!(
+            w(
+                "prop_assert!(n(&rows) < 5);",
+                "prop_assert!(n(&rows) <= 5);"
+            ),
+            pair("<", "<=")
+        );
+        // Tightened, the same integer bound written another way, and a pair the macro
+        // name tells apart: none accepts more.
+        assert_eq!(
+            w("assert!(n(&rows) >= 6);", "assert!(n(&rows) > 6);"),
+            vec![]
+        );
+        assert_eq!(
+            w("assert!(n(&rows) > 5);", "assert!(n(&rows) >= 6);"),
+            vec![]
+        );
+        assert_eq!(
+            w("assert!(n(&rows) > 6);", "debug_assert!(n(&rows) >= 6);"),
+            vec![]
+        );
+        // `assert_eq!` / `assert_ne!` are `==` / `!=`: one accepted value became every
+        // value but one, the literal free to move. The other way, or a pair whose macro
+        // prefix differs, is not reported.
+        assert_eq!(
+            w("assert_eq!(n(&rows), 0);", "assert_ne!(n(&rows), 1);"),
+            pair("assert_eq!", "assert_ne!")
+        );
+        assert_eq!(
+            w(
+                "debug_assert_eq!(0, n(&rows));",
+                "debug_assert_ne!(0, n(&rows));"
+            ),
+            pair("assert_eq!", "assert_ne!")
+        );
+        assert_eq!(
+            w("assert_ne!(n(&rows), 1);", "assert_eq!(n(&rows), 1);"),
+            vec![]
+        );
+        assert_eq!(
+            w("debug_assert_eq!(n(&rows), 0);", "assert_ne!(n(&rows), 0);"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn rust_polarity_inversions_are_reported() {
+        let inverted = |a: &str, b: &str| {
+            weakened(&rs(a), &rs(b))
+                .into_iter()
+                .filter(|w| w.inverted)
+                .map(|w| (w.from, w.to))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            inverted("assert!(ok(1), \"one\");", "assert!(!ok(1), \"one\");"),
+            pair(RS_ASSERT, RS_ASSERT_NOT)
+        );
+        assert_eq!(
+            inverted("assert!(!(a && b));", "assert!((a && b));"),
+            pair(RS_ASSERT_NOT, RS_ASSERT)
+        );
+        // `!a && b` does not negate `a && b`; a prefix tells two macros apart; a checked
+        // value that changed is not paired.
+        assert_eq!(inverted("assert!(a && b);", "assert!(!a && b);"), vec![]);
+        assert_eq!(inverted("assert!(ok(1));", "assert!(!ok(2));"), vec![]);
     }
 }
