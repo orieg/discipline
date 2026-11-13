@@ -55,6 +55,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("enabled", Direction::LooserWhenFalse),
     ("severity", Direction::Severity),
     ("exempt_paths", Direction::Grown),
+    ("removed_link_exempt_paths", Direction::Grown),
     ("ci_skip_severity", Direction::Severity),
     // Lists that widen what is tolerated.
     ("allow_patterns", Direction::Grown),

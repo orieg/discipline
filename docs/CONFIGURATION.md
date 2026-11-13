@@ -143,6 +143,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.citation-anchors.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.citation-anchors.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.citation-anchors.min_quote_chars` | integer | `8` | Fewest non-whitespace characters a citation's quoted text must hold (default: 8); a shorter quote is reported |
+| `gates.citation-anchors.removed_link_exempt_paths` | list | *(5 entries)* | Glob patterns of documents not read for link-target-removed: documents that name removed paths on purpose, such as changelogs, migration notes and archives |
 | `gates.citation-anchors.require_online` | boolean | `false` | Whether offline operation fails closed when verifying tracker titles |
 | `gates.citation-anchors.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.citation-anchors.unanchored_citations` | string | `"warn"` | How unanchored path:line citations are handled |

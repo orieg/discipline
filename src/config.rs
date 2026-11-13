@@ -2870,6 +2870,9 @@ pub struct CitationAnchorsGate {
     /// Fewest non-whitespace characters a quoted text must hold. A shorter quote is
     /// contained in almost any line, so it anchors nothing and is reported.
     pub min_quote_chars: usize,
+    /// Documents not read for `link-target-removed`: those that name removed paths on
+    /// purpose (changelogs, migration notes, archives, history).
+    pub removed_link_exempt_paths: Vec<String>,
 }
 
 impl Default for CitationAnchorsGate {
@@ -2883,6 +2886,15 @@ impl Default for CitationAnchorsGate {
             verify_tracker_titles: false,
             require_online: false,
             min_quote_chars: 8,
+            removed_link_exempt_paths: [
+                "**/CHANGELOG*",
+                "**/MIGRATION*",
+                "**/HISTORY*",
+                "**/ROADMAP*",
+                "docs/archive/**",
+            ]
+            .map(String::from)
+            .to_vec(),
         }
     }
 }
@@ -3423,6 +3435,7 @@ pub fn split_phrase_list(raw: &str) -> Vec<String> {
 
 pub const SHORTER_IS_STRICTER: &[&str] = &[
     "exempt_paths",
+    "removed_link_exempt_paths",
     "allow_patterns",
     "allowed_users",
     "assert_helper_fns",

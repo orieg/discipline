@@ -1,11 +1,12 @@
 //! Citation anchors sentinel (`citation-anchors`).
 //!
 //! Verifies `path:line@sha "<text>"` citations against quoted line content and git history,
-//! and relative Markdown links against the head tree ([`links`]).
+//! relative Markdown links against the head tree ([`links`]), and the links and code spans
+//! of every Markdown document against the paths a change removes.
 
 use crate::config::UnanchoredCitationsMode;
 use crate::findings::FindingKind;
-use crate::gitctx::CommitLookup;
+use crate::gitctx::{ChangeKind, CommitLookup};
 use crate::guards::{Context, GateOutcome, PathFilter};
 use anyhow::Result;
 
@@ -348,12 +349,112 @@ pub fn evaluate_with_network(ctx: &Context, no_network: bool) -> Result<GateOutc
         }
     }
 
+    check_removed_targets(ctx, &exempt, &mut head_tree, &mut out)?;
+
     if out.examined == 0 {
         out.notes
             .push("no citation anchors found to verify".to_string());
     }
 
     Ok(out)
+}
+
+/// Reports, in every tracked Markdown document on the head side, each relative link and
+/// each code span naming a path the change deletes or renames away
+/// (`link-target-removed`). A link on a line `link-target-missing` reads (an added line,
+/// or every line with `diff_only = false`) is that check's: it is not reported twice. A
+/// code span is read on every line, since no other check reads it.
+fn check_removed_targets(
+    ctx: &Context,
+    exempt: &PathFilter,
+    head_tree: &mut Option<links::HeadTree>,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.citation_anchors;
+    let changed = ctx.git.changed_files()?;
+    let removed = links::RemovedPaths::new(changed.iter().filter_map(|f| match f.kind {
+        ChangeKind::Deleted => Some((f.path.clone(), None)),
+        ChangeKind::Renamed if f.old_path != f.path => {
+            Some((f.old_path.clone(), Some(f.path.clone())))
+        }
+        _ => None,
+    }));
+    if removed.is_empty() {
+        return Ok(());
+    }
+    // The lines `link-target-missing` reads, per document, under `diff_only`.
+    let added: std::collections::HashMap<&str, &std::collections::BTreeSet<usize>> = changed
+        .iter()
+        .filter(|f| !f.is_deleted())
+        .map(|f| (f.path.as_str(), &f.added_lines))
+        .collect();
+    let removed_exempt = PathFilter::new(&settings.removed_link_exempt_paths)?;
+    let severity = ctx.overridable(settings.severity);
+    let tracked = ctx.git.tracked_files()?;
+    for doc in &tracked {
+        if !links::is_markdown_path(doc) || exempt.matches(doc) || removed_exempt.matches(doc) {
+            continue;
+        }
+        let Some(content) = ctx.git.head_content(doc)? else {
+            continue;
+        };
+        let (doc_links, spans) = links::extract_markdown_references(&content);
+        let read_by_missing = |line: usize| {
+            !settings.diff_only || added.get(doc.as_str()).is_some_and(|l| l.contains(&line))
+        };
+        let mut references: Vec<_> = doc_links
+            .iter()
+            .filter(|l| !read_by_missing(l.line_num))
+            .map(|l| ("link target", l, links::resolve_link_target(doc, &l.target)))
+            .chain(
+                spans
+                    .iter()
+                    .map(|s| ("code span", s, links::resolve_code_span(doc, &s.target))),
+            )
+            .collect();
+        references.sort_by_key(|(_, reference, _)| reference.line_num);
+        for (what, reference, resolution) in references {
+            let links::LinkResolution::Path { path, directory } = resolution else {
+                continue;
+            };
+            out.examined += 1;
+            let Some(removal) = removed.find(&path, directory) else {
+                continue;
+            };
+            let tree = match head_tree {
+                Some(t) => t,
+                None => head_tree.insert(links::HeadTree::new(tracked.iter().cloned())),
+            };
+            if tree.holds(&path, directory) || behind_link_or_submodule(ctx, &path)? {
+                continue;
+            }
+            let shown = links::shown_target(&reference.target);
+            let named = links::shown_target(&path);
+            let (message, remediation) = match removal {
+                links::Removal::Renamed(new) => (
+                    format!("{what} `{shown}` names `{named}`, which this change renames to `{}`", links::shown_target(new)),
+                    format!("point it at `{}`, or remove it", links::shown_target(new)),
+                ),
+                links::Removal::Deleted => (
+                    format!("{what} `{shown}` names `{named}`, which this change deletes"),
+                    "update or remove it, keep the file, or exempt the document with `removed_link_exempt_paths`".to_string(),
+                ),
+                links::Removal::Directory => (
+                    format!("{what} `{shown}` names the directory `{named}`, which this change empties"),
+                    "update or remove it, keep the directory, or exempt the document with `removed_link_exempt_paths`".to_string(),
+                ),
+            };
+            out.add_violation(
+                severity,
+                &crate::findings::LINK_TARGET_REMOVED,
+                doc,
+                reference.line_num,
+                message,
+                remediation,
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Whether `path` is, or lies under, a symlink or submodule in the index: a target the
@@ -1033,5 +1134,226 @@ unanchored_citations = "reject"
             );
         }
         assert!(api.log().is_empty(), "offline runs fetched {:?}", api.log());
+    }
+
+    /// The gate over a change that removes each path of `remove`, renames each
+    /// `(old, new)` of `rename`, and writes each `(path, content)` of `write`, in a
+    /// repository holding `base`.
+    fn eval_removal(
+        base: &[(&str, &str)],
+        remove: &[&str],
+        rename: &[(&str, &str)],
+        write: &[(&str, &str)],
+        config_toml: &str,
+    ) -> GateOutcome {
+        let (_dir, git) = crate::gitctx::test_support::repo_with_files(base, &[]);
+        let repo = git2::Repository::open(git.root()).unwrap();
+        let mut index = repo.index().unwrap();
+        for path in remove {
+            std::fs::remove_file(git.root().join(path)).unwrap();
+            index.remove_path(std::path::Path::new(path)).unwrap();
+        }
+        for (old, new) in rename {
+            let to = git.root().join(new);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::rename(git.root().join(old), &to).unwrap();
+            index.remove_path(std::path::Path::new(old)).unwrap();
+            index.add_path(std::path::Path::new(new)).unwrap();
+        }
+        for (path, content) in write {
+            std::fs::write(git.root().join(path), content).unwrap();
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let config = DisciplineConfig::from_toml_str(config_toml).unwrap();
+        evaluate_with_network(&crate::guards::test_support::context(&config, &git), false).unwrap()
+    }
+
+    /// A module long enough for rename detection to pair its old and new paths.
+    const MODULE: &str = "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n";
+
+    /// `(file, line, message)` of each finding, all `link-target-removed`.
+    fn removed_findings(out: &GateOutcome) -> Vec<(String, Option<usize>, String)> {
+        out.violations
+            .iter()
+            .map(|v| {
+                assert_eq!(v.code, "citation-anchors/link-target-removed", "{v:?}");
+                (
+                    v.file.clone().unwrap_or_default(),
+                    v.line,
+                    v.message.clone(),
+                )
+            })
+            .collect()
+    }
+
+    const REMOVAL_INDEX: &str = "# Index\n\
+        [guide](guide.md) and [old](old.md#usage)\n\
+        Edit `src/old_mod.rs:12` or `src/lib.rs`.\n\
+        [gone](../src/gone/)\n\
+        Prose naming docs/old.md is not read.\n\
+        ```\n[fenced](old.md) `docs/old.md`\n```\n\
+        <!-- [hidden](old.md) -->\n";
+
+    fn removal_base() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("docs/index.md", REMOVAL_INDEX),
+            (
+                "docs/guide.md",
+                "See `docs/old.md` and [mod](../src/old_mod.rs).\n",
+            ),
+            ("docs/old.md", "# old\n"),
+            ("CHANGELOG.md", "- removed [old](docs/old.md)\n"),
+            ("src/lib.rs", "pub fn f() {}\n"),
+            ("src/old_mod.rs", MODULE),
+            ("src/gone/a.rs", "pub fn a() {}\n"),
+        ]
+    }
+
+    #[test]
+    fn links_and_code_spans_to_removed_paths_are_reported_in_unchanged_documents() {
+        let out = eval_removal(
+            &removal_base(),
+            &["docs/old.md", "src/gone/a.rs"],
+            &[("src/old_mod.rs", "src/new_mod.rs")],
+            &[],
+            ENABLED,
+        );
+        let found = removed_findings(&out);
+        let at: Vec<(&str, Option<usize>)> =
+            found.iter().map(|(f, l, _)| (f.as_str(), *l)).collect();
+        assert_eq!(
+            at,
+            vec![
+                ("docs/guide.md", Some(1)),
+                ("docs/guide.md", Some(1)),
+                ("docs/index.md", Some(2)),
+                ("docs/index.md", Some(3)),
+                ("docs/index.md", Some(4)),
+            ],
+            "{:?}",
+            out.violations
+        );
+        let messages: Vec<&str> = found.iter().map(|(_, _, m)| m.as_str()).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("link target `../src/old_mod.rs`")
+                    && m.contains("renames to `src/new_mod.rs`")),
+            "{messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("code span `docs/old.md`")
+                && m.contains("this change deletes")),
+            "{messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("code span `src/old_mod.rs:12`")
+                    && m.contains("renames to `src/new_mod.rs`")),
+            "{messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("the directory `src/gone`")),
+            "{messages:?}"
+        );
+        let rename = out
+            .violations
+            .iter()
+            .find(|v| v.message.contains("`src/old_mod.rs:12`"))
+            .unwrap();
+        assert!(
+            rename
+                .remediation
+                .as_deref()
+                .unwrap_or("")
+                .contains("`src/new_mod.rs`"),
+            "{:?}",
+            rename.remediation
+        );
+    }
+
+    #[test]
+    fn nothing_is_reported_when_the_change_removes_nothing() {
+        let out = eval_removal(
+            &removal_base(),
+            &[],
+            &[],
+            &[("src/lib.rs", "pub fn g() {}\n")],
+            ENABLED,
+        );
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+    }
+
+    #[test]
+    fn a_link_on_an_added_line_stays_link_target_missing() {
+        let edited = format!("{REMOVAL_INDEX}[again](old.md)\n");
+        let out = eval_removal(
+            &removal_base(),
+            &["docs/old.md"],
+            &[],
+            &[("docs/index.md", &edited)],
+            ENABLED,
+        );
+        let last = REMOVAL_INDEX.lines().count() + 1;
+        let on_last: Vec<&str> = out
+            .violations
+            .iter()
+            .filter(|v| v.file.as_deref() == Some("docs/index.md") && v.line == Some(last))
+            .map(|v| v.code.as_str())
+            .collect();
+        assert_eq!(
+            on_last,
+            vec!["citation-anchors/link-target-missing"],
+            "{:?}",
+            out.violations
+        );
+        // With `diff_only = false` every link is `link-target-missing`'s; code spans
+        // are still read for the removed paths.
+        let whole = format!("{ENABLED}diff_only = false\n");
+        let out = eval_removal(&removal_base(), &["docs/old.md"], &[], &[], &whole);
+        let removed: Vec<(&str, Option<usize>)> = out
+            .violations
+            .iter()
+            .filter(|v| v.code == "citation-anchors/link-target-removed")
+            .map(|v| (v.file.as_deref().unwrap_or(""), v.line))
+            .collect();
+        assert_eq!(
+            removed,
+            vec![("docs/guide.md", Some(1))],
+            "{:?}",
+            out.violations
+        );
+    }
+
+    #[test]
+    fn exempt_documents_are_not_read_for_removed_paths() {
+        // The default `removed_link_exempt_paths` leaves CHANGELOG.md out; an empty list
+        // reads it.
+        let none = format!("{ENABLED}removed_link_exempt_paths = []\n");
+        let out = eval_removal(&removal_base(), &["docs/old.md"], &[], &[], &none);
+        assert!(
+            out.violations
+                .iter()
+                .any(|v| v.file.as_deref() == Some("CHANGELOG.md")
+                    && v.code == "citation-anchors/link-target-removed"),
+            "{:?}",
+            out.violations
+        );
+        let out = eval_removal(&removal_base(), &["docs/old.md"], &[], &[], ENABLED);
+        assert!(
+            out.violations
+                .iter()
+                .all(|v| v.file.as_deref() != Some("CHANGELOG.md")),
+            "{:?}",
+            out.violations
+        );
+        // The gate's `exempt_paths` applies too.
+        let exempt = format!("{ENABLED}exempt_paths = [\"docs/**\"]\n");
+        let out = eval_removal(&removal_base(), &["docs/old.md"], &[], &[], &exempt);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
     }
 }
