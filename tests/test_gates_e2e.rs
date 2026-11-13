@@ -17259,6 +17259,155 @@ fn command_snapshot_ignore_widened_on_head_is_a_gate_weakening() {
     );
 }
 
+/// A repository whose base compares the command's output with the `cli` region of
+/// `docs/cli.md`, which holds the output in a fenced block between prose (#1088).
+fn region_repo(doc: &str) -> Repo {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("docs/cli.md", doc),
+            (
+                "discipline.toml",
+                "[meta]\nversion = 1\nname = \"test-repo\"\n\n\
+                 [gates.deletion-rationale]\nenabled = false\n\n\
+                 [gates.command]\ncommand = \"printf 'usage: x\\\\n  -h\\\\n'\"\n\
+                 snapshot = \"docs/cli.md\"\nsnapshot_marker = \"cli\"\n",
+            ),
+        ],
+        "base: command output kept in a doc region",
+    );
+    repo
+}
+
+const REGION_DOC: &str = "# CLI\n\nIntro prose.\n\n<!-- generated:cli -->\n```text\nusage: x\n  -h\n```\n<!-- /generated -->\n\nMore prose.\n";
+
+#[test]
+fn command_snapshot_marker_compares_one_doc_region() {
+    let repo = region_repo(REGION_DOC);
+
+    // The fence body matches; the prose and the fence lines are not compared.
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+
+    // Prose outside the region changes freely.
+    repo.write(
+        "docs/cli.md",
+        &REGION_DOC.replace("Intro prose.", "New intro."),
+    );
+    repo.commit("docs: reword the intro");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+
+    // The tool's output changed and the region was not updated: the finding points at the
+    // file line of the first difference (line 8, `  -h`), and names the region.
+    let run = render(&repo, "printf 'usage: x\\n  -v\\n'");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let v = run.violations("command");
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0]["code"], "command/snapshot-mismatch");
+    assert_eq!(v[0]["file"], "docs/cli.md");
+    assert_eq!(v[0]["line"], 8);
+    let msg = v[0]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("snapshot `docs/cli.md` (region `cli`)"),
+        "{msg}"
+    );
+    assert!(msg.contains("first difference at snapshot line 8"), "{msg}");
+    assert!(!msg.contains("-v"), "{msg}");
+    let fix = v[0]["remediation"].as_str().unwrap();
+    assert!(fix.contains("<!-- generated:cli -->"), "{fix}");
+}
+
+#[test]
+fn command_snapshot_marker_fails_closed_when_the_region_cannot_be_read() {
+    let exit_2 = |run: &Run, reason: &str, needle: &str| {
+        assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.could_not_check(),
+            (reason.to_string(), Some("command".to_string()))
+        );
+        assert!(run.stderr.contains(needle), "{}", run.stderr);
+    };
+
+    // The change deletes the markers: there is no region left, which is not a pass.
+    let repo = region_repo(REGION_DOC);
+    repo.write(
+        "docs/cli.md",
+        &REGION_DOC
+            .replace("<!-- generated:cli -->\n", "")
+            .replace("<!-- /generated -->\n", ""),
+    );
+    repo.commit("docs: drop the markers");
+    exit_2(
+        &repo.check(&[]),
+        "gate",
+        "has no `<!-- generated:cli -->` region",
+    );
+
+    // The region opened twice, and never closed.
+    let repo = region_repo(&format!(
+        "{REGION_DOC}\n<!-- generated:cli -->\nx\n<!-- /generated -->\n"
+    ));
+    exit_2(&repo.check(&[]), "gate", "opens the region `cli` 2 times");
+    let repo = region_repo("<!-- generated:cli -->\nusage: x\n  -h\n");
+    exit_2(&repo.check(&[]), "gate", "not closed");
+
+    // A marker with no snapshot, and a name that is not a region name, are configuration
+    // errors.
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n\
+         command = \"printf 'x\\\\n'\"\nsnapshot_marker = \"cli\"\n",
+        "base: marker without a snapshot",
+    );
+    exit_2(
+        &repo.check(&[]),
+        "configuration",
+        "`snapshot_marker` without `snapshot`",
+    );
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("docs/cli.md", REGION_DOC),
+            (
+                "discipline.toml",
+                "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n\
+                 command = \"printf 'x\\\\n'\"\nsnapshot = \"docs/cli.md\"\nsnapshot_marker = \"cli -->\"\n",
+            ),
+        ],
+        "base: a marker that is not a region name",
+    );
+    exit_2(&repo.check(&[]), "configuration", "region name");
+}
+
+#[test]
+fn command_snapshot_marker_changed_on_head_is_a_gate_weakening() {
+    let repo = region_repo(&format!(
+        "{REGION_DOC}\n<!-- generated:empty -->\n<!-- /generated -->\n"
+    ));
+    let toml = std::fs::read_to_string(repo.file("discipline.toml")).unwrap();
+    repo.write(
+        "discipline.toml",
+        &toml.replace(
+            "snapshot_marker = \"cli\"",
+            "snapshot_marker = \"empty\"\nallow_zero = true",
+        ),
+    );
+    repo.commit("chore: compare another region");
+    let run = repo.check(&[]);
+    let found = run.violations("config-integrity");
+    assert!(
+        found
+            .iter()
+            .any(|v| v["message"].as_str().unwrap().contains("snapshot_marker")),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+}
+
 #[test]
 fn command_snapshot_on_base_tests_is_a_configuration_error() {
     // `base-tests` never reaches the snapshot comparison: a snapshot on it would be
