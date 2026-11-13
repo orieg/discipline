@@ -3353,3 +3353,88 @@ fn step17_hook_binary_path_hijack_and_digest_verification_fail_closed() {
     );
     assert_eq!(matched.code, 0, "{}", matched.stderr);
 }
+
+/// Cursor's and Aider's one hook runs once their edits are done (Cursor's generated file
+/// registers it under `stop`, Aider's `lint-cmd` runs after a reply's edits), so their
+/// runs check the gates an edit leaves to the end of a turn (#1069). An edit by an agent
+/// with its own end-of-turn hook still leaves `test-floor` to that hook.
+#[test]
+fn cursor_and_aider_runs_check_the_gates_an_edit_leaves_to_the_end_of_a_turn() {
+    let repo = Repo::new();
+    let log = repo.path().join(".git/discipline/hook-observe.log");
+    let left_out = |line: &serde_json::Value| -> Vec<String> {
+        line["not_evaluated"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|g| g.as_str().unwrap().to_string())
+            .collect()
+    };
+    // The control: an edit leaves `test-floor` to the end of the turn.
+    let edit = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(edit.code, 0, "{}", edit.stderr);
+    let line = log_lines(&log).pop().unwrap();
+    assert_eq!(line["event"], "edit", "{line}");
+    assert!(left_out(&line).iter().any(|g| g == "test-floor"), "{line}");
+    // Cursor's stop payload (its documented `status` and `loop_count`, or none at all)
+    // and Aider's lint command, which sends nothing.
+    for (agent, payload) in [
+        ("cursor", r#"{"status":"completed","loop_count":0}"#),
+        ("cursor", "{}"),
+        ("aider", ""),
+    ] {
+        let run = hook(&repo, &["hook", "run", "--agent", agent], payload);
+        assert_eq!(run.code, 0, "{agent}: {} {}", run.stdout, run.stderr);
+        let line = log_lines(&log).pop().unwrap();
+        assert_eq!(
+            (line["agent"].as_str(), line["event"].as_str()),
+            (Some(agent), Some("stop")),
+            "{line}"
+        );
+        let left = left_out(&line);
+        for gate in ["test-floor", "agents-md", "dependency-delta", "test-budget"] {
+            assert!(!left.iter().any(|g| g == gate), "{agent}: {gate} {line}");
+        }
+    }
+}
+
+/// The turn checks still do not judge a Cursor or Aider run (docs/CONFIGURATION.md: not
+/// covered): with `[hooks.verified-stop]` refusing an unverified dirty tree, Claude Code's
+/// stop is refused and Cursor's and Aider's runs are not.
+#[test]
+fn the_turn_checks_do_not_judge_a_cursor_or_aider_run() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}\n[hooks.verified-stop]\nenabled = true\nmode = \"refuse\"\ncommands = [\"cargo test\"]\n"),
+        "chore: enable verified-stop",
+    );
+    repo.write("src/lib.rs", "pub fn f() -> i32 { 2 }\n");
+    let stop = r#"{"hook_event_name":"Stop","session_id":"sess-1069","stop_hook_active":false,"last_assistant_message":"Done."}"#;
+    let claude = hook(&repo, &["hook", "run", "--agent", "claude-code"], stop);
+    assert_eq!(claude.code, 2, "{}", claude.stderr);
+    assert!(
+        claude.stderr.contains("turn/unverified-dirty-tree"),
+        "{}",
+        claude.stderr
+    );
+    let cursor = hook(
+        &repo,
+        &["hook", "run", "--agent", "cursor"],
+        r#"{"status":"completed","loop_count":0}"#,
+    );
+    assert_eq!(
+        (cursor.code, cursor.stdout.as_str()),
+        (0, "{}\n"),
+        "{}",
+        cursor.stderr
+    );
+    let aider = hook(&repo, &["hook", "run", "--agent", "aider"], "");
+    assert_eq!(
+        (aider.code, aider.stdout.as_str()),
+        (0, ""),
+        "{}",
+        aider.stderr
+    );
+}
