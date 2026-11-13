@@ -449,7 +449,7 @@
           "type": "string"
         },
         "forbid_output": {
-          "$ref": "#/$defs/StringListOrReset",
+          "$ref": "#/$defs/StringList",
           "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text"
         },
         "min_count": {
@@ -469,7 +469,7 @@
           "type": "string"
         },
         "snapshot_ignore": {
-          "$ref": "#/$defs/StringListOrReset",
+          "$ref": "#/$defs/StringList",
           "description": "Regexes for lines left out of the snapshot comparison, on both sides"
         },
         "timeout_seconds": {
@@ -613,11 +613,11 @@
                 "type": "boolean"
               },
               "require_edits_to": {
-                "$ref": "#/$defs/StringListOrReset",
+                "$ref": "#/$defs/StringList",
                 "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside"
               },
               "trigger_paths": {
-                "$ref": "#/$defs/StringListOrReset",
+                "$ref": "#/$defs/StringList",
                 "description": "Globs; a changed path matching any of them fires the rule"
               }
             },
@@ -902,7 +902,7 @@
             "additionalProperties": false,
             "properties": {
               "exclude_paths": {
-                "$ref": "#/$defs/StringListOrReset",
+                "$ref": "#/$defs/StringList",
                 "description": "Globs excluded from manifest registration requirement"
               },
               "extract_regex": {
@@ -914,7 +914,7 @@
                 "type": "string"
               },
               "watched_paths": {
-                "$ref": "#/$defs/StringListOrReset",
+                "$ref": "#/$defs/StringList",
                 "description": "Git file globs that must be registered in the manifest"
               }
             },
@@ -1429,6 +1429,13 @@
         }
       },
       "type": "object"
+    },
+    "StringList": {
+      "description": "A list of strings. Inside an array-of-tables entry, where layers do not merge, so the reset table is not accepted.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "StringListOrReset": {
       "description": "A list of strings, or a table with reset = true to clear lower precedence layers.",

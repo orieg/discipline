@@ -319,6 +319,11 @@ pub fn generate_schema() -> Value {
                 "enum": ["error", "warning", "note"],
                 "description": "Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational)."
             },
+            "StringList": {
+                "description": "A list of strings. Inside an array-of-tables entry, where layers do not merge, so the reset table is not accepted.",
+                "type": "array",
+                "items": { "type": "string" }
+            },
             "StringListOrReset": {
                 "description": "A list of strings, or a table with reset = true to clear lower precedence layers.",
                 "oneOf": [
@@ -492,13 +497,13 @@ pub fn generate_schema() -> Value {
                     "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds" },
                     "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error" },
                     "min_count": { "type": "integer", "description": "Minimum count required" },
-                    "forbid_output": { "$ref": "#/$defs/StringListOrReset", "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text" },
+                    "forbid_output": { "$ref": "#/$defs/StringList", "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text" },
                     "zero_items_pattern": { "type": "string", "description": "Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text" },
                     "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed; on a `base-tests` command, whether a run that read no test case passes" },
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
                     "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
                     "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs" },
-                    "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" }
+                    "snapshot_ignore": { "$ref": "#/$defs/StringList", "description": "Regexes for lines left out of the snapshot comparison, on both sides" }
                 }
             },
             "DependencyDeltaGate": gate_table(json!({
@@ -611,8 +616,8 @@ pub fn generate_schema() -> Value {
                         "properties": {
                             "manifest": { "type": "string", "description": "Path to packaging manifest (e.g. package.xml)" },
                             "extract_regex": { "type": "string", "description": "Regex to extract relative file paths from manifest" },
-                            "watched_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Git file globs that must be registered in the manifest" },
-                            "exclude_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs excluded from manifest registration requirement" }
+                            "watched_paths": { "$ref": "#/$defs/StringList", "description": "Git file globs that must be registered in the manifest" },
+                            "exclude_paths": { "$ref": "#/$defs/StringList", "description": "Globs excluded from manifest registration requirement" }
                         }
                     }
                 }
@@ -710,8 +715,8 @@ pub fn generate_schema() -> Value {
                         "required": ["trigger_paths", "require_edits_to"],
                         "additionalProperties": false,
                         "properties": {
-                            "trigger_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs; a changed path matching any of them fires the rule" },
-                            "require_edits_to": { "$ref": "#/$defs/StringListOrReset", "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside" },
+                            "trigger_paths": { "$ref": "#/$defs/StringList", "description": "Globs; a changed path matching any of them fires the rule" },
+                            "require_edits_to": { "$ref": "#/$defs/StringList", "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside" },
                             "require_all": { "type": "boolean", "description": "Whether every require_edits_to glob must match a changed path, rather than any one" },
                             "reason": { "type": "string", "description": "Why the two path sets change together, quoted in the finding" }
                         }
