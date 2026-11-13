@@ -11085,6 +11085,37 @@ proptest! {
         },
     ),
     (
+        "citation-anchors: a link or code span naming a path the change deletes or renames is reported with the new path; prose and fenced code are not read",
+        || {
+            use crate::guards::citation_anchors::links::{
+                extract_markdown_references, resolve_code_span, resolve_link_target,
+                LinkResolution, Removal, RemovedPaths,
+            };
+            let doc = "[old](old.md) `src/a.rs:4` prose docs/old.md `cargo test`\n\
+                       ```\n[code](old.md) `src/a.rs`\n```\n";
+            let removed = RemovedPaths::new([
+                ("docs/old.md".to_string(), None),
+                ("src/a.rs".to_string(), Some("src/b.rs".to_string())),
+            ]);
+            let (links, spans) = extract_markdown_references(doc);
+            let found: Vec<Option<Removal>> = links
+                .iter()
+                .map(|l| resolve_link_target("docs/index.md", &l.target))
+                .chain(spans.iter().map(|s| resolve_code_span("docs/index.md", &s.target)))
+                .map(|r| match r {
+                    LinkResolution::Path { path, directory } => removed.find(&path, directory),
+                    _ => None,
+                })
+                .collect();
+            Ok(found
+                == [
+                    Some(Removal::Deleted),
+                    Some(Removal::Renamed("src/b.rs")),
+                    None,
+                ])
+        },
+    ),
+    (
         "gate-command-lint: extracts declared gates from fences and list items",
         || {
             use crate::guards::gate_command_lint::extract_declared_gates;

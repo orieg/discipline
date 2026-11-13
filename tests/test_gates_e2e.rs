@@ -21832,6 +21832,69 @@ fn citation_anchors_reports_a_relative_markdown_link_whose_target_is_missing() {
 }
 
 #[test]
+fn citation_anchors_reports_a_link_whose_target_the_change_removes() {
+    let base = [
+        (
+            "README.md",
+            "# p\n\nSee [the guide](docs/guide.md) and `src/old.rs:3`.\n",
+        ),
+        ("docs/guide.md", "# guide\n"),
+        ("CHANGELOG.md", "- [guide](docs/guide.md)\n"),
+        (
+            "src/old.rs",
+            "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n",
+        ),
+        ("src/lib.rs", "pub fn f() {}\n"),
+    ];
+    let repo = citation_repo(&base, &[("src/lib.rs", "pub fn g() {}\n")], "feat: g");
+    repo.remove("docs/guide.md");
+    repo.git(&["mv", "src/old.rs", "src/new.rs"]);
+    repo.commit("refactor: drop the guide, rename the module");
+
+    // Off by default: nothing reads the README. (The deletion itself is
+    // `deletion-rationale`'s.)
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.violations("citation-anchors").len(),
+        0,
+        "{}",
+        run.stdout
+    );
+
+    let run = repo.check(&["--enable", "citation-anchors"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let found = run.violations("citation-anchors");
+    assert_eq!(found.len(), 2, "{}", run.stdout);
+    for f in &found {
+        assert_eq!(f["code"], "citation-anchors/link-target-removed");
+        assert_eq!(f["file"], "README.md");
+        assert_eq!(f["line"], 3);
+    }
+    let message = |i: usize| found[i]["message"].as_str().unwrap().to_string();
+    assert!(
+        message(0).contains("`docs/guide.md`") && message(0).contains("deletes"),
+        "{}",
+        message(0)
+    );
+    assert!(
+        message(1).contains("renames to `src/new.rs`"),
+        "{}",
+        message(1)
+    );
+
+    // Control: the same change with the README updated passes; the changelog is exempt.
+    repo.write("README.md", "# p\n\nSee `src/new.rs:3`.\n");
+    repo.commit("docs: follow the rename");
+    let run = repo.check(&["--enable", "citation-anchors"]);
+    let removed = run
+        .violations("citation-anchors")
+        .into_iter()
+        .filter(|v| v["code"] == "citation-anchors/link-target-removed")
+        .count();
+    assert_eq!(removed, 0, "{}", run.stdout);
+}
+
+#[test]
 fn citation_metadata_judges_a_change_to_the_citation_record() {
     let good = [
         ("CITATION.cff", CITATION_CFF),

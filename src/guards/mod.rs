@@ -1357,6 +1357,7 @@ impl PathFilter {
 /// (an entry of `rules`, the `scratch` table) or under `[tests]`.
 const GLOB_LIST_KEYS: &[&str] = &[
     "exempt_paths",
+    "removed_link_exempt_paths",
     "paths",
     "include",
     "workflows",
