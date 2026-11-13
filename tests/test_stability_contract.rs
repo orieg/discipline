@@ -116,6 +116,11 @@ fn config(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {
                 walk(root, v, &p, out, depth + 1);
             }
         }
+        // An array of tables (`[[gates.companion-edit.rules]]`): the fields of each
+        // entry are keys users write, recorded as `<array>[].<field>` (#1085).
+        if let Some(items) = node.get("items") {
+            walk(root, items, &format!("{path}[]"), out, depth + 1);
+        }
     }
     walk(
         &schema,

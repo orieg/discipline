@@ -577,6 +577,61 @@ fn schema_json_def_references_resolve() {
     }
 }
 
+/// Layers merge gate tables, not the entries of an array of tables, so a list inside
+/// an entry is a plain list: the loader rejects the `{ reset = true }` table there. The
+/// schema must say the same, or an editor offers a form the run refuses (#1085).
+#[test]
+fn array_of_tables_entry_lists_do_not_offer_the_reset_table() {
+    fn walk(root: &serde_json::Value, node: &serde_json::Value, path: &str, in_entry: bool) {
+        let node = match node.get("$ref").and_then(|r| r.as_str()) {
+            Some("#/$defs/StringListOrReset") => {
+                assert!(
+                    !in_entry,
+                    "{path} is inside an array-of-tables entry and must use StringList"
+                );
+                return;
+            }
+            Some(r) => &root["$defs"][r.trim_start_matches("#/$defs/")],
+            None => node,
+        };
+        for key in ["anyOf", "oneOf", "allOf"] {
+            for alt in node
+                .get(key)
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                walk(root, alt, path, in_entry);
+            }
+        }
+        if let Some(props) = node.get("properties").and_then(|v| v.as_object()) {
+            for (k, v) in props {
+                walk(root, v, &format!("{path}.{k}"), in_entry);
+            }
+        }
+        if let Some(items) = node.get("items") {
+            walk(root, items, &format!("{path}[]"), true);
+        }
+    }
+    let schema = discipline::schema::generate_schema();
+    walk(&schema, &schema, "", false);
+
+    // The loader side of the same contract, one entry list per gate that has one.
+    let head = "[meta]\nversion = 1\nname = \"t\"\n\n";
+    for entry in [
+        "[[gates.companion-edit.rules]]\ntrigger_paths = { reset = true, items = [\"src/**\"] }\nrequire_edits_to = [\"docs/**\"]\n",
+        "[[gates.manifest-sync.rules]]\nmanifest = \"m\"\nextract_regex = \"x\"\nwatched_paths = { reset = true, items = [\"x\"] }\n",
+        "[[gates.command.commands]]\nname = \"a\"\ncommand = \"true\"\nforbid_output = { reset = true, items = [\"x\"] }\n",
+    ] {
+        let err = DisciplineConfig::from_toml_str(&format!("{head}{entry}"))
+            .expect_err("a reset table inside an array-of-tables entry must be rejected");
+        assert!(
+            format!("{err:#}").contains("expected a sequence"),
+            "unexpected error for {entry}: {err:#}"
+        );
+    }
+}
+
 #[test]
 fn test_all_directives_documented_in_configuration_md() {
     let doc =
