@@ -16,7 +16,8 @@ use crate::audit::{Record, Signal, Summary, GUARD_GATES};
 use crate::escape::{html as own, html_author_text as esc};
 use std::collections::{BTreeMap, BTreeSet};
 
-const STYLE: &str = include_str!("audit_html/style.css");
+/// The page's stylesheet; the replay page uses it too.
+pub(crate) const STYLE: &str = include_str!("audit_html/style.css");
 const SCRIPT: &str = include_str!("audit_html/app.js");
 
 /// `YYYY-MM-DD` (UTC) for seconds since the Unix epoch.
@@ -319,7 +320,7 @@ fn dot(class: &str) -> String {
     format!(r##"<span class="dot k-{}"></span>"##, own(class))
 }
 
-fn table(head: &[&str], rows: &str) -> String {
+pub(crate) fn table(head: &[&str], rows: &str) -> String {
     let th: String = head.iter().map(|h| format!("<th>{h}</th>")).collect();
     format!(
         r##"<div class="tablebox"><table><thead><tr>{th}</tr></thead><tbody>{rows}</tbody></table></div>"##

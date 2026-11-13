@@ -1657,7 +1657,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__replay)
-            opts="-c -h --last --ref --config --json --no-cache --jobs --help"
+            opts="-c -o -h --last --ref --config --json --format --output --no-cache --jobs --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1676,6 +1676,18 @@ _discipline() {
                     return 0
                     ;;
                 -c)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --format)
+                    COMPREPLY=($(compgen -W "text json html" -- "${cur}"))
+                    return 0
+                    ;;
+                --output)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -o)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

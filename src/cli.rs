@@ -141,9 +141,17 @@ pub struct ReplayArgs {
     #[arg(short, long)]
     pub config: Option<PathBuf>,
 
-    /// Print the summary as JSON
+    /// Print the summary as JSON (the same as `--format json`)
     #[arg(long)]
     pub json: bool,
+
+    /// Output format: `text`, `json`, or `html` (one self-contained page, each change linked to the forge)
+    #[arg(long, value_enum, default_value_t = AuditFormat::Text)]
+    pub format: AuditFormat,
+
+    /// Write the output to this file instead of stdout
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
 
     /// Check every change again: read no verdict from the replay cache and record none
     #[arg(long)]
@@ -154,6 +162,7 @@ pub struct ReplayArgs {
     pub jobs: Option<usize>,
 }
 
+/// The output format of `audit` and `replay`.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditFormat {
     Text,
