@@ -4,6 +4,7 @@ pub mod archive_formats;
 pub mod archive_presets;
 pub mod build_flags;
 pub mod build_hooks;
+pub mod changed_line_coverage;
 pub mod ci_exposure;
 pub(crate) mod ci_expr;
 pub mod ci_gitlab;
@@ -1169,6 +1170,7 @@ pub fn run_checks(
             "citation-anchors" => citation_anchors::evaluate_citation_anchors(ctx),
             "claim-labels" => claim_labels::evaluate_claim_labels(ctx),
             "companion-edit" => companion_edit::evaluate_companion_edit(ctx),
+            "changed-line-coverage" => changed_line_coverage::evaluate_changed_line_coverage(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -2208,6 +2210,7 @@ mod tests {
             "archive-contents",
             "bench-regression",
             "ci-integrity",
+            "changed-line-coverage",
             "ci-skip-set",
             "command",
             "commit-provenance",
@@ -2286,6 +2289,7 @@ mod tests {
             "commit-provenance",
             "bench-regression",
             "companion-edit",
+            "changed-line-coverage",
         ];
         let mut found = delta_only.clone();
         expected.sort_unstable();
@@ -2501,6 +2505,7 @@ mod tests {
         "manifest",
         "path",
         "ratio_baseline",
+        "report",
         "snapshot",
         "superseded_registry",
         "test_report",

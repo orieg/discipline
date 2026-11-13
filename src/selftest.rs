@@ -5614,6 +5614,27 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "changed-line-coverage: a changed line the report lists with zero hits is uncovered, one it does not list is not, and report paths are made repository-relative (#1068)",
+        || {
+            use crate::guards::changed_line_coverage::{by_repo_path, parse_cobertura, parse_lcov, uncovered};
+            use std::collections::{BTreeMap, BTreeSet};
+            let lcov = by_repo_path(
+                parse_lcov("SF:/r/src/a.rs\nDA:5,0\nDA:6,0\nDA:7,4\nend_of_record\n")?,
+                &[],
+                "/r",
+            );
+            let (cob, roots) = parse_cobertura(
+                r#"<coverage><sources><source>/r/src</source></sources><class filename="b.py"><lines><line number="2" hits="0"/></lines></class></coverage>"#,
+            )?;
+            let cob = by_repo_path(cob, &roots, "/r");
+            let added = BTreeSet::from([4, 5, 6, 7]);
+            Ok(uncovered(&added, &lcov["src/a.rs"]) == [(5, 6)]
+                && uncovered(&BTreeSet::from([2]), &cob["src/b.py"]) == [(2, 2)]
+                && uncovered(&added, &BTreeMap::from([(5, 1), (6, 1)])).is_empty()
+                && parse_lcov("TN:\n").is_err())
+        },
+    ),
+    (
         "command: base-tests overlays no test inside a source file, and names a changed source that holds one",
         || {
             use crate::guards::command::{base_test_files, inline_test_sources};

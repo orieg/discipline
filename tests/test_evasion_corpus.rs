@@ -39,6 +39,10 @@ struct Case {
     name: String,
     base: BTreeMap<String, String>,
     head: BTreeMap<String, Option<String>>,
+    /// Files written after the change is committed, untracked: what a test run leaves
+    /// behind, such as a coverage report.
+    #[serde(default)]
+    untracked: BTreeMap<String, String>,
     #[serde(default)]
     body: String,
     #[serde(default)]
@@ -187,6 +191,9 @@ fn run_case(case: &Case) -> Outcome {
         }
     }
     repo.commit("change");
+    for (path, content) in &case.untracked {
+        repo.write(path, content);
+    }
 
     let enable = case.enable.join(",");
     // A policy refusal is a line of text in the JSON report; the SARIF report carries its
@@ -623,6 +630,7 @@ fn the_judge_rejects_each_kind_of_disagreement() {
         name: "c".into(),
         base: BTreeMap::new(),
         head: BTreeMap::new(),
+        untracked: BTreeMap::new(),
         body: String::new(),
         enable: vec![],
         author: None,

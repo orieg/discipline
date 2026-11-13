@@ -10743,7 +10743,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 20 disabled, 1 not evaluated (63 items examined)"
+            "gates:  26 passed, 0 failed, 21 disabled, 1 not evaluated (64 items examined)"
         ),
         "{}",
         run.stdout
@@ -10759,13 +10759,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=63"), "{step_output}");
+    assert!(step_output.contains("examined_items=64"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 20 disabled, 1 not evaluated (63 items examined)"
+            "**Summary:** 26 passed, 0 failed, 21 disabled, 1 not evaluated (64 items examined)"
         ),
         "{step_summary}"
     );
@@ -13974,6 +13974,226 @@ fn changed_ranges_is_given_the_added_lines_and_a_change_with_none_is_not_run() {
         run.stderr
     );
     assert_eq!(given(), None);
+}
+
+const COVERAGE_BASE_LIB: &str = "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n";
+/// Lines 4-7 are added: a blank line, then `halve` on 5-7.
+const COVERAGE_HEAD_LIB: &str =
+    "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n\npub fn halve(x: i32) -> i32 {\n    x / 2\n}\n";
+
+/// A repository with `changed-line-coverage` reading `coverage/lcov.info` (ignored by git).
+fn coverage_repo(table_extra: &str) -> Repo {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            ),
+            ("src/lib.rs", COVERAGE_BASE_LIB),
+            ("src/other.rs", "pub fn other() {}\n"),
+            (".gitignore", "coverage/\n"),
+            (
+                "discipline.toml",
+                &format!(
+                    "{CONFIG_HEAD}\n[gates.changed-line-coverage]\nenabled = true\nreport = \"coverage/lcov.info\"\n{table_extra}"
+                ),
+            ),
+        ],
+        "ci: read the coverage report",
+    );
+    repo
+}
+
+fn lcov(records: &[(&str, &[(usize, u64)])]) -> String {
+    records
+        .iter()
+        .map(|(path, lines)| {
+            let da: String = lines.iter().map(|(l, h)| format!("DA:{l},{h}\n")).collect();
+            format!("TN:\nSF:{path}\n{da}end_of_record\n")
+        })
+        .collect()
+}
+
+/// `changed-line-coverage` (#1068): a line the change adds that the report lists with zero
+/// hits is reported, once per file, naming the runs of lines; `allow-uncovered:` lifts that
+/// file's finding. Controls: the same lines run, a changed line the report does not list,
+/// a change to a test file only, and a changed file the report has no entry for beside one
+/// it lists.
+#[test]
+fn changed_line_coverage_reports_a_never_run_added_line_and_honours_its_waiver() {
+    let run = |report: &str, body: &str| {
+        let repo = coverage_repo("");
+        repo.write("src/lib.rs", COVERAGE_HEAD_LIB);
+        repo.commit("feat: halve");
+        repo.write("coverage/lcov.info", report);
+        repo.check_with_pr(&[], body)
+    };
+    let absolute = |repo_lines: &[(usize, u64)]| lcov(&[("src/lib.rs", repo_lines)]);
+
+    let out = run(&absolute(&[(1, 1), (2, 1), (5, 0), (6, 0)]), "");
+    let found = out.violations("changed-line-coverage");
+    assert_eq!(found.len(), 1, "{}{}", out.stdout, out.stderr);
+    assert_eq!(found[0]["code"], "changed-line-coverage/uncovered-lines");
+    assert_eq!(found[0]["file"], "src/lib.rs");
+    assert_eq!(found[0]["line"], 5);
+    assert!(
+        found[0]["message"].as_str().unwrap().contains(": 5-6."),
+        "{}",
+        found[0]["message"]
+    );
+    assert_eq!(out.outcome("changed-line-coverage")["examined"], 1);
+
+    let lifted = run(
+        &absolute(&[(5, 0), (6, 0)]),
+        "allow-uncovered: src/lib.rs exercised by the integration suite\n",
+    );
+    assert!(lifted.violations("changed-line-coverage").is_empty());
+    assert_eq!(
+        lifted.outcome("changed-line-coverage")["overrides"][0]["code"],
+        "changed-line-coverage/uncovered-lines"
+    );
+
+    // Controls: the lines run; a changed line not listed (not executable).
+    for report in [absolute(&[(5, 3), (6, 3)]), absolute(&[(1, 0), (6, 2)])] {
+        let out = run(&report, "");
+        assert!(
+            out.violations("changed-line-coverage").is_empty(),
+            "{report}: {}",
+            out.stdout
+        );
+        assert_eq!(out.outcome("changed-line-coverage")["examined"], 1);
+    }
+
+    // A change to a test file only: nothing to check.
+    let repo = coverage_repo("");
+    repo.write(
+        "tests/t.rs",
+        "#[test]\nfn t() {\n    assert_eq!(p::double(2), 4);\n}\n",
+    );
+    repo.commit("test: double");
+    repo.write("coverage/lcov.info", &absolute(&[(1, 1)]));
+    let out = repo.check(&[]);
+    let outcome = out.outcome("changed-line-coverage");
+    assert_eq!(outcome["examined"], 0, "{outcome}");
+    assert!(out.violations("changed-line-coverage").is_empty());
+
+    // A changed file the report has no entry for, beside one it lists, is named and not
+    // checked.
+    let repo = coverage_repo("");
+    repo.write("src/lib.rs", COVERAGE_HEAD_LIB);
+    repo.write("src/other.rs", "pub fn other() {}\npub fn more() {}\n");
+    repo.commit("feat: two files");
+    repo.write("coverage/lcov.info", &absolute(&[(5, 1), (6, 1)]));
+    let out = repo.check(&[]);
+    let outcome = out.outcome("changed-line-coverage");
+    assert!(
+        outcome["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("`src/other.rs`")),
+        "{outcome}"
+    );
+    assert!(out.violations("changed-line-coverage").is_empty());
+}
+
+/// A report the change could have written, or one discipline cannot read for the
+/// change, stops the run (exit 2): tracked by git, missing, a symlink, a path outside the
+/// repository, malformed, `report` unset, or no entry for any changed source file. The
+/// control is the same report written by the run and untracked.
+#[cfg(unix)]
+#[test]
+fn changed_line_coverage_refuses_a_report_the_change_could_have_written() {
+    let report = lcov(&[("src/lib.rs", &[(5, 1), (6, 1)])]);
+    let check = |extra: &str, prepare: &dyn Fn(&Repo)| {
+        let repo = coverage_repo(extra);
+        repo.write("src/lib.rs", COVERAGE_HEAD_LIB);
+        prepare(&repo);
+        repo.commit("feat: halve");
+        let out = repo.check(&[]);
+        (out.code, format!("{}{}", out.stdout, out.stderr))
+    };
+    // `coverage/` is ignored, so a report written before the commit stays untracked.
+    let untracked = |repo: &Repo| repo.write("coverage/lcov.info", &report);
+    let (code, said) = check("", &untracked);
+    assert_eq!(code, 0, "{said}");
+
+    type Prepare<'a> = Box<dyn Fn(&Repo) + 'a>;
+    let cases: Vec<(&str, Prepare, &str)> = vec![
+        (
+            "",
+            Box::new(|_: &Repo| {}),
+            "cannot read the coverage report",
+        ),
+        (
+            "",
+            Box::new(|repo: &Repo| {
+                repo.write("real.info", &report);
+                std::fs::create_dir_all(repo.path().join("coverage")).unwrap();
+                std::os::unix::fs::symlink(
+                    repo.path().join("real.info"),
+                    repo.path().join("coverage/lcov.info"),
+                )
+                .unwrap();
+            }),
+            "not a regular file",
+        ),
+        (
+            "",
+            Box::new(|repo: &Repo| repo.write("coverage/lcov.info", "TN:\nDA:1,1\n")),
+            "outside an `SF` record",
+        ),
+        (
+            "",
+            Box::new(|repo: &Repo| {
+                repo.write(
+                    "coverage/lcov.info",
+                    &lcov(&[("packages/web/src/lib.rs", &[(5, 0)])]),
+                )
+            }),
+            "has no entry for any changed source file",
+        ),
+    ];
+    for (extra, prepare, needle) in cases {
+        let (code, said) = check(extra, &*prepare);
+        assert_eq!(code, 2, "{needle}: {said}");
+        assert!(said.contains(needle), "{needle}: {said}");
+    }
+    // A tracked report under the configured path itself.
+    let repo = coverage_repo("");
+    repo.write("src/lib.rs", COVERAGE_HEAD_LIB);
+    repo.git(&["add", "-f", "src/lib.rs"]);
+    repo.write("coverage/lcov.info", &report);
+    repo.git(&["add", "-f", "coverage/lcov.info"]);
+    repo.commit("feat: halve with its report");
+    let out = repo.check(&[]);
+    assert_eq!(out.code, 2, "{}{}", out.stdout, out.stderr);
+    assert!(format!("{}{}", out.stdout, out.stderr).contains("is tracked by git"));
+
+    // Configuration: a path outside the repository, and no `report`.
+    for table in [
+        "[gates.changed-line-coverage]\nenabled = true\nreport = \"../lcov.info\"\n",
+        "[gates.changed-line-coverage]\nenabled = true\n",
+    ] {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                ("src/lib.rs", COVERAGE_BASE_LIB),
+                ("discipline.toml", &format!("{CONFIG_HEAD}\n{table}")),
+            ],
+            "ci: coverage",
+        );
+        repo.write("src/lib.rs", COVERAGE_HEAD_LIB);
+        repo.commit("feat: halve");
+        let out = repo.check(&[]);
+        assert_eq!(out.code, 2, "{table}: {}{}", out.stdout, out.stderr);
+        assert!(
+            format!("{}{}", out.stdout, out.stderr).contains("gates.changed-line-coverage"),
+            "{}",
+            out.stderr
+        );
+    }
 }
 
 /// The `cargo-mutants` preset's own command is given the change's diff (#844): the file
