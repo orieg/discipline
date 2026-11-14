@@ -12,7 +12,7 @@
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
 //! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
-//! matchers and `assert(..)` calls, and Java and C# assertions (#1070).
+//! matchers and `assert(..)` calls, and Java, C# and C/C++ assertions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -35,6 +35,11 @@
 //! and NUnit `Is.*` constraints the same way: comparison methods and constraints as
 //! their operator (`Not` negating a constraint), the methods and constraints with a
 //! negated twin as a polarity, and the comparisons of a `True` / `False` condition.
+//! C and C++ read GoogleTest `EXPECT_*` / `ASSERT_*`, Catch2 and doctest `CHECK*` /
+//! `REQUIRE*`, Unity `TEST_ASSERT*` and CMocka `assert_*` the same way: a comparison
+//! macro (`EXPECT_GT`, `TEST_ASSERT_LESS_THAN`, `assert_int_equal`) or GoogleMock
+//! matcher (`Gt`) as its operator, a macro with a negated twin as a polarity, and the
+//! comparisons of a condition (`EXPECT_TRUE`, `REQUIRE`, `assert`).
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -187,6 +192,7 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
             return js_matcher_polarity(operator)
                 .or_else(|| java_chain_polarity(operator))
                 .or_else(|| cs_polarity(operator))
+                .or_else(|| c_check(operator).and_then(|c| c.polar))
         }
     })
 }
@@ -1547,6 +1553,278 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+/// C/C++: what a test macro or assertion function checks ([`c_check`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CCheck {
+    /// The operator its operands must satisfy (`EXPECT_GT` -> `>`).
+    compare: Option<&'static str>,
+    /// Its family and whether it is the negated twin (`EXPECT_TRUE` / `EXPECT_FALSE`).
+    polar: Option<(&'static str, bool)>,
+    /// Its first argument is a condition: `Some(true)` when the condition holding fails
+    /// the test (`EXPECT_FALSE(cond)`).
+    condition: Option<bool>,
+    /// The literal of a comparison is its first argument only (Unity's threshold).
+    threshold_first: bool,
+}
+
+const NO_CHECK: CCheck = CCheck {
+    compare: None,
+    polar: None,
+    condition: None,
+    threshold_first: false,
+};
+
+/// The operator of a two-letter GoogleTest / doctest comparison suffix.
+fn c_suffix_operator(suffix: &str) -> Option<&'static str> {
+    Some(match suffix {
+        "EQ" => "==",
+        "NE" => "!=",
+        "LT" => "<",
+        "LE" => "<=",
+        "GT" => ">",
+        "GE" => ">=",
+        _ => return None,
+    })
+}
+
+/// C/C++: what the test macro or assertion function `name` checks, for GoogleTest
+/// (`EXPECT_*` / `ASSERT_*`), Catch2 and doctest (`CHECK*` / `REQUIRE*`), Unity
+/// (`TEST_ASSERT*`), CMocka (`assert_*`) and the GoogleMock comparison matchers (`Gt`,
+/// ..). A name outside these lists is not read.
+fn c_check(name: &str) -> Option<CCheck> {
+    let compare = |op| CCheck {
+        compare: Some(op),
+        ..NO_CHECK
+    };
+    let polar = |family, not| CCheck {
+        polar: Some((family, not)),
+        ..NO_CHECK
+    };
+    let condition = |family, not| CCheck {
+        polar: Some((family, not)),
+        condition: Some(not),
+        ..NO_CHECK
+    };
+    let equality = |family, not| CCheck {
+        compare: Some(if not { "!=" } else { "==" }),
+        polar: Some((family, not)),
+        ..NO_CHECK
+    };
+    if let Some(rest) = name
+        .strip_prefix("EXPECT_")
+        .or_else(|| name.strip_prefix("ASSERT_"))
+    {
+        return Some(match rest {
+            "EQ" => equality("gtest-eq", false),
+            "NE" => equality("gtest-eq", true),
+            "TRUE" => condition("gtest-true", false),
+            "FALSE" => condition("gtest-true", true),
+            "STREQ" => polar("gtest-streq", false),
+            "STRNE" => polar("gtest-streq", true),
+            "STRCASEEQ" => polar("gtest-strcaseeq", false),
+            "STRCASENE" => polar("gtest-strcaseeq", true),
+            "ANY_THROW" => polar("gtest-throw", false),
+            "NO_THROW" => polar("gtest-throw", true),
+            _ => compare(c_suffix_operator(rest)?),
+        });
+    }
+    if let Some(rest) = name
+        .strip_prefix("CHECK_")
+        .or_else(|| name.strip_prefix("REQUIRE_"))
+    {
+        return Some(match rest {
+            "EQ" => equality("doctest-eq", false),
+            "NE" => equality("doctest-eq", true),
+            "FALSE" => condition("catch-check", true),
+            "UNARY" => condition("doctest-unary", false),
+            "UNARY_FALSE" => condition("doctest-unary", true),
+            "THROWS" => polar("catch-throws", false),
+            "NOTHROW" => polar("catch-throws", true),
+            _ => compare(c_suffix_operator(rest)?),
+        });
+    }
+    if let Some(rest) = name.strip_prefix("TEST_ASSERT") {
+        let threshold = |op| CCheck {
+            compare: Some(op),
+            threshold_first: true,
+            ..NO_CHECK
+        };
+        return Some(match rest {
+            "" | "_TRUE" => condition("unity-true", false),
+            "_FALSE" | "_UNLESS" => condition("unity-true", true),
+            "_NULL" => polar("unity-null", false),
+            "_NOT_NULL" => polar("unity-null", true),
+            "_EMPTY" => polar("unity-empty", false),
+            "_NOT_EMPTY" => polar("unity-empty", true),
+            r if r.starts_with("_NOT_EQUAL") => equality("unity-equal", true),
+            r if r.starts_with("_EQUAL") => equality("unity-equal", false),
+            r if r.starts_with("_GREATER_THAN") => threshold(">"),
+            r if r.starts_with("_GREATER_OR_EQUAL") => threshold(">="),
+            r if r.starts_with("_LESS_THAN") => threshold("<"),
+            r if r.starts_with("_LESS_OR_EQUAL") => threshold("<="),
+            _ => return None,
+        });
+    }
+    Some(match name {
+        "CHECK" | "REQUIRE" => condition("catch-check", false),
+        "assert_true" => condition("cmocka-true", false),
+        "assert_false" => condition("cmocka-true", true),
+        "assert_null" => polar("cmocka-null", false),
+        "assert_non_null" => polar("cmocka-null", true),
+        "assert_in_range" => polar("cmocka-range", false),
+        "assert_not_in_range" => polar("cmocka-range", true),
+        "assert_in_set" => polar("cmocka-set", false),
+        "assert_not_in_set" => polar("cmocka-set", true),
+        "Eq" => equality("gmock-eq", false),
+        "Ne" => equality("gmock-eq", true),
+        "Lt" => compare("<"),
+        "Le" => compare("<="),
+        "Gt" => compare(">"),
+        "Ge" => compare(">="),
+        _ => {
+            let typed = name.strip_prefix("assert_")?;
+            if let Some(t) = typed.strip_suffix("_not_equal") {
+                return CMOCKA_TYPES
+                    .contains(&t)
+                    .then(|| equality("cmocka-equal", true));
+            }
+            let t = typed.strip_suffix("_equal")?;
+            return CMOCKA_TYPES
+                .contains(&t)
+                .then(|| equality("cmocka-equal", false));
+        }
+    })
+}
+
+/// The value types of CMocka's `assert_<type>_equal` / `assert_<type>_not_equal`.
+const CMOCKA_TYPES: &[&str] = &["int", "uint", "ptr", "string", "memory", "float", "double"];
+
+fn c_literal(n: Node, src: &str) -> bool {
+    let num = |n: Node| n.kind() == "number_literal";
+    match n.kind() {
+        "string_literal"
+        | "raw_string_literal"
+        | "concatenated_string"
+        | "char_literal"
+        | "true"
+        | "false"
+        | "null"
+        | "nullptr" => true,
+        "unary_expression" => {
+            n.child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "-")
+                && n.child_by_field_name("argument").is_some_and(num)
+        }
+        _ => num(n),
+    }
+}
+
+/// The expressions of a C/C++ call's arguments.
+fn c_args(call: Node) -> Vec<Node> {
+    call.child_by_field_name("arguments")
+        .map(|a| {
+            let mut c = a.walk();
+            a.named_children(&mut c)
+                .filter(|n| !n.is_extra())
+                .map(unparenthesized)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The identifier a C/C++ call names, a qualified name's last part (`testing::Gt`).
+fn c_callee(call: Node) -> Option<Node> {
+    let mut f = call.child_by_field_name("function")?;
+    while f.kind() == "qualified_identifier" {
+        f = f.child_by_field_name("name")?;
+    }
+    (f.kind() == "identifier").then_some(f)
+}
+
+/// C/C++: the call `name` names, read as [`c_check`] says: its name masked, the literal
+/// of a comparison masked, and the comparisons of its condition ([`c_operands`]).
+fn c_record(records: &mut Records<Comparison>, stmt: Node, call: Node, name: Node, src: &str) {
+    let method = text(name, src);
+    let Some(check) = c_check(method) else {
+        return;
+    };
+    let args = c_args(call);
+    let literal = match check.compare {
+        Some(_) if check.threshold_first => args.first().copied().filter(|a| c_literal(*a, src)),
+        Some(_) => args
+            .iter()
+            .take(2)
+            .rev()
+            .copied()
+            .find(|a| c_literal(*a, src)),
+        None => None,
+    };
+    let mut holes = vec![(name, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: method.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    if let (Some(fails), Some(cond)) = (check.condition, args.first()) {
+        c_operands(records, stmt, *cond, src, fails, &|n| c_literal(n, src));
+    }
+}
+
+/// C/C++: comparisons and polarity in GoogleTest, Catch2, doctest, Unity and CMocka
+/// assertions ([`c_check`]), the GoogleMock comparison matcher of an `EXPECT_THAT` /
+/// `ASSERT_THAT`, and the comparisons of an `assert(..)` condition, each read from a
+/// statement that is the call (a GoogleTest `<< "message"` after it kept).
+pub fn c_cpp(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if node.kind() != "expression_statement" {
+            return true;
+        }
+        let mut expr = node.named_child(0);
+        while let Some(b) = expr.filter(|e| {
+            e.kind() == "binary_expression"
+                && e.child_by_field_name("operator")
+                    .is_some_and(|o| text(o, src) == "<<")
+        }) {
+            expr = b.child_by_field_name("left");
+        }
+        let Some(call) = expr.filter(|e| e.kind() == "call_expression") else {
+            return true;
+        };
+        let Some(name) = c_callee(call) else {
+            return true;
+        };
+        match text(name, src) {
+            "assert" => {
+                if let Some(cond) = c_args(call).first() {
+                    c_operands(records, node, *cond, src, false, &|n| c_literal(n, src));
+                }
+            }
+            "EXPECT_THAT" | "ASSERT_THAT" => {
+                let matcher = c_args(call).get(1).copied();
+                if let Some((m, n)) = matcher
+                    .filter(|m| m.kind() == "call_expression")
+                    .and_then(|m| Some((m, c_callee(m)?)))
+                {
+                    if c_check(text(n, src)).is_some_and(|c| c.compare.is_some()) {
+                        c_record(records, node, m, n, src);
+                    }
+                }
+            }
+            "Eq" | "Ne" | "Lt" | "Le" | "Gt" | "Ge" => return true,
+            _ if c_check(text(name, src)).is_some() => c_record(records, node, call, name, src),
+            _ => return true,
+        }
+        false
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
@@ -1592,7 +1870,10 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         "GreaterOrEqual" | "BeGreaterThanOrEqualTo" | "BeGreaterOrEqualTo" => (">=", "<"),
         "Less" | "BeLessThan" => ("<", ">="),
         "LessOrEqual" | "BeLessThanOrEqualTo" | "BeLessOrEqualTo" => ("<=", ">"),
-        _ => return cs_constraint_passing(operator, fails_when_true != not),
+        _ => match c_check(operator).and_then(|c| c.compare) {
+            Some(op) => return passing(op, fails_when_true != not),
+            None => return cs_constraint_passing(operator, fails_when_true != not),
+        },
     };
     Some(if fails_when_true != not { negated } else { op })
 }
@@ -2815,6 +3096,320 @@ mod tests {
             ),
         ] {
             assert_eq!(cs_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn cc(check: &str) -> Vec<Comparison> {
+        if check.contains("TEST_ASSERT") || check.contains("assert_") {
+            let src = format!("void test_x(void) {{\n    int rows[] = {{1}};\n    {check}\n}}\n");
+            return comparisons(&crate::ast::c_cpp::CPack, "tests/test_x.c", &src);
+        }
+        let src = format!("TEST(X, Y) {{\n    int rows[] = {{1}};\n    {check}\n}}\n");
+        comparisons(&crate::ast::c_cpp::CppPack, "tests/XTest.cpp", &src)
+    }
+
+    fn cc_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&cc(a), &cc(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn cc_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        cc(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    #[test]
+    fn c_cpp_records_gtest_catch2_unity_cmocka_comparisons_with_literals_masked() {
+        let got = cc_read("EXPECT_GT(F(rows), 6) << \"seven rows\";");
+        assert_eq!(
+            got,
+            vec![read(
+                "EXPECT_GT",
+                Some("6"),
+                "@(F(rows), #) << \"seven rows\";"
+            )]
+        );
+        assert_eq!(
+            cc_read("ASSERT_EQ(3, F(rows));"),
+            vec![read("ASSERT_EQ", Some("3"), "@(#, F(rows));")]
+        );
+        assert_eq!(
+            cc_read("EXPECT_TRUE(F(rows) > 6 && G(rows) <= -1);"),
+            vec![
+                read("EXPECT_TRUE", None, "@(F(rows) > 6 && G(rows) <= -1);"),
+                read(">", Some("6"), "EXPECT_TRUE(F(rows) @ # && G(rows) <= -1);"),
+                read("<=", Some("-1"), "EXPECT_TRUE(F(rows) > 6 && G(rows) @ #);"),
+            ]
+        );
+        assert_eq!(
+            cc_read("REQUIRE(F(rows) != nullptr);"),
+            vec![
+                read("REQUIRE", None, "@(F(rows) != nullptr);"),
+                read("!=", Some("nullptr"), "REQUIRE(F(rows) @ #);"),
+            ]
+        );
+        assert_eq!(
+            cc_read("CHECK_LT(F(rows), 2.5);"),
+            vec![read("CHECK_LT", Some("2.5"), "@(F(rows), #);")]
+        );
+        assert_eq!(
+            cc_read("EXPECT_THAT(F(rows), ::testing::Gt(6));"),
+            vec![read(
+                "Gt",
+                Some("6"),
+                "EXPECT_THAT(F(rows), ::testing::@(#));"
+            )]
+        );
+        assert_eq!(
+            cc_read("assert(F(rows) >= 6);"),
+            vec![read(">=", Some("6"), "assert(F(rows) @ #);")]
+        );
+        // Unity's threshold comes first; `TEST_ASSERT_EQUAL_INT` reads the literal.
+        assert_eq!(
+            cc_read("TEST_ASSERT_GREATER_THAN(6, F(rows));"),
+            vec![read(
+                "TEST_ASSERT_GREATER_THAN",
+                Some("6"),
+                "@(#, F(rows));"
+            )]
+        );
+        assert_eq!(
+            cc_read("TEST_ASSERT_LESS_THAN(F(rows), 6);"),
+            vec![read("TEST_ASSERT_LESS_THAN", None, "@(F(rows), 6);")]
+        );
+        assert_eq!(
+            cc_read("TEST_ASSERT_EQUAL_INT(7, F(rows));"),
+            vec![read("TEST_ASSERT_EQUAL_INT", Some("7"), "@(#, F(rows));")]
+        );
+        assert_eq!(
+            cc_read("assert_int_equal(F(rows), 7);"),
+            vec![read("assert_int_equal", Some("7"), "@(F(rows), #);")]
+        );
+        // Not read: a call outside the lists, a matcher outside `EXPECT_THAT`, a matcher
+        // that is not a comparison, a comparison inside a call's arguments or in the
+        // operand of a macro that takes no condition.
+        for check in [
+            "EXPECT_NEAR(F(rows), 6, 0.1);",
+            "Gt(6);",
+            "EXPECT_THAT(F(rows), IsEmpty());",
+            "check(F(rows) > 6);",
+            "assert_true_ish(F(rows) > 6);",
+            "assert_bool_equal(F(rows), 6);",
+        ] {
+            assert_eq!(cc_read(check), vec![], "{check}");
+        }
+        assert_eq!(
+            cc_read("EXPECT_TRUE(G(F(rows) > 6));"),
+            vec![read("EXPECT_TRUE", None, "@(G(F(rows) > 6));")]
+        );
+        assert_eq!(
+            cc_read("EXPECT_GT(F(rows) > 1, 0);"),
+            vec![read("EXPECT_GT", Some("0"), "@(F(rows) > 1, #);")]
+        );
+    }
+
+    #[test]
+    fn c_cpp_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "EXPECT_GT(F(rows), 6);",
+                "EXPECT_GE(F(rows), 6);",
+                "EXPECT_GT",
+                "EXPECT_GE",
+            ),
+            (
+                "ASSERT_LT(F(rows), 6);",
+                "ASSERT_LE(F(rows), 7);",
+                "ASSERT_LT",
+                "ASSERT_LE",
+            ),
+            (
+                "EXPECT_EQ(F(rows), 0);",
+                "EXPECT_NE(F(rows), 1);",
+                "EXPECT_EQ",
+                "EXPECT_NE",
+            ),
+            (
+                "EXPECT_EQ(F(rows), 0);",
+                "EXPECT_GE(F(rows), 0);",
+                "EXPECT_EQ",
+                "EXPECT_GE",
+            ),
+            ("REQUIRE(F(rows) > 6);", "REQUIRE(F(rows) >= 6);", ">", ">="),
+            (
+                "CHECK_GT(F(rows), 6);",
+                "CHECK_GE(F(rows), 6);",
+                "CHECK_GT",
+                "CHECK_GE",
+            ),
+            (
+                "EXPECT_TRUE(F(rows) == 7);",
+                "EXPECT_TRUE(F(rows) >= 7);",
+                "==",
+                ">=",
+            ),
+            // A failure condition that now fails less often.
+            (
+                "EXPECT_FALSE(F(rows) <= 6);",
+                "EXPECT_FALSE(F(rows) < 6);",
+                "<=",
+                "<",
+            ),
+            (
+                "REQUIRE_FALSE(F(rows) <= 6);",
+                "REQUIRE_FALSE(F(rows) < 6);",
+                "<=",
+                "<",
+            ),
+            (
+                "EXPECT_THAT(F(rows), Gt(6));",
+                "EXPECT_THAT(F(rows), Ge(6));",
+                "Gt",
+                "Ge",
+            ),
+            ("assert(F(rows) > 6);", "assert(F(rows) >= 6);", ">", ">="),
+            (
+                "TEST_ASSERT_GREATER_THAN(6, F(rows));",
+                "TEST_ASSERT_GREATER_OR_EQUAL(6, F(rows));",
+                "TEST_ASSERT_GREATER_THAN",
+                "TEST_ASSERT_GREATER_OR_EQUAL",
+            ),
+            (
+                "TEST_ASSERT_EQUAL_INT(0, F(rows));",
+                "TEST_ASSERT_NOT_EQUAL_INT(1, F(rows));",
+                "TEST_ASSERT_EQUAL_INT",
+                "TEST_ASSERT_NOT_EQUAL_INT",
+            ),
+            (
+                "TEST_ASSERT(F(rows) > 6);",
+                "TEST_ASSERT(F(rows) >= 6);",
+                ">",
+                ">=",
+            ),
+            (
+                "assert_int_equal(F(rows), 0);",
+                "assert_int_not_equal(F(rows), 1);",
+                "assert_int_equal",
+                "assert_int_not_equal",
+            ),
+        ] {
+            assert_eq!(
+                cc_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Negative controls: tightened, kept, moved to an integer that accepts the same
+        // values, `!=` back to `==`, a failure condition tightened, a checked value that
+        // changed.
+        for (a, b) in [
+            ("EXPECT_GE(F(rows), 6);", "EXPECT_GT(F(rows), 6);"),
+            ("EXPECT_GT(F(rows), 6);", "ASSERT_GT(F(rows), 6);"),
+            ("EXPECT_GT(F(rows), 6);", "EXPECT_GE(F(rows), 7);"),
+            ("EXPECT_NE(F(rows), 1);", "EXPECT_EQ(F(rows), 2);"),
+            ("EXPECT_FALSE(F(rows) < 6);", "EXPECT_FALSE(F(rows) <= 6);"),
+            ("EXPECT_GT(F(rows), 6);", "EXPECT_GE(G(rows), 6);"),
+            (
+                "TEST_ASSERT_GREATER_OR_EQUAL(6, F(rows));",
+                "TEST_ASSERT_GREATER_THAN(6, F(rows));",
+            ),
+            (
+                "EXPECT_THAT(F(rows), Ge(6));",
+                "EXPECT_THAT(F(rows), Gt(6));",
+            ),
+        ] {
+            assert_eq!(cc_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn c_cpp_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            (
+                "EXPECT_TRUE(F(rows));",
+                "EXPECT_FALSE(F(rows));",
+                "EXPECT_TRUE",
+                "EXPECT_FALSE",
+            ),
+            (
+                "ASSERT_EQ(F(rows), 3);",
+                "ASSERT_NE(F(rows), 3);",
+                "ASSERT_EQ",
+                "ASSERT_NE",
+            ),
+            (
+                "EXPECT_STREQ(F(rows), \"a\");",
+                "EXPECT_STRNE(F(rows), \"a\");",
+                "EXPECT_STREQ",
+                "EXPECT_STRNE",
+            ),
+            (
+                "EXPECT_ANY_THROW(F(rows));",
+                "EXPECT_NO_THROW(F(rows));",
+                "EXPECT_ANY_THROW",
+                "EXPECT_NO_THROW",
+            ),
+            (
+                "REQUIRE(F(rows));",
+                "REQUIRE_FALSE(F(rows));",
+                "REQUIRE",
+                "REQUIRE_FALSE",
+            ),
+            (
+                "CHECK_THROWS(F(rows));",
+                "CHECK_NOTHROW(F(rows));",
+                "CHECK_THROWS",
+                "CHECK_NOTHROW",
+            ),
+            (
+                "EXPECT_THAT(F(rows), Eq(3));",
+                "EXPECT_THAT(F(rows), Ne(3));",
+                "Eq",
+                "Ne",
+            ),
+            (
+                "TEST_ASSERT_TRUE(F(rows));",
+                "TEST_ASSERT_FALSE(F(rows));",
+                "TEST_ASSERT_TRUE",
+                "TEST_ASSERT_FALSE",
+            ),
+            (
+                "TEST_ASSERT_NULL(F(rows));",
+                "TEST_ASSERT_NOT_NULL(F(rows));",
+                "TEST_ASSERT_NULL",
+                "TEST_ASSERT_NOT_NULL",
+            ),
+            (
+                "assert_non_null(F(rows));",
+                "assert_null(F(rows));",
+                "assert_non_null",
+                "assert_null",
+            ),
+        ] {
+            assert_eq!(
+                cc_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // A checked value that changed is not paired; two macros of different families
+        // are not twins; a test framework's own `TEST_ASSERT` -> `TEST_ASSERT_TRUE` keeps
+        // the polarity.
+        for (a, b) in [
+            ("EXPECT_TRUE(F(rows));", "EXPECT_FALSE(G(rows));"),
+            ("EXPECT_TRUE(F(rows));", "CHECK_FALSE(F(rows));"),
+            (
+                "EXPECT_STREQ(F(rows), \"a\");",
+                "EXPECT_STRCASENE(F(rows), \"a\");",
+            ),
+            ("TEST_ASSERT(F(rows));", "TEST_ASSERT_TRUE(F(rows));"),
+            ("assert_null(F(rows));", "assert_false(F(rows));"),
+        ] {
+            assert_eq!(cc_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }
