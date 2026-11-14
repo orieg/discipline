@@ -652,6 +652,16 @@ pub const GATES: &[GateInfo] = &[
         scope: Scope::Repository,
         triggers: &[],
     },
+    GateInfo {
+        id: "invented-names",
+        suite: Suite::Hygiene,
+        summary: "a flag or configuration key a document gives a tool that the tool's declared surface does not list",
+        coverage: Coverage::Stated("markdown, any"),
+        available: true,
+        delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -1117,6 +1127,7 @@ pub struct Gates {
     pub claim_labels: ClaimLabelsGate,
     pub companion_edit: CompanionEditGate,
     pub changed_line_coverage: ChangedLineCoverageGate,
+    pub invented_names: InventedNamesGate,
 }
 
 /// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
@@ -1228,7 +1239,8 @@ impl_gate_settings!(
     CitationAnchorsGate,
     ClaimLabelsGate,
     CompanionEditGate,
-    ChangedLineCoverageGate
+    ChangedLineCoverageGate,
+    InventedNamesGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2984,6 +2996,49 @@ pub struct ChangedLineCoverageGate {
     pub format: CoverageFormat,
 }
 
+/// `invented-names`: each tool whose flags and configuration keys documents are checked
+/// against the list of names it declares.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InventedNamesGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Read only the lines the change adds to a document.
+    pub diff_only: bool,
+    pub tools: Vec<InventedNamesTool>,
+}
+
+impl Default for InventedNamesGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Warning,
+            exempt_paths: Vec::new(),
+            diff_only: true,
+            tools: Vec::new(),
+        }
+    }
+}
+
+/// One `[[gates.invented-names.tools]]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InventedNamesTool {
+    /// The command name a shell line or code span starts with (`mytool`).
+    pub name: String,
+    /// Repository-relative path of the tracked list of the names the tool accepts: one
+    /// flag (`--name`, `-n`) or configuration key (`section.key`) per line.
+    pub surface: String,
+    /// File names of the tool's configuration (`mytool.toml`): a `toml` block whose info
+    /// string or first comment names one is read for keys.
+    #[serde(default)]
+    pub config_files: Vec<String>,
+    /// Globs of documents whose unmarked `toml` blocks are all the tool's configuration.
+    #[serde(default)]
+    pub config_docs: Vec<String>,
+}
+
 impl Default for ChangedLineCoverageGate {
     fn default() -> Self {
         Self {
@@ -3047,6 +3102,7 @@ impl Gates {
             "claim-labels" => &self.claim_labels,
             "companion-edit" => &self.companion_edit,
             "changed-line-coverage" => &self.changed_line_coverage,
+            "invented-names" => &self.invented_names,
             _ => return None,
         })
     }

@@ -66,6 +66,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`claim-labels`](#claim-labels) | hygiene | **shipped** | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 | [`companion-edit`](#companion-edit) | integrity | **shipped** | any | a change to one path set must also change its companion path set |
 | [`changed-line-coverage`](#changed-line-coverage) | integrity | **shipped** | any (LCOV, Cobertura) | a line the change adds that the coverage report lists as never run |
+| [`invented-names`](#invented-names) | hygiene | **shipped** | markdown, any | a flag or configuration key a document gives a tool that the tool's declared surface does not list |
 <!-- /generated -->
 
 ### Scope on an Agent Edit
@@ -99,6 +100,7 @@ An agent's edit hook (`discipline hook run` after an edit) runs the gates about 
 | [`harness-tampering`](#harness-tampering) | file | runs |
 | [`ignored-tests`](#ignored-tests) | file | runs |
 | [`instruction-smuggling`](#instruction-smuggling) | file | runs |
+| [`invented-names`](#invented-names) | file | runs |
 | [`issue-link`](#issue-link) | provenance | not evaluated; end of turn and CI |
 | [`manifest-sync`](#manifest-sync) | repository | not evaluated; end of turn and CI |
 | [`mechanism-sections`](#mechanism-sections) | file | runs |
@@ -422,6 +424,8 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `claim-labels/read-label-unresolvable` | Unresolvable Read Label |
 | `companion-edit/companion-not-edited` | Companion Path Not Edited |
 | `changed-line-coverage/uncovered-lines` | Changed Lines Not Covered |
+| `invented-names/unknown-flag` | Flag Not In Declared Surface |
+| `invented-names/unknown-config-key` | Configuration Key Not In Declared Surface |
 | `engine/could-not-run` | Check Could Not Run |
 <!-- /generated -->
 
@@ -1549,6 +1553,38 @@ How a gate's default severity is allowed to move. This section is doctrine for c
 - **Lifting directive:** `allow-claim-label: <subject> <reason>` (or `discipline:allow(claim-labels)` in Markdown).
 - **Default:** off, severity `warning`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `extra_patterns`, `allow_patterns`.
+
+#### `invented-names`
+- **Rule:** A flag or configuration key a Markdown document gives a tool must be one the tool declares. Each `[[gates.invented-names.tools]]` entry names a tool (`name`) and its surface (`surface`): a tracked file listing the names the tool accepts. The surface is reviewed content; the tool's build should write it, and a [`command`](#command) `snapshot` or a generated-file check keeps it equal to what the tool accepts.
+- **Surface format:** UTF-8, one name per line: a flag (`--name`, `-n`) or a configuration key (`section.key`; an entry of an array of tables is `section.list[].field`). Blank lines and lines starting with `#` are skipped. There is no other syntax.
+- **Languages:** Markdown (`.md`, `.markdown`), read with the line-based reader of [`citation-anchors`](#citation-anchors): fenced and indented code blocks, code spans and HTML comments, after CommonMark. Prose is never read.
+- **What it catches:**
+  - A flag the surface does not list (`unknown-flag`). Flags are read from a code span, and from each line of a shell fence (no info string, `sh`, `bash`, `shell`, `console`, `zsh`, `fish`, `shell-session`). The text is split into commands at `|`, `||`, `&&`, `;` and `&`. A command whose program is the tool (its name, or a path ending in `/<name>`; `VAR=value` assignments and `env`, `sudo`, `exec`, `time`, `command` before it are skipped) has each `--long` argument (a value after `=` dropped) and each single-letter `-x` argument checked, up to a `--`. A `$ ` or `% ` prompt is removed, a line ending in `\` continues on the next, and a `#` that starts a word starts a comment.
+  - A configuration key the surface does not list (`unknown-config-key`). Keys are read from a `toml` fence that is the tool's configuration: its info string (`toml mytool.toml`, `title="mytool.toml"`) or its first line, when that is a comment, names a file in `config_files`; or the document matches `config_docs` and the block names no other `.toml` file. Every table header and every `key = value` is checked as its full dotted name (dotted keys joined, an array-of-tables header adding `[]` for its keys). Multi-line arrays, inline tables and multi-line strings are skipped as values.
+  - A name resolves when the surface lists it, or lists a name under it: `[gates.pii]` resolves against `gates.pii.enabled`.
+- **Lines read:** with `diff_only` (the default) only the lines the change adds to a document; a block's table headers are read from the whole block either way, so a key added under an unchanged header is named in full. `diff_only = false` reads every tracked Markdown document.
+- **Could not check (exit 2):**
+  - Reason `configuration`: the gate enabled with no `tools`; a `name` that is blank, holds whitespace or `/`, or is configured twice; a `surface` that is blank, absolute or holds `..`; a blank `config_files` entry; a `config_docs` glob that does not compile.
+  - Reason `gate`: a surface that is missing, not tracked, a symlink, not UTF-8, lists no name, or has a line that is not a name, blank or a comment (the message names the line).
+- **Failing diff example (rejected):** a change adds to `docs/usage.md`:
+  ````text
+  ```bash
+  mytool check --dry-run
+  ```
+  ````
+  and `docs/surface.txt` does not list `--dry-run`: `docs/usage.md` is reported at that line.
+- **Passing example (accepted):** the same line, with `--dry-run` added to the tool's surface by the change that adds the flag.
+- **What it does NOT catch:**
+  - A real flag or key used with the wrong meaning, value or subcommand: the surface is a flat list, so a flag one subcommand accepts passes on every subcommand.
+  - A name written outside a code span or a fenced block (in prose, #1090), or in a fence of another language (`yaml` `run:` steps, `text`), or in a code span or fence that wraps onto a line the reader does not join.
+  - A tool with no `[[gates.invented-names.tools]]` entry, or a configuration block that is not marked as the tool's and is outside `config_docs`.
+  - A name the surface lists by mistake: the surface is trusted as written, so a change that adds an invented name to the surface and to a document passes (#1090). Keep the surface generated and checked.
+- **No change:** when the change adds no line to a Markdown document outside `exempt_paths`, the gate passes with a note and `examined` is 0. `examined` counts the documents read.
+- **Weakening the gate:** disabling it, lowering its severity, growing `exempt_paths`, setting `diff_only = true`, and removing or editing a `tools` entry are weakenings [`config-integrity`](#config-integrity) reports (`allow-gate-weakening:`).
+- **Lifting directive:** none. Fix the document, or add the name to the surface when the tool accepts it.
+- **Baseline:** each finding is located at the document line that holds the name.
+- **Default:** off, severity `warning`, until a replay over agent-authored documentation changes reports its false blocks (#1090).
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `tools` (`name`, `surface`, `config_files`, `config_docs`).
 
 ---
 

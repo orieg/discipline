@@ -282,8 +282,32 @@ pub fn extract_code_spans(content: &str) -> Vec<MarkdownLink> {
 /// The links ([`extract_markdown_links`]) and the code spans ([`extract_code_spans`]) of
 /// a Markdown text, read in one pass.
 pub fn extract_markdown_references(content: &str) -> (Vec<MarkdownLink>, Vec<MarkdownLink>) {
+    let text = read_markdown(content);
+    (text.links, text.code_spans)
+}
+
+/// A fenced code block: its info string (trimmed) and its lines, each with its 1-based
+/// line number. A block left open runs to the end of the text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FencedBlock {
+    pub info: String,
+    pub lines: Vec<(usize, String)>,
+}
+
+/// What [`read_markdown`] reads from a Markdown text.
+#[derive(Debug, Clone, Default)]
+pub struct MarkdownText {
+    pub links: Vec<MarkdownLink>,
+    pub code_spans: Vec<MarkdownLink>,
+    pub fences: Vec<FencedBlock>,
+}
+
+/// The links, the code spans and the fenced code blocks of a Markdown text, read in one
+/// pass. A fence inside an HTML comment or an indented code block is not one.
+pub fn read_markdown(content: &str) -> MarkdownText {
     let mut links = Vec::new();
     let mut code_spans = Vec::new();
+    let mut fences: Vec<FencedBlock> = Vec::new();
     let mut fence: Option<(char, usize)> = None;
     let mut in_comment = false;
     let mut prev_blank = true;
@@ -294,7 +318,11 @@ pub fn extract_markdown_references(content: &str) -> (Vec<MarkdownLink>, Vec<Mar
             if let Some((ch, len, rest)) = fence_run(line) {
                 if ch == open_ch && len >= open_len && rest.trim().is_empty() {
                     fence = None;
+                    continue;
                 }
+            }
+            if let Some(block) = fences.last_mut() {
+                block.lines.push((idx + 1, line.to_string()));
             }
             continue;
         }
@@ -304,6 +332,10 @@ pub fn extract_markdown_references(content: &str) -> (Vec<MarkdownLink>, Vec<Mar
                 // A backtick fence's info string holds no backtick.
                 if ch == '~' || !info.contains('`') {
                     fence = Some((ch, len));
+                    fences.push(FencedBlock {
+                        info: info.trim().to_string(),
+                        lines: Vec::new(),
+                    });
                     prev_blank = false;
                     continue;
                 }
@@ -343,7 +375,11 @@ pub fn extract_markdown_references(content: &str) -> (Vec<MarkdownLink>, Vec<Mar
             links.push(MarkdownLink { line_num, target });
         }
     }
-    (links, code_spans)
+    MarkdownText {
+        links,
+        code_spans,
+        fences,
+    }
 }
 
 /// Where a link target leads, for [`resolve_link_target`].
@@ -623,6 +659,27 @@ mod tests {
         assert!(targets("[^1]: a footnote, docs/x.md\n").is_empty());
         assert!(targets("[]: empty-label.md\n").is_empty());
         assert!(targets("\\[not](a-link.md)\n").is_empty());
+    }
+
+    #[test]
+    fn fenced_blocks_keep_their_info_string_and_line_numbers() {
+        let md = "# t\n\n```toml title=\"a.toml\"\n[x]\n```\n<!--\n```sh\nhidden\n```\n-->\n    ```sh\n    indented code\n~~~\nopen\n";
+        let fences = read_markdown(md).fences;
+        assert_eq!(
+            fences,
+            [
+                FencedBlock {
+                    info: "toml title=\"a.toml\"".into(),
+                    lines: vec![(4, "[x]".into())],
+                },
+                // An unclosed fence runs to the end; fences in a comment or an
+                // indented code block are not fences.
+                FencedBlock {
+                    info: String::new(),
+                    lines: vec![(14, "open".into())],
+                },
+            ]
+        );
     }
 
     #[test]

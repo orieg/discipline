@@ -87,6 +87,7 @@ pub fn generate_schema() -> Value {
             "claim-labels" => "#/$defs/ClaimLabelsGate",
             "companion-edit" => "#/$defs/CompanionEditGate",
             "changed-line-coverage" => "#/$defs/ChangedLineCoverageGate",
+            "invented-names" => "#/$defs/InventedNamesGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -712,6 +713,24 @@ pub fn generate_schema() -> Value {
             "ChangedLineCoverageGate": gate_table(json!({
                 "report": { "type": "string", "description": "Repository-relative path of the coverage report the test run writes; a tracked file, a symlink or a path outside the repository stops the run" },
                 "format": { "type": "string", "enum": ["lcov", "cobertura"], "description": "The report's format: an LCOV tracefile or a Cobertura XML report" }
+            })),
+            "InventedNamesGate": gate_table(json!({
+                "diff_only": { "type": "boolean", "description": "When true (default), reads only the lines the change adds to a Markdown document; false reads every tracked Markdown document" },
+                "tools": {
+                    "type": "array",
+                    "description": "Tools whose flags and configuration keys documents are checked against a declared list of names",
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "surface"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "name": { "type": "string", "description": "The command name a shell line or code span starts with" },
+                            "surface": { "type": "string", "description": "Repository-relative path of the tracked list of accepted names: one flag (--name, -n) or configuration key (section.key) per line; # comments and blank lines skipped" },
+                            "config_files": { "$ref": "#/$defs/StringList", "description": "File names of the tool's configuration: a toml block whose info string or first comment names one is read for keys" },
+                            "config_docs": { "$ref": "#/$defs/StringList", "description": "Globs of documents whose toml blocks naming no other .toml file are all the tool's configuration" }
+                        }
+                    }
+                }
             })),
             "CompanionEditGate": gate_table(json!({
                 "rules": {

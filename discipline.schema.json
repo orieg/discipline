@@ -862,6 +862,56 @@
       },
       "type": "object"
     },
+    "InventedNamesGate": {
+      "additionalProperties": false,
+      "properties": {
+        "diff_only": {
+          "description": "When true (default), reads only the lines the change adds to a Markdown document; false reads every tracked Markdown document",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "tools": {
+          "description": "Tools whose flags and configuration keys documents are checked against a declared list of names",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "config_docs": {
+                "$ref": "#/$defs/StringList",
+                "description": "Globs of documents whose toml blocks naming no other .toml file are all the tool's configuration"
+              },
+              "config_files": {
+                "$ref": "#/$defs/StringList",
+                "description": "File names of the tool's configuration: a toml block whose info string or first comment names one is read for keys"
+              },
+              "name": {
+                "description": "The command name a shell line or code span starts with",
+                "type": "string"
+              },
+              "surface": {
+                "description": "Repository-relative path of the tracked list of accepted names: one flag (--name, -n) or configuration key (section.key) per line; # comments and blank lines skipped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "surface"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "IssueLinkGate": {
       "additionalProperties": false,
       "properties": {
@@ -2010,6 +2060,14 @@
             }
           ],
           "description": "no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose"
+        },
+        "invented-names": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/InventedNamesGate"
+            }
+          ],
+          "description": "a flag or configuration key a document gives a tool that the tool's declared surface does not list"
         },
         "issue-link": {
           "allOf": [
