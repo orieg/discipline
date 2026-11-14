@@ -1,0 +1,111 @@
+{
+  "description": "Files with their known public names, per language pack (#1086). tests/test_public_names_corpus.rs reads each with the pack's public-name extraction and reports precision and recall per language; both must be 1.0. A row of the \"Public names\" table in docs/GATES.md that changes changes these expectations.",
+  "cases": [
+    {
+      "language": "rust",
+      "path": "src/store.rs",
+      "source": "//! A store.\nuse std::collections::HashMap;\n\n/// Keys and values.\npub struct Store<K, V> {\n    items: HashMap<K, V>,\n    pub(crate) hits: u64,\n}\n\nimpl<K: std::hash::Hash + Eq, V> Store<K, V> {\n    pub fn new() -> Self { Self { items: HashMap::new(), hits: 0 } }\n    pub fn get(&mut self, k: &K) -> Option<&V> { self.hits += 1; self.items.get(k) }\n    pub(crate) fn clear(&mut self) { self.items.clear() }\n    fn evict(&mut self) {}\n}\n\nimpl<K, V> Drop for Store<K, V> { fn drop(&mut self) {} }\n\npub trait Backend {\n    fn load(&self) -> Vec<u8>;\n    fn name(&self) -> &str { \"backend\" }\n}\n\npub type Shared = std::sync::Arc<Store<String, String>>;\npub const DEFAULT_CAPACITY: usize = 64;\nstatic COUNTER: u8 = 0;\npub(super) fn reset() {}\n\npub mod wire {\n    pub fn encode() {}\n    pub(crate) fn decode() {}\n    pub mod v2 { pub struct Frame; }\n}\n\nmod detail {\n    pub fn helper() {}\n}\n\n#[macro_export]\nmacro_rules! store { () => {} }\n",
+      "public": [
+        "Backend",
+        "Backend::load",
+        "Backend::name",
+        "DEFAULT_CAPACITY",
+        "Shared",
+        "Store",
+        "Store::get",
+        "Store::new",
+        "store",
+        "wire",
+        "wire::encode",
+        "wire::v2",
+        "wire::v2::Frame"
+      ]
+    },
+    {
+      "language": "rust",
+      "path": "src/error.rs",
+      "source": "#[derive(Debug)]\npub enum Error { Io, Parse(String) }\npub(crate) enum Internal { A }\nimpl std::fmt::Display for Error {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"e\") }\n}\nimpl Error {\n    pub fn is_io(&self) -> bool { matches!(self, Error::Io) }\n}\npub static VERSION: &str = \"1\";\npub union Bits { a: u32, b: f32 }\n",
+      "public": [
+        "Bits",
+        "Error",
+        "Error::is_io",
+        "VERSION"
+      ]
+    },
+    {
+      "language": "python",
+      "path": "pkg/client.py",
+      "source": "\"\"\"HTTP client.\"\"\"\nimport json\nfrom typing import Any\n\nTIMEOUT = 30\n_session = None\nDEFAULTS: dict = {}\n\nclass Client:\n    retries = 3\n\n    def __init__(self, base):\n        self.base = base\n\n    def get(self, path):\n        return self._send(\"GET\", path)\n\n    async def stream(self, path):\n        pass\n\n    @property\n    def url(self):\n        return self.base\n\n    def _send(self, method, path):\n        pass\n\nclass _Pool:\n    def acquire(self):\n        pass\n\ndef connect(base: str) -> Client:\n    return Client(base)\n\nasync def fetch(url):\n    pass\n\ndef _retry():\n    pass\n\nif TIMEOUT:\n    LATE = 1\n",
+      "public": [
+        "Client",
+        "Client.get",
+        "Client.stream",
+        "Client.url",
+        "DEFAULTS",
+        "TIMEOUT",
+        "connect",
+        "fetch"
+      ]
+    },
+    {
+      "language": "python",
+      "path": "pkg/models.py",
+      "source": "__all__ = (\"User\", \"load_user\")\n\nclass User:\n    def save(self):\n        pass\n\nclass Admin(User):\n    pass\n\ndef load_user(uid):\n    pass\n\ndef helper():\n    pass\n",
+      "public": [
+        "User",
+        "User.save",
+        "load_user"
+      ]
+    },
+    {
+      "language": "go",
+      "path": "pkg/cache/cache.go",
+      "source": "package cache\n\nimport \"sync\"\n\n// Cache holds values.\ntype Cache[K comparable, V any] struct {\n\tmu    sync.Mutex\n\titems map[K]V\n}\n\ntype entry struct{ v any }\n\ntype (\n\tOption func(*Cache[string, any])\n\tpolicy int\n)\n\nfunc New[K comparable, V any]() *Cache[K, V] { return &Cache[K, V]{} }\n\nfunc (c *Cache[K, V]) Get(k K) (V, bool) { var v V; return v, false }\nfunc (c *Cache[K, V]) evict() {}\nfunc (e entry) String() string { return \"\" }\n\nconst MaxSize = 1024\n\nvar (\n\tErrMissing = errorString(\"missing\")\n\tdebug      = false\n)\n\ntype errorString string\n\nfunc (e errorString) Error() string { return string(e) }\n",
+      "public": [
+        "Cache",
+        "Cache.Get",
+        "ErrMissing",
+        "MaxSize",
+        "New",
+        "Option"
+      ]
+    },
+    {
+      "language": "go",
+      "path": "pkg/internal/codec/codec.go",
+      "source": "package codec\n\nfunc Encode() {}\ntype Frame struct{}\n",
+      "public": []
+    },
+    {
+      "language": "javascript",
+      "path": "src/router.js",
+      "source": "import { match } from './match.js';\n\nexport const VERSION = '2.0';\nconst routes = [];\n\nexport function add(path, handler) { routes.push([path, handler]); }\n\nexport async function dispatch(req) { return match(routes, req); }\n\nexport class Router {\n  constructor() {}\n  use(fn) {}\n  #log() {}\n  static create() { return new Router(); }\n}\n\nfunction internal() {}\nexport { internal as debugInternal };\nexport * from './middleware.js';\nexport default Router;\n",
+      "public": [
+        "Router",
+        "Router.constructor",
+        "Router.create",
+        "Router.use",
+        "VERSION",
+        "add",
+        "debugInternal",
+        "default",
+        "dispatch"
+      ]
+    },
+    {
+      "language": "javascript",
+      "path": "src/types.ts",
+      "source": "export interface Request { url: string }\nexport type Handler = (r: Request) => void;\nexport enum Method { Get, Post }\nexport abstract class Base {\n  abstract run(): void;\n  protected setup(): void {}\n  public teardown(): void {}\n  private state = 0;\n}\nexport namespace Util { export const x = 1; }\ntype Local = string;\nexport { Local as PublicLocal };\n",
+      "public": [
+        "Base",
+        "Base.run",
+        "Base.teardown",
+        "Handler",
+        "Method",
+        "PublicLocal",
+        "Request",
+        "Util"
+      ]
+    }
+  ]
+}

@@ -31,6 +31,7 @@ impl LanguagePack for PythonPack {
                 | Fact::Prose
                 | Fact::Budgets
                 | Fact::CapabilitySinks
+                | Fact::PublicNames
         )
     }
 
@@ -59,6 +60,16 @@ impl LanguagePack for PythonPack {
             path,
             src,
             &super::capability_sinks::PYTHON,
+        )
+    }
+
+    fn public_names(&self, path: &str, src: &str) -> Result<Vec<super::public_names::PublicName>> {
+        super::public_names::names_of(
+            &tree_sitter_python::LANGUAGE.into(),
+            "the Python",
+            path,
+            src,
+            |root, src| super::public_names::python(path, root, src),
         )
     }
 

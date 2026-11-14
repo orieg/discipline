@@ -55,6 +55,7 @@ pub mod objc;
 #[cfg(feature = "lang-php")]
 pub mod php;
 pub mod prose;
+pub mod public_names;
 #[cfg(feature = "lang-python")]
 pub mod python;
 pub mod reach;
@@ -139,6 +140,13 @@ pub trait LanguagePack: Send + Sync {
     fn capability_sinks(&self, _path: &str, _src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
         Ok(Vec::new())
     }
+
+    /// The names `src` exposes outside its package (`Fact::PublicNames`), by the
+    /// language's row of the "Public names" table in `docs/GATES.md`. Empty for a pack
+    /// that does not supply the fact; an error for a file that does not parse.
+    fn public_names(&self, _path: &str, _src: &str) -> Result<Vec<public_names::PublicName>> {
+        Ok(Vec::new())
+    }
 }
 
 /// The part of a file's facts a static test count reads (`test-floor`): whether the
@@ -209,6 +217,9 @@ impl LanguagePack for Counted {
     fn capability_sinks(&self, path: &str, src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
         self.0.capability_sinks(path, src)
     }
+    fn public_names(&self, path: &str, src: &str) -> Result<Vec<public_names::PublicName>> {
+        self.0.public_names(path, src)
+    }
 }
 
 /// A kind of fact a pack may or may not extract.
@@ -225,6 +236,8 @@ pub enum Fact {
     /// Calls that spawn a process, evaluate code or open a network connection
     /// ([`capability_sinks`]): the review-routing inventory, never a gate's input.
     CapabilitySinks,
+    /// The names a file exposes outside its package ([`public_names`]).
+    PublicNames,
 }
 
 /// Registry of active language packs.
