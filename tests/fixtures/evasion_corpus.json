@@ -16,6 +16,7 @@
       "harness-tampering",
       "ignored-tests",
       "instruction-smuggling",
+      "invented-names",
       "pr-checklist",
       "sandbox-config",
       "shell-secrets",
@@ -3646,6 +3647,97 @@
       },
       "gate": "assertion-reduction",
       "verdict": "clean"
+    },
+    {
+      "name": "doc-invented-flag",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\n```bash\nmytool check --base main --dry-run\n```\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "verdict": {
+        "caught": [
+          "invented-names/unknown-flag"
+        ]
+      }
+    },
+    {
+      "name": "doc-invented-config-key",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\n```toml mytool.toml\n[gates.pii]\nstrict = true\n```\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "verdict": {
+        "caught": [
+          "invented-names/unknown-config-key"
+        ]
+      }
+    },
+    {
+      "name": "doc-declared-flag-and-key",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\nRun `mytool check --base main -q`.\n\n```toml mytool.toml\n[gates.pii]\nenabled = true\n```\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "gate": "invented-names",
+      "verdict": "clean"
+    },
+    {
+      "name": "doc-invented-flag-in-prose",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\nPass --dry-run to mytool to preview the run.\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "gate": "invented-names",
+      "verdict": {
+        "known_miss": "#1090"
+      }
+    },
+    {
+      "name": "doc-invented-flag-added-to-surface",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\n```bash\nmytool check --dry-run\n```\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n--dry-run\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "gate": "invented-names",
+      "verdict": {
+        "known_miss": "#1090"
+      }
     }
   ]
 }

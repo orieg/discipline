@@ -28,6 +28,7 @@ pub mod harness_tampering;
 pub mod hygiene;
 pub mod instruction_smuggling;
 pub mod integrity;
+pub mod invented_names;
 pub mod issue_link;
 pub mod lockfile;
 pub mod manifest_sync;
@@ -1171,6 +1172,7 @@ pub fn run_checks(
             "claim-labels" => claim_labels::evaluate_claim_labels(ctx),
             "companion-edit" => companion_edit::evaluate_companion_edit(ctx),
             "changed-line-coverage" => changed_line_coverage::evaluate_changed_line_coverage(ctx),
+            "invented-names" => invented_names::evaluate_invented_names(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -1358,6 +1360,7 @@ impl PathFilter {
 const GLOB_LIST_KEYS: &[&str] = &[
     "exempt_paths",
     "removed_link_exempt_paths",
+    "config_docs",
     "paths",
     "include",
     "workflows",
@@ -2338,6 +2341,7 @@ mod tests {
     const NOT_GLOB_LISTS: &[&str] = &[
         // Names: functions, macros, jobs, packages, logins, repositories, trailers, units.
         "agent_logins",
+        "config_files",
         "allow_dependencies",
         "allowed_override_actors",
         "allowed_users",
@@ -2509,6 +2513,7 @@ mod tests {
         "report",
         "snapshot",
         "superseded_registry",
+        "surface",
         "test_report",
         "workflow",
         // Command lines.
@@ -2540,7 +2545,7 @@ mod tests {
     /// How many string lists hold neither globs nor patterns (`NOT_GLOB_LISTS` without
     /// the pattern keys). A list added there changes this count, which is where its
     /// author says whether its entries are regular expressions.
-    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 36;
+    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 37;
 
     /// Every string and string-list property of the configuration schema:
     /// `(name, is a list, description)`.

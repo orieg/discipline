@@ -26366,3 +26366,127 @@ require_edits_to = ["docs/spec.md", "docs/api.md"]
         stopped.stderr
     );
 }
+
+#[test]
+fn invented_names_reports_flags_and_keys_the_surface_does_not_list() {
+    let config = r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.invented-names]
+enabled = true
+
+[[gates.invented-names.tools]]
+name = "mytool"
+surface = "docs/surface.txt"
+config_files = ["mytool.toml"]
+"#;
+    let usage = "# Usage\n\nOld: `mytool --legacy-invented`.\n";
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            (
+                "docs/surface.txt",
+                "# mytool\n--base\n-q\ngates.pii.enabled\n",
+            ),
+            ("docs/usage.md", usage),
+        ],
+        "base: enable invented-names",
+    );
+
+    // Off by default elsewhere; here enabled at `warning`, so the run passes with findings.
+    repo.write(
+        "docs/usage.md",
+        &format!(
+            "{usage}\nIn prose, --prose-only is not read.\n\n```bash\nmytool check --base main --dry-run -q\n```\n\n```toml mytool.toml\n[gates.pii]\nenabled = true\nstrict = true\n```\n"
+        ),
+    );
+    repo.commit("docs: usage");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let found = run.violations("invented-names");
+    let got: Vec<(String, String, u64)> = found
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    // The unchanged line's invented flag is not read under `diff_only`.
+    assert_eq!(
+        got,
+        [
+            (
+                "invented-names/unknown-flag".to_string(),
+                "docs/usage.md".to_string(),
+                8
+            ),
+            (
+                "invented-names/unknown-config-key".to_string(),
+                "docs/usage.md".to_string(),
+                14
+            ),
+        ],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        found[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`--dry-run`"),
+        "{found:?}"
+    );
+    assert!(
+        found[1]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`gates.pii.strict`"),
+        "{found:?}"
+    );
+    assert_eq!(run.outcome("invented-names")["examined"], 1);
+
+    // Control: the surface gains both names, and nothing is reported.
+    repo.write(
+        "docs/surface.txt",
+        "# mytool\n--base\n--dry-run\n-q\ngates.pii.enabled\ngates.pii.strict\n",
+    );
+    repo.commit("feat: the tool gains --dry-run and strict");
+    let run = repo.check(&[]);
+    assert_eq!(run.violations("invented-names").len(), 0, "{}", run.stdout);
+
+    // Fail closed: a surface that is not a list of names, or is gone.
+    repo.write("docs/surface.txt", "--base\nnot a name\n");
+    repo.commit("break the surface");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    let (reason, gate) = run.could_not_check();
+    assert_eq!(reason, "gate");
+    assert_eq!(gate.as_deref(), Some("invented-names"));
+    repo.remove("docs/surface.txt");
+    repo.commit("drop the surface");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(run.could_not_check().0, "gate");
+
+    // Fail closed: enabled with no tools.
+    let empty = Repo::new();
+    empty.commit_base_files(
+        &[(
+            "discipline.toml",
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.invented-names]\nenabled = true\n",
+        )],
+        "base: invented-names with no tools",
+    );
+    empty.write("README.md", "# r\n");
+    empty.commit("docs: readme");
+    let stopped = empty.check(&[]);
+    assert_eq!(stopped.code, 2, "{}\n{}", stopped.stdout, stopped.stderr);
+    let (reason, gate) = stopped.could_not_check();
+    assert_eq!(reason, "configuration");
+    assert_eq!(gate.as_deref(), Some("invented-names"));
+}

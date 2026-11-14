@@ -110,6 +110,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("mock_assert_fns", Direction::Shrunk),
     ("rules", Direction::Shrunk),
     ("groups", Direction::Shrunk),
+    ("tools", Direction::Shrunk),
     // A lost entry lets a banned action back in; a gained one bans more.
     ("banned_actions", Direction::Shrunk),
     // Numbers.

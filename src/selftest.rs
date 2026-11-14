@@ -5741,6 +5741,32 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "invented-names: a tool's flags in a shell fence and its keys in a marked toml block resolve against its surface, and prose is not read (#1090)",
+        || {
+            use crate::config::InventedNamesTool;
+            use crate::guards::invented_names::{doc_names, Surface};
+            let surface = Surface::parse("--base\n-q\ngates.pii.enabled\n").map_err(anyhow::Error::msg)?;
+            let tool = InventedNamesTool {
+                name: "mytool".into(),
+                surface: "s.txt".into(),
+                config_files: vec!["mytool.toml".into()],
+                config_docs: vec![],
+            };
+            let md = "mytool --prose\n```sh\nmytool check --base x --dry-run -q\n```\n```toml mytool.toml\n[gates.pii]\nenabled = true\nstrict = true\n```\n";
+            let names = doc_names(md, &tool, false);
+            let unknown = |items: &[(usize, String)]| {
+                items
+                    .iter()
+                    .filter(|(_, n)| !surface.resolves(n))
+                    .map(|(l, n)| format!("{l}:{n}"))
+                    .collect::<Vec<_>>()
+            };
+            Ok(unknown(&names.flags) == ["3:--dry-run"]
+                && unknown(&names.keys) == ["8:gates.pii.strict"]
+                && Surface::parse("not a name\n").is_err())
+        },
+    ),
+    (
         "command: base-tests overlays no test inside a source file, and names a changed source that holds one",
         || {
             use crate::guards::command::{base_test_files, inline_test_sources};

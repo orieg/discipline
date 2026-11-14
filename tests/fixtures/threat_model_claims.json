@@ -1362,6 +1362,17 @@
       "verdict": "holds"
     },
     {
+      "id": "gate-invented-names",
+      "category": "gates",
+      "claim": "a flag or configuration key a document gives a tool that the tool's declared surface does not list",
+      "source": "docs/GATES.md:invented-names",
+      "code": "src/guards/invented_names.rs:evaluate_invented_names",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::invented_names_reports_flags_and_keys_the_surface_does_not_list"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "gate-version-lockstep",
       "category": "gates",
       "claim": "version declarations across headers, manifests, and files must remain in lockstep",
