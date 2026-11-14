@@ -462,6 +462,9 @@ findings! {
     COMPANION_NOT_EDITED = ["companion-edit"], "companion-not-edited", "Companion Path Not Edited", Same;
     // changed-line-coverage
     UNCOVERED_LINES = ["changed-line-coverage"], "uncovered-lines", "Changed Lines Not Covered", Same;
+    // visual-evidence
+    VISUAL_EVIDENCE_MISSING = ["visual-evidence"], "visual-evidence-missing", "After Image Missing", Same;
+    VISUAL_EVIDENCE_INCOMPLETE = ["visual-evidence"], "visual-evidence-incomplete", "Before Image Missing", Same;
 
     // A run that could not complete (the pseudo-gate `engine`, reported only in `--json-out`).
     ENGINE_COULD_NOT_RUN = ["engine"], "could-not-run", "Check Could Not Run", Message;

@@ -435,6 +435,13 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.version-lockstep.groups[].sources[].path` | string | *(required)* | Source file path |
 | `gates.version-lockstep.groups[].sources[].regex` | string | *(required)* | Regex pattern capturing the version string in group 1 |
 | `gates.version-lockstep.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.visual-evidence.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.visual-evidence.exempt_authors` | list | `[]` | Pull request author logins (dependency bots) whose changes need no images |
+| `gates.visual-evidence.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.visual-evidence.rules` | array of tables | `[]` | Path sets whose change needs an After image, and a Before image when a matched path existed on the base side, in the pull request body |
+| `gates.visual-evidence.rules[].reason` | string | *(per entry)* | Why these paths need visual evidence, quoted in the finding |
+| `gates.visual-evidence.rules[].trigger_paths` | list | *(required)* | Globs; a changed path matching any of them (either side of a rename, a deletion included) fires the rule |
+| `gates.visual-evidence.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `hooks.premature-stop.enabled` | boolean | `false` | Judge the final message of a turn once the change check has passed (default: false) |
 | `hooks.premature-stop.max_per_session` | integer | `3` | Most stops refused in one session; the next one is let through (default: 3) |
 | `hooks.premature-stop.mode` | string | `"observe"` | observe logs a match to the hook's observation log and lets the stop through; refuse refuses the stop and hands the agent the reason (default: observe) |
@@ -887,6 +894,7 @@ Where a gate's subject is a keyword (`allow-unsafe`, `allow-msrv`, `allow-miri`,
 | `allow-claim-label:` / `discipline:allow(claim-labels)` / `allow(claim-labels)` | `claim-labels` | Source identifier (`pr-body`, `commit:<sha>`, or Markdown file path) |
 | `allow-companion-edit:` / `discipline:allow(companion-edit)` / `allow(companion-edit)` | `companion-edit` | The rule's first `require_edits_to` entry |
 | `allow-uncovered:` / `discipline:allow(changed-line-coverage)` / `allow(changed-line-coverage)` | `changed-line-coverage` | The changed source file whose uncovered lines are accepted |
+| `allow-visual-evidence:` / `discipline:allow(visual-evidence)` / `allow(visual-evidence)` | `visual-evidence` | `before` (the Before image) or `after` (the visual evidence as a whole) |
 
 ### Inline Line Exemptions
 
