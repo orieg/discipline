@@ -1596,6 +1596,90 @@ fn a_java_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     }
 }
 
+/// C# assertions (#1070) weakened or inverted are reported as the same finding: a
+/// FluentAssertions comparison moved the loose way, an xUnit twin negated, an xUnit
+/// `Assert.True` comparison widened, an NUnit constraint widened, and `Assert.Equal` ->
+/// `Assert.NotEqual` read as `==` -> `!=`.
+#[test]
+fn a_csharp_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let cs = |check: &str| {
+        format!(
+            "using FluentAssertions;\nusing NUnit.Framework;\nusing Xunit;\n\npublic class RowsTests\n{{\n    [Fact]\n    public void Counts()\n    {{\n        int[] rows = {{ 1, 2, 3, 4, 5, 6, 7 }};\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "src/Rows.cs",
+            "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        );
+        repo.commit_base("tests/RowsTests.cs", &cs(base), "test: counts");
+        repo.write("tests/RowsTests.cs", &cs(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "Rows.Count(rows).Should().BeGreaterThan(6);",
+            "Rows.Count(rows).Should().BeGreaterThanOrEqualTo(6);",
+            "`BeGreaterThan` to `BeGreaterThanOrEqualTo`",
+        ),
+        (
+            "Assert.Contains(3, rows);",
+            "Assert.DoesNotContain(3, rows);",
+            "`Contains` to `DoesNotContain`",
+        ),
+        (
+            "Assert.True(Rows.Count(rows) > 6, \"seven rows\");",
+            "Assert.True(Rows.Count(rows) >= 6, \"seven rows\");",
+            "`>` to `>=`",
+        ),
+        (
+            "Assert.That(Rows.Count(rows), Is.GreaterThan(6));",
+            "Assert.That(Rows.Count(rows), Is.GreaterThanOrEqualTo(6));",
+            "`Is.GreaterThan` to `Is.GreaterThanOrEqualTo`",
+        ),
+        (
+            "Assert.Equal(0, Rows.Count(new int[0]));",
+            "Assert.NotEqual(1, Rows.Count(new int[0]));",
+            "`Equal` to `NotEqual`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("Rows.Count("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: Counts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, and a failure condition tightened.
+    for (base, head) in [
+        (
+            "Rows.Count(rows).Should().BeGreaterThanOrEqualTo(6);",
+            "Rows.Count(rows).Should().BeGreaterThan(6);",
+        ),
+        (
+            "Assert.False(Rows.Count(rows) < 6);",
+            "Assert.False(Rows.Count(rows) <= 6);",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.

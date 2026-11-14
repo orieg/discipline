@@ -12,7 +12,7 @@
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
 //! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
-//! matchers and `assert(..)` calls, and Java assertions (#1070).
+//! matchers and `assert(..)` calls, and Java and C# assertions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -31,6 +31,10 @@
 //! polarity, and in an AssertJ / Truth `assertThat(..)` chain the comparison methods
 //! (`isGreaterThan`, ..) as their operator and the methods with a negated twin
 //! (`contains` / `doesNotContain`, ..) as a polarity.
+//! C# reads FluentAssertions `.Should()` chains, xUnit / NUnit / MSTest `Assert` calls
+//! and NUnit `Is.*` constraints the same way: comparison methods and constraints as
+//! their operator (`Not` negating a constraint), the methods and constraints with a
+//! negated twin as a polarity, and the comparisons of a `True` / `False` condition.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -179,7 +183,11 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
         "assertNotSame" => ("same", true),
         JAVA_ASSERT => ("java-assert", false),
         JAVA_ASSERT_NOT => ("java-assert", true),
-        _ => return js_matcher_polarity(operator).or_else(|| java_chain_polarity(operator)),
+        _ => {
+            return js_matcher_polarity(operator)
+                .or_else(|| java_chain_polarity(operator))
+                .or_else(|| cs_polarity(operator))
+        }
     })
 }
 
@@ -947,14 +955,15 @@ fn java_literal(n: Node, src: &str) -> bool {
     }
 }
 
-/// Java: each comparison that is a whole operand of a condition, through `&&`, `||` and
-/// parentheses. One inside a call's arguments or after `!` is not read.
-fn java_operands(
+/// Java and C#: each comparison that is a whole operand of a condition, through `&&`,
+/// `||` and parentheses. One inside a call's arguments or after `!` is not read.
+fn c_operands(
     records: &mut Records<Comparison>,
     stmt: Node,
     cond: Node,
     src: &str,
     fails_when_true: bool,
+    is_literal: &dyn Fn(Node) -> bool,
 ) {
     let cond = unparenthesized(cond);
     if cond.kind() != "binary_expression" {
@@ -969,18 +978,11 @@ fn java_operands(
     };
     match text(op, src) {
         "&&" | "||" => {
-            java_operands(records, stmt, l, src, fails_when_true);
-            java_operands(records, stmt, r, src, fails_when_true);
+            c_operands(records, stmt, l, src, fails_when_true, is_literal);
+            c_operands(records, stmt, r, src, fails_when_true, is_literal);
         }
         o if JAVA_OPERATORS.contains(&o) => {
-            record(
-                records,
-                stmt,
-                (l, op, r),
-                &|n| java_literal(n, src),
-                src,
-                fails_when_true,
-            );
+            record(records, stmt, (l, op, r), is_literal, src, fails_when_true);
         }
         _ => {}
     }
@@ -999,7 +1001,7 @@ fn java_args(call: Node) -> Vec<Node> {
 }
 
 /// Java: the `assert` statement: the polarity of a condition that is one value
-/// (`assert x;` / `assert !x;`) and its comparisons ([`java_operands`]).
+/// (`assert x;` / `assert !x;`) and its comparisons ([`c_operands`]).
 fn java_assert(records: &mut Records<Comparison>, stmt: Node, src: &str) {
     let Some(cond) = stmt.named_child(0) else {
         return;
@@ -1040,7 +1042,7 @@ fn java_assert(records: &mut Records<Comparison>, stmt: Node, src: &str) {
         });
     }
     if !negated {
-        java_operands(records, stmt, cond, src, false);
+        c_operands(records, stmt, cond, src, false, &|n| java_literal(n, src));
     }
 }
 
@@ -1097,7 +1099,9 @@ fn java_junit(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &s
     });
     if matches!(method, "assertTrue" | "assertFalse") {
         if let Some(cond) = operands.first() {
-            java_operands(records, stmt, *cond, src, method == "assertFalse");
+            c_operands(records, stmt, *cond, src, method == "assertFalse", &|n| {
+                java_literal(n, src)
+            });
         }
     }
     true
@@ -1179,6 +1183,370 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+/// C# xUnit / NUnit / MSTest methods with a negated twin, read as a polarity, as (method,
+/// twin): the method masked.
+const CS_TWINS: &[(&str, &str)] = &[
+    ("True", "False"),
+    ("IsTrue", "IsFalse"),
+    ("Null", "NotNull"),
+    ("IsNull", "IsNotNull"),
+    ("Same", "NotSame"),
+    ("AreSame", "AreNotSame"),
+    ("Equal", "NotEqual"),
+    ("AreEqual", "AreNotEqual"),
+    ("Contains", "DoesNotContain"),
+    ("Empty", "NotEmpty"),
+    ("IsEmpty", "IsNotEmpty"),
+    ("InRange", "NotInRange"),
+    ("Matches", "DoesNotMatch"),
+    ("IsInstanceOfType", "IsNotInstanceOfType"),
+    // FluentAssertions, after `.Should()`.
+    ("BeTrue", "BeFalse"),
+    ("BeNull", "NotBeNull"),
+    ("BeEmpty", "NotBeEmpty"),
+    ("BeNullOrEmpty", "NotBeNullOrEmpty"),
+    ("Contain", "NotContain"),
+    ("ContainKey", "NotContainKey"),
+    ("ContainValue", "NotContainValue"),
+    ("StartWith", "NotStartWith"),
+    ("EndWith", "NotEndWith"),
+    ("Match", "NotMatch"),
+    ("MatchRegex", "NotMatchRegex"),
+    ("BeSameAs", "NotBeSameAs"),
+    ("BeOfType", "NotBeOfType"),
+    ("BeAssignableTo", "NotBeAssignableTo"),
+    ("BeEquivalentTo", "NotBeEquivalentTo"),
+    ("HaveCount", "NotHaveCount"),
+    ("Throw", "NotThrow"),
+    ("ThrowAsync", "NotThrowAsync"),
+];
+
+/// C# xUnit / NUnit / MSTest methods read as `==` / `!=`, the literal they are given
+/// masked.
+const CS_EQUALITY: &[&str] = &["Equal", "NotEqual", "AreEqual", "AreNotEqual"];
+
+/// C# NUnit classic methods read as a comparison of their first argument with their
+/// second, the literal masked.
+const CS_ORDERED: &[&str] = &["Greater", "GreaterOrEqual", "Less", "LessOrEqual"];
+
+/// C# FluentAssertions methods read as a comparison, the literal masked.
+const CS_FLUENT_COMPARISON: &[&str] = &[
+    "Be",
+    "NotBe",
+    "BeGreaterThan",
+    "BeGreaterThanOrEqualTo",
+    "BeGreaterOrEqualTo",
+    "BeLessThan",
+    "BeLessThanOrEqualTo",
+    "BeLessOrEqualTo",
+];
+
+/// C# NUnit constraints (`Is.GreaterThan(6)`, `Is.Not.EqualTo(3)`) read as a
+/// comparison, the literal masked; `Not` negates.
+const CS_CONSTRAINT_COMPARISON: &[&str] = &[
+    "EqualTo",
+    "GreaterThan",
+    "GreaterThanOrEqualTo",
+    "LessThan",
+    "LessThanOrEqualTo",
+];
+
+/// C# NUnit constraints read as a polarity, `Not` negating, as (constraint, twin).
+const CS_CONSTRAINT_TWINS: &[(&str, &str)] = &[
+    ("True", "False"),
+    ("Null", ""),
+    ("Empty", ""),
+    ("Zero", ""),
+    ("NaN", ""),
+    ("SameAs", ""),
+    ("InstanceOf", ""),
+    ("TypeOf", ""),
+    ("Contain", ""),
+    ("Contains", ""),
+    ("StartWith", ""),
+    ("EndWith", ""),
+    ("Match", ""),
+    ("SubsetOf", ""),
+    ("SupersetOf", ""),
+];
+
+/// A constraint's root and name, with whether `Not` negates it: `Is.Not.Null` is
+/// (`Is`, `Null`, true).
+fn cs_constraint(operator: &str) -> Option<(&str, &str, bool)> {
+    let mut parts = operator.split('.');
+    let root = parts.next()?;
+    if !matches!(root, "Is" | "Does") {
+        return None;
+    }
+    let (name, not) = match (parts.next()?, parts.next()) {
+        ("Not", Some(name)) => (name, true),
+        (name, None) => (name, false),
+        _ => return None,
+    };
+    parts.next().is_none().then_some((root, name, not))
+}
+
+/// C#: the polarity of a method of [`CS_TWINS`] or an NUnit constraint of
+/// [`CS_CONSTRAINT_TWINS`].
+fn cs_polarity(operator: &str) -> Option<(&'static str, bool)> {
+    let (twins, name, not) = match cs_constraint(operator) {
+        Some((_, name, not)) => (CS_CONSTRAINT_TWINS, name, not),
+        None => (CS_TWINS, operator, false),
+    };
+    twins.iter().find_map(|(m, twin)| {
+        if *m == name {
+            Some((*m, not))
+        } else if !twin.is_empty() && *twin == name {
+            Some((*m, !not))
+        } else {
+            None
+        }
+    })
+}
+
+fn cs_literal(n: Node, src: &str) -> bool {
+    let num = |n: Node| matches!(n.kind(), "integer_literal" | "real_literal");
+    match n.kind() {
+        "string_literal"
+        | "verbatim_string_literal"
+        | "raw_string_literal"
+        | "character_literal"
+        | "null_literal"
+        | "boolean_literal" => true,
+        "prefix_unary_expression" => {
+            let mut c = n.walk();
+            let kids: Vec<Node> = n.children(&mut c).collect();
+            matches!(kids.as_slice(), [op, operand] if text(*op, src) == "-" && num(*operand))
+        }
+        _ => num(n),
+    }
+}
+
+/// The expressions of a C# call's arguments, a named argument's value included.
+fn cs_args(call: Node) -> Vec<Node> {
+    let Some(list) = call.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut c = list.walk();
+    list.named_children(&mut c)
+        .filter(|a| a.kind() == "argument")
+        .filter_map(|a| {
+            let mut ac = a.walk();
+            let value = a
+                .named_children(&mut ac)
+                .filter(|n| !n.is_extra())
+                .last()
+                .map(unparenthesized);
+            value
+        })
+        .collect()
+}
+
+/// The identifier of a member access's name, without its type arguments: `Throw` of
+/// `Throw<ArgumentException>`.
+fn cs_name(access: Node) -> Option<Node> {
+    let name = access.child_by_field_name("name")?;
+    if name.kind() == "generic_name" {
+        name.named_child(0).filter(|n| n.kind() == "identifier")
+    } else {
+        Some(name)
+    }
+}
+
+/// C#: an NUnit constraint `Is[.Not].Name[(arg)]` / `Does[.Not].Name(arg)` given to
+/// `Assert.That(actual, ..)`, its path masked as the operator and its literal argument
+/// masked. A constraint chained further (`.Within(..)`, `.And`) is not read.
+fn cs_constraint_record(records: &mut Records<Comparison>, stmt: Node, c: Node, src: &str) {
+    let (path, arg) = match c.kind() {
+        "invocation_expression" => {
+            let Some(f) = c.child_by_field_name("function") else {
+                return;
+            };
+            (f, cs_args(c).first().copied())
+        }
+        _ => (c, None),
+    };
+    if path.kind() != "member_access_expression" {
+        return;
+    }
+    let operator: String = text(path, src).split_whitespace().collect();
+    let Some((_, name, _)) = cs_constraint(&operator) else {
+        return;
+    };
+    let compared = CS_CONSTRAINT_COMPARISON.contains(&name);
+    if !compared && cs_polarity(&operator).is_none() {
+        return;
+    }
+    let literal = arg.filter(|a| compared && cs_literal(*a, src));
+    let mut holes = vec![(path, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: path.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator,
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+}
+
+/// C#: an xUnit / NUnit / MSTest assertion on `Assert` or `ClassicAssert`: the method of
+/// [`CS_TWINS`], [`CS_EQUALITY`] and [`CS_ORDERED`] masked with the literal of an
+/// equality or an ordering, the comparisons of a `True` / `IsTrue` / `False` / `IsFalse`
+/// condition (`False` read as a failure condition) and of an `Assert.That(condition)`,
+/// and the constraint of an `Assert.That(actual, constraint)`.
+fn cs_assert(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let Some(access) = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_access_expression")
+    else {
+        return false;
+    };
+    let owner = access
+        .child_by_field_name("expression")
+        .map_or("", |o| text(o, src));
+    let owner = owner.rsplit('.').next().unwrap_or(owner);
+    let Some(name) = cs_name(access) else {
+        return false;
+    };
+    if !matches!(owner, "Assert" | "ClassicAssert") {
+        return false;
+    }
+    let method = text(name, src);
+    let args = cs_args(call);
+    if method == "That" {
+        match args.get(1) {
+            Some(c)
+                if !matches!(
+                    c.kind(),
+                    "string_literal" | "interpolated_string_expression"
+                ) =>
+            {
+                cs_constraint_record(records, stmt, *c, src);
+            }
+            _ => {
+                if let Some(cond) = args.first() {
+                    c_operands(records, stmt, *cond, src, false, &|n| cs_literal(n, src));
+                }
+            }
+        }
+        return true;
+    }
+    let equality = CS_EQUALITY.contains(&method);
+    let ordered = CS_ORDERED.contains(&method);
+    if !ordered && cs_polarity(method).is_none() {
+        return false;
+    }
+    let literal = if equality {
+        args.iter()
+            .take(2)
+            .rev()
+            .copied()
+            .find(|a| cs_literal(*a, src))
+    } else if ordered {
+        args.get(1).copied().filter(|a| cs_literal(*a, src))
+    } else {
+        None
+    };
+    let mut holes = vec![(name, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: method.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    if matches!(method, "True" | "IsTrue" | "False" | "IsFalse") {
+        if let Some(cond) = args.first() {
+            let fails = matches!(method, "False" | "IsFalse");
+            c_operands(records, stmt, *cond, src, fails, &|n| cs_literal(n, src));
+        }
+    }
+    true
+}
+
+/// C#: each method of a FluentAssertions `.Should()` chain (`.And` between links) that
+/// is in [`CS_FLUENT_COMPARISON`] or [`CS_TWINS`], its name masked and, for a
+/// comparison, its literal argument.
+fn cs_fluent(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let mut links = Vec::new();
+    let mut cur = call;
+    let rooted = loop {
+        let Some(access) = cur
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "member_access_expression")
+        else {
+            break false;
+        };
+        if cs_name(access).is_some_and(|n| text(n, src) == "Should") {
+            break true;
+        }
+        links.push((cur, access));
+        let mut inner = access.child_by_field_name("expression");
+        // `.And` / `.Which` hold the next link's subject.
+        if let Some(i) = inner.filter(|i| i.kind() == "member_access_expression") {
+            if !matches!(cs_name(i).map(|n| text(n, src)), Some("And")) {
+                break false;
+            }
+            inner = i.child_by_field_name("expression");
+        }
+        match inner {
+            Some(i) if i.kind() == "invocation_expression" => cur = i,
+            _ => break false,
+        }
+    };
+    if !rooted || links.is_empty() {
+        return false;
+    }
+    for (link, access) in links.into_iter().rev() {
+        let Some(name) = cs_name(access) else {
+            continue;
+        };
+        let method = text(name, src);
+        let compared = CS_FLUENT_COMPARISON.contains(&method);
+        if !compared && cs_polarity(method).is_none() {
+            continue;
+        }
+        let literal = cs_args(link)
+            .first()
+            .copied()
+            .filter(|a| compared && cs_literal(*a, src));
+        let mut holes = vec![(name, '@')];
+        holes.extend(literal.map(|l| (l, '#')));
+        records.add(Comparison {
+            line: name.start_position().row + 1,
+            skeleton: skeleton(stmt, &mut holes, src),
+            operator: method.to_string(),
+            literal: literal.map(|l| text(l, src).to_string()),
+            fails_when_true: false,
+        });
+    }
+    true
+}
+
+/// C#: comparisons and polarity in xUnit / NUnit / MSTest assertions ([`cs_assert`]) and
+/// FluentAssertions chains ([`cs_fluent`]), each read from a statement that is the call
+/// (awaited or not).
+pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if node.kind() != "expression_statement" {
+            return true;
+        }
+        let mut call = node.named_child(0);
+        if let Some(a) = call.filter(|c| c.kind() == "await_expression") {
+            call = a.named_child(0);
+        }
+        let Some(call) = call.filter(|c| c.kind() == "invocation_expression") else {
+            return true;
+        };
+        !(cs_assert(records, node, call, src) || cs_fluent(records, node, call, src))
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
@@ -1218,9 +1586,29 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         "isGreaterThanOrEqualTo" => (">=", "<"),
         "isLessThan" => ("<", ">="),
         "isLessThanOrEqualTo" => ("<=", ">"),
-        _ => return None,
+        "Equal" | "AreEqual" | "Be" => ("==", "!="),
+        "NotEqual" | "AreNotEqual" | "NotBe" => ("!=", "=="),
+        "Greater" | "BeGreaterThan" => (">", "<="),
+        "GreaterOrEqual" | "BeGreaterThanOrEqualTo" | "BeGreaterOrEqualTo" => (">=", "<"),
+        "Less" | "BeLessThan" => ("<", ">="),
+        "LessOrEqual" | "BeLessThanOrEqualTo" | "BeLessOrEqualTo" => ("<=", ">"),
+        _ => return cs_constraint_passing(operator, fails_when_true != not),
     };
     Some(if fails_when_true != not { negated } else { op })
+}
+
+/// C#: the operator an NUnit comparison constraint must satisfy, `Not` negating it.
+fn cs_constraint_passing(operator: &str, negate: bool) -> Option<&'static str> {
+    let (_, name, not) = cs_constraint(operator)?;
+    let (op, negated) = match name {
+        "EqualTo" => ("==", "!="),
+        "GreaterThan" => (">", "<="),
+        "GreaterThanOrEqualTo" => (">=", "<"),
+        "LessThan" => ("<", ">="),
+        "LessThanOrEqualTo" => ("<=", ">"),
+        _ => return None,
+    };
+    Some(if negate != not { negated } else { op })
 }
 
 /// The smallest (for a lower bound) or largest (for an upper bound) value the bound
@@ -2143,6 +2531,290 @@ mod tests {
             ),
         ] {
             assert_eq!(java_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn cs(check: &str) -> Vec<Comparison> {
+        let src = format!(
+            "using Xunit;\n\npublic class XTests\n{{\n    [Fact]\n    public async Task X()\n    {{\n        {check}\n    }}\n}}\n"
+        );
+        comparisons(&crate::ast::csharp::CSharpPack, "tests/XTests.cs", &src)
+    }
+
+    fn cs_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&cs(a), &cs(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn cs_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        cs(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    #[test]
+    fn csharp_records_xunit_nunit_fluent_comparisons_with_literals_masked() {
+        let got = cs("F(rows).Should().BeGreaterThan(6);");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].line, 8);
+        // Each method of a chain is read, its own name and literal masked.
+        assert_eq!(
+            cs_read("F(rows).Should().BeGreaterThan(-1).And.BeLessThan(9, \"n\");"),
+            vec![
+                read(
+                    "BeGreaterThan",
+                    Some("-1"),
+                    "F(rows).Should().@(#).And.BeLessThan(9, \"n\");"
+                ),
+                read(
+                    "BeLessThan",
+                    Some("9"),
+                    "F(rows).Should().BeGreaterThan(-1).And.@(#, \"n\");"
+                ),
+            ]
+        );
+        assert_eq!(
+            cs_read("await act.Should().ThrowAsync<ArgumentException>();"),
+            vec![read(
+                "ThrowAsync",
+                None,
+                "await act.Should().@<ArgumentException>();"
+            )]
+        );
+        assert_eq!(
+            cs_read("Assert.True(F(rows) > 6 && rows.Length < 2L, \"m\");"),
+            vec![
+                read(
+                    "True",
+                    None,
+                    "Assert.@(F(rows) > 6 && rows.Length < 2L, \"m\");"
+                ),
+                read(
+                    ">",
+                    Some("6"),
+                    "Assert.True(F(rows) @ # && rows.Length < 2L, \"m\");"
+                ),
+                read(
+                    "<",
+                    Some("2L"),
+                    "Assert.True(F(rows) > 6 && rows.Length @ #, \"m\");"
+                ),
+            ]
+        );
+        assert_eq!(
+            cs_read("Assert.Equal(3, F(rows));"),
+            vec![read("Equal", Some("3"), "Assert.@(#, F(rows));")]
+        );
+        assert_eq!(
+            cs_read("ClassicAssert.AreEqual(\"a\", S(rows), \"m\");"),
+            vec![read(
+                "AreEqual",
+                Some("\"a\""),
+                "ClassicAssert.@(#, S(rows), \"m\");"
+            )]
+        );
+        // NUnit orders its first argument against its second.
+        assert_eq!(
+            cs_read("Assert.GreaterOrEqual(F(rows), 6.5);"),
+            vec![read("GreaterOrEqual", Some("6.5"), "Assert.@(F(rows), #);")]
+        );
+        assert_eq!(
+            cs_read("Assert.That(F(rows), Is.Not.EqualTo(-3));"),
+            vec![read(
+                "Is.Not.EqualTo",
+                Some("-3"),
+                "Assert.That(F(rows), @(#));"
+            )]
+        );
+        assert_eq!(
+            cs_read("Assert.That(F(rows), Is.Not.Null, \"m\");"),
+            vec![read("Is.Not.Null", None, "Assert.That(F(rows), @, \"m\");")]
+        );
+        assert_eq!(
+            cs_read("Assert.That(F(rows) >= 0, \"m\");"),
+            vec![read(">=", Some("0"), "Assert.That(F(rows) @ #, \"m\");")]
+        );
+        // A method outside the closed lists, a constraint chained further, a
+        // comparison inside a call's arguments, a call on another receiver, a chain
+        // without `.Should()` and Shouldly are not read.
+        for check in [
+            "F(rows).Should().BeOneOf(1, 2);",
+            "Assert.That(F(rows), Is.EqualTo(6).Within(1));",
+            "Console.WriteLine(F(rows) > 6);",
+            "other.True(F(rows) > 6);",
+            "F(rows).Must().BeGreaterThan(6);",
+            "F(rows).ShouldBeGreaterThan(6);",
+        ] {
+            assert_eq!(cs(check), vec![], "{check}");
+        }
+        assert_eq!(
+            cs_read("Assert.True(Check(F(rows) > 6));"),
+            vec![read("True", None, "Assert.@(Check(F(rows) > 6));")]
+        );
+    }
+
+    #[test]
+    fn csharp_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "F(rows).Should().BeGreaterThan(6);",
+                "F(rows).Should().BeGreaterThanOrEqualTo(6);",
+                "BeGreaterThan",
+                "BeGreaterThanOrEqualTo",
+            ),
+            (
+                "F(rows).Should().Be(0);",
+                "F(rows).Should().NotBe(1);",
+                "Be",
+                "NotBe",
+            ),
+            (
+                "Assert.Equal(0, F(rows));",
+                "Assert.NotEqual(1, F(rows));",
+                "Equal",
+                "NotEqual",
+            ),
+            (
+                "Assert.Less(F(rows), 7);",
+                "Assert.LessOrEqual(F(rows), 7);",
+                "Less",
+                "LessOrEqual",
+            ),
+            (
+                "Assert.That(F(rows), Is.GreaterThan(6));",
+                "Assert.That(F(rows), Is.GreaterThanOrEqualTo(6));",
+                "Is.GreaterThan",
+                "Is.GreaterThanOrEqualTo",
+            ),
+            (
+                "Assert.That(F(rows), Is.EqualTo(3));",
+                "Assert.That(F(rows), Is.Not.EqualTo(4));",
+                "Is.EqualTo",
+                "Is.Not.EqualTo",
+            ),
+            (
+                "Assert.True(F(rows) > 6);",
+                "Assert.True(F(rows) >= 6);",
+                ">",
+                ">=",
+            ),
+            // `False` reads its condition as a failure condition: failing on `<= 6`
+            // became failing on `< 6`, so 6 now passes.
+            (
+                "Assert.IsFalse(F(rows) <= 6);",
+                "Assert.IsFalse(F(rows) < 6);",
+                "<=",
+                "<",
+            ),
+        ] {
+            assert_eq!(
+                cs_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Tightened, kept, integers that accept the same values, a failure condition
+        // tightened, `!=` back to `==`, and a `Not` constraint tightened.
+        for (a, b) in [
+            (
+                "F(rows).Should().BeGreaterThanOrEqualTo(6);",
+                "F(rows).Should().BeGreaterThan(6);",
+            ),
+            ("Assert.Equal(6, F(rows));", "Assert.Equal(6, F(rows));"),
+            (
+                "F(rows).Should().BeGreaterThan(5);",
+                "F(rows).Should().BeGreaterThanOrEqualTo(6);",
+            ),
+            ("Assert.False(F(rows) < 6);", "Assert.False(F(rows) <= 6);"),
+            ("F(rows).Should().NotBe(1);", "F(rows).Should().Be(0);"),
+            (
+                "Assert.That(F(rows), Is.Not.LessThanOrEqualTo(6));",
+                "Assert.That(F(rows), Is.Not.LessThan(7));",
+            ),
+        ] {
+            assert_eq!(cs_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn csharp_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            (
+                "Assert.True(F(rows));",
+                "Assert.False(F(rows));",
+                "True",
+                "False",
+            ),
+            (
+                "Assert.IsNull(F(rows), \"m\");",
+                "Assert.IsNotNull(F(rows), \"m\");",
+                "IsNull",
+                "IsNotNull",
+            ),
+            (
+                "Assert.AreEqual(3, F(rows));",
+                "Assert.AreNotEqual(3, F(rows));",
+                "AreEqual",
+                "AreNotEqual",
+            ),
+            (
+                "Assert.Contains(1, rows);",
+                "Assert.DoesNotContain(1, rows);",
+                "Contains",
+                "DoesNotContain",
+            ),
+            (
+                "rows.Should().Contain(1);",
+                "rows.Should().NotContain(1);",
+                "Contain",
+                "NotContain",
+            ),
+            (
+                "act.Should().Throw<ArgumentException>();",
+                "act.Should().NotThrow<ArgumentException>();",
+                "Throw",
+                "NotThrow",
+            ),
+            (
+                "Assert.That(F(rows), Is.Null);",
+                "Assert.That(F(rows), Is.Not.Null);",
+                "Is.Null",
+                "Is.Not.Null",
+            ),
+            (
+                "Assert.That(F(rows), Is.False);",
+                "Assert.That(F(rows), Is.True);",
+                "Is.False",
+                "Is.True",
+            ),
+        ] {
+            assert_eq!(
+                cs_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // A checked value that changed is not paired; two methods of different
+        // families are not twins; `Is.Not.False` is `Is.True`.
+        for (a, b) in [
+            (
+                "Assert.Contains(1, rows);",
+                "Assert.DoesNotContain(2, rows);",
+            ),
+            ("Assert.True(F(rows));", "Assert.False(G(rows));"),
+            (
+                "F(rows).Should().BeTrue();",
+                "F(rows).Should().NotBeNull();",
+            ),
+            (
+                "Assert.That(F(rows), Is.True);",
+                "Assert.That(F(rows), Is.Not.False);",
+            ),
+        ] {
+            assert_eq!(cs_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }
