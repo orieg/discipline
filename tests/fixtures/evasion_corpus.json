@@ -3502,6 +3502,78 @@
       },
       "gate": "assertion-reduction",
       "verdict": "clean"
+    },
+    {
+      "name": "java-assertj-bound-widened",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(Rows.count(rows)).isGreaterThan(6);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(Rows.count(rows)).isGreaterThanOrEqualTo(6);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "java-assertj-negated",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(rows).contains(3);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(rows).doesNotContain(3);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "java-junit-comparison-widened",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertTrue(Rows.count(rows) > 6, \"seven rows\");\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertTrue(Rows.count(rows) >= 6, \"seven rows\");\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "java-junit-assert-inverted",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertTrue(Rows.count(rows) == 7);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertFalse(Rows.count(rows) == 7);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "java-assertj-bound-tightened",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(Rows.count(rows)).isGreaterThanOrEqualTo(6);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(Rows.count(rows)).isGreaterThan(6);\n    }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }

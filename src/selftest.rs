@@ -4694,6 +4694,42 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-java")]
+    (
+        "assertion-reduction: a Java assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let java = |check: &str| {
+                format!("class TTest {{\n    @Test\n    void t() {{\n        {check};\n    }}\n}}\n")
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("assertThat(f(6)).isGreaterThan(6)", "assertThat(f(6)).isGreaterThanOrEqualTo(6)"),
+                ("assertThat(rows).contains(1)", "assertThat(rows).doesNotContain(1)"),
+                ("assertTrue(f(6) > 6)", "assertTrue(f(6) >= 6)"),
+                ("assertTrue(ok(1))", "assertFalse(ok(1))"),
+                ("assertEquals(0, f(0))", "assertNotEquals(1, f(0))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("src/test/java/TTest.java", &java(base), &java(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: TTest.t the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "src/test/java/TTest.java",
+                    &java("assertThat(f(6)).isGreaterThanOrEqualTo(6)"),
+                    &java("assertThat(f(6)).isGreaterThan(6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",
