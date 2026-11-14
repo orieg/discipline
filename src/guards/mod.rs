@@ -56,6 +56,7 @@ pub mod token_formats;
 pub mod toolchain_config;
 pub mod unsafe_budget;
 pub mod version_lockstep;
+pub mod visual_evidence;
 
 use crate::cli::SuiteChoice;
 pub use crate::config::Severity;
@@ -1172,6 +1173,7 @@ pub fn run_checks(
             "claim-labels" => claim_labels::evaluate_claim_labels(ctx),
             "companion-edit" => companion_edit::evaluate_companion_edit(ctx),
             "changed-line-coverage" => changed_line_coverage::evaluate_changed_line_coverage(ctx),
+            "visual-evidence" => visual_evidence::evaluate_visual_evidence(ctx),
             "invented-names" => invented_names::evaluate_invented_names(ctx),
             "assertion-reduction"
             | "vacuous-tests"
@@ -2232,6 +2234,7 @@ mod tests {
             "test-floor",
             "unsafe-budget",
             "version-lockstep",
+            "visual-evidence",
         ];
         left_out.sort_unstable();
         expected.sort_unstable();
@@ -2294,6 +2297,7 @@ mod tests {
             "bench-regression",
             "companion-edit",
             "changed-line-coverage",
+            "visual-evidence",
         ];
         let mut found = delta_only.clone();
         expected.sort_unstable();

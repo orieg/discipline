@@ -97,6 +97,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`claim-labels`](GATES.md#claim-labels) | hygiene | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 | [`companion-edit`](GATES.md#companion-edit) | integrity | any | a change to one path set must also change its companion path set |
 | [`changed-line-coverage`](GATES.md#changed-line-coverage) | integrity | any (LCOV, Cobertura) | a line the change adds that the coverage report lists as never run |
+| [`visual-evidence`](GATES.md#visual-evidence) | hygiene | any | a change to UI paths needs before and after images in the pull request body |
 | [`invented-names`](GATES.md#invented-names) | hygiene | markdown, any | a flag or configuration key a document gives a tool that the tool's declared surface does not list |
 <!-- /generated -->
 
@@ -567,6 +568,7 @@ Default enablement and severity are part of the compatibility contract (`docs/AR
 | Release | Gate | Old default | New default | Direction | Reason | Restore previous behaviour |
 |---|---|---|---|---|---|---|
 | v0.32.0 | `pii` | `diff_only = false`: every tracked text file swept on every run | `diff_only = true`: the lines the change adds | looser | A finding already in the tree blocked every change until the repository was configured: on the #838 confirmatory replay, 619 of 644 honest changes (measured) exited 1 on addresses in documentation and test data they did not touch (#1040). `discipline baseline --whole-tree` remains the explicit sweep of the whole tree. | `[gates.pii]` `diff_only = false` |
+| unreleased | `visual-evidence` | (new gate) | off, `error` | none (off) | A change to `trigger_paths` needs an `After` image in the pull request body, and a `Before` image when a matched path existed on the base side (#1083). Off because which paths are UI is repository-specific. | n/a |
 | unreleased | `invented-names` | (new gate) | off, `warning` | none (off) | A flag or configuration key a Markdown document gives a tool, in a code span, a shell fence or a `toml` fence marked as the tool's configuration, that the tool's declared surface file does not list is reported (#1090). Off until a replay over agent-authored documentation changes reports its false blocks; this repository enables it against its own generated `docs/surface.txt`. | n/a |
 | unreleased | `changed-line-coverage` | (new gate) | off, `error` | none (off) | A line the change adds that the project's LCOV or Cobertura report lists as never run is reported, one finding per file (#1068). Off because the report is the project's own test run's, at a path only the repository knows. | n/a |
 | v0.31.0 | `companion-edit` | (new gate) | off, `error` | none (off) | A change to `trigger_paths` must also edit `require_edits_to` (any one, or every one with `require_all`), one covenant per `[[gates.companion-edit.rules]]` entry (#1018). Off because which path sets move together is repository-specific. | n/a |

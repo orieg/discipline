@@ -11116,7 +11116,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 22 disabled, 1 not evaluated (65 items examined)"
+            "gates:  26 passed, 0 failed, 23 disabled, 1 not evaluated (66 items examined)"
         ),
         "{}",
         run.stdout
@@ -11132,13 +11132,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=65"), "{step_output}");
+    assert!(step_output.contains("examined_items=66"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 22 disabled, 1 not evaluated (65 items examined)"
+            "**Summary:** 26 passed, 0 failed, 23 disabled, 1 not evaluated (66 items examined)"
         ),
         "{step_summary}"
     );
@@ -26490,6 +26490,126 @@ require_edits_to = ["docs/spec.md", "docs/api.md"]
         stopped.stdout,
         stopped.stderr
     );
+}
+
+#[test]
+fn visual_evidence_requires_after_and_before_only_for_existing_ui_paths() {
+    let config = r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.visual-evidence]
+enabled = true
+
+[[gates.visual-evidence.rules]]
+trigger_paths = ["web/**"]
+reason = "UI changes are reviewed from screenshots"
+"#;
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("web/Nav.tsx", "export const Nav = 1;\n"),
+            ("src/lib.rs", "pub fn f() {}\n"),
+        ],
+        "base: enable visual-evidence",
+    );
+    let after_only = "## Summary\nNew page.\n\n## After\n![page](https://example.com/p.png)\n";
+    let both = "## Before\n![old](https://example.com/o.png)\n\n## After\n<img src=\"https://example.com/n.png\">\n";
+    let codes = |run: &Run| -> Vec<String> {
+        run.violations("visual-evidence")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // 1. A new page alone: After is enough, and a note says Before was not required.
+    repo.write("web/Page.tsx", "export const Page = 1;\n");
+    repo.commit("feat: page");
+    let run = repo.check_with_pr(&[], after_only);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+    assert!(
+        run.outcome("visual-evidence")["notes"]
+            .to_string()
+            .contains("`Before` is not required"),
+        "{}",
+        run.stdout
+    );
+
+    // 2. No images at all: After missing, and nothing more for an added-only change.
+    let run = repo.check_with_pr(&[], "## Summary\nNew page.\n");
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(codes(&run), ["visual-evidence/visual-evidence-missing"]);
+    let message = run.violations("visual-evidence")[0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("`web/Page.tsx`") && message.contains("Reason: UI changes"),
+        "{message}"
+    );
+    // An example image inside a fence is not evidence.
+    let fenced = "## After\n```md\n![page](https://example.com/p.png)\n```\n";
+    let run = repo.check_with_pr(&[], fenced);
+    assert_eq!(codes(&run), ["visual-evidence/visual-evidence-missing"]);
+
+    // 3. Editing an existing UI file needs Before too, naming that file.
+    repo.write("web/Nav.tsx", "export const Nav = 2;\n");
+    repo.commit("feat: nav links the page");
+    let run = repo.check_with_pr(&[], after_only);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(codes(&run), ["visual-evidence/visual-evidence-incomplete"]);
+    assert!(
+        run.violations("visual-evidence")[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`web/Nav.tsx` existed before this change"),
+        "{}",
+        run.stdout
+    );
+    // Both images: pass.
+    let run = repo.check_with_pr(&[], both);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty());
+    // The Before requirement lifted by its directive.
+    let waived =
+        format!("{after_only}\nallow-visual-evidence: before the old nav had no visible state\n");
+    let run = repo.check_with_pr(&[], &waived);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty());
+    assert_eq!(
+        run.outcome("visual-evidence")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // 4. A change outside trigger_paths: nothing examined.
+    repo.git(&["checkout", "-q", "-B", "other", "main"]);
+    repo.write("src/lib.rs", "pub fn g() {}\n");
+    repo.commit("feat: g");
+    let run = repo.check_with_pr(&[], "No UI.\n");
+    assert_eq!(run.outcome("visual-evidence")["examined"], 0);
+    assert!(codes(&run).is_empty());
+
+    // 5. Fail closed: enabled with no rules.
+    let empty = Repo::new();
+    empty.commit_base_files(
+        &[(
+            "discipline.toml",
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.visual-evidence]\nenabled = true\n",
+        )],
+        "base: visual-evidence with no rules",
+    );
+    empty.write("web/a.tsx", "x\n");
+    empty.commit("feat: a");
+    let stopped = empty.check_with_pr(&[], both);
+    assert_eq!(stopped.code, 2, "{}\n{}", stopped.stdout, stopped.stderr);
+    let (reason, gate) = stopped.could_not_check();
+    assert_eq!(reason, "configuration");
+    assert_eq!(gate.as_deref(), Some("visual-evidence"));
 }
 
 #[test]

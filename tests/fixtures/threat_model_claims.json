@@ -1362,6 +1362,17 @@
       "verdict": "holds"
     },
     {
+      "id": "gate-visual-evidence",
+      "category": "gates",
+      "claim": "a change to UI paths needs before and after images in the pull request body",
+      "source": "docs/GATES.md:visual-evidence",
+      "code": "src/guards/visual_evidence.rs:evaluate_visual_evidence",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::visual_evidence_requires_after_and_before_only_for_existing_ui_paths"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "gate-invented-names",
       "category": "gates",
       "claim": "a flag or configuration key a document gives a tool that the tool's declared surface does not list",

@@ -321,6 +321,9 @@ a change to one path set must also change its companion path set (integrity; def
 .B [gates.changed-line-coverage]
 a line the change adds that the coverage report lists as never run (integrity; default: off; languages: any (LCOV, Cobertura))
 .TP
+.B [gates.visual-evidence]
+a change to UI paths needs before and after images in the pull request body (hygiene; default: off; languages: any)
+.TP
 .B [gates.invented-names]
 a flag or configuration key a document gives a tool that the tool's declared surface does not list (hygiene; default: off; languages: markdown, any)
 .\" /generated

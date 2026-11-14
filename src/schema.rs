@@ -87,6 +87,7 @@ pub fn generate_schema() -> Value {
             "claim-labels" => "#/$defs/ClaimLabelsGate",
             "companion-edit" => "#/$defs/CompanionEditGate",
             "changed-line-coverage" => "#/$defs/ChangedLineCoverageGate",
+            "visual-evidence" => "#/$defs/VisualEvidenceGate",
             "invented-names" => "#/$defs/InventedNamesGate",
             _ => "#/$defs/BasicGate",
         };
@@ -713,6 +714,22 @@ pub fn generate_schema() -> Value {
             "ChangedLineCoverageGate": gate_table(json!({
                 "report": { "type": "string", "description": "Repository-relative path of the coverage report the test run writes; a tracked file, a symlink or a path outside the repository stops the run" },
                 "format": { "type": "string", "enum": ["lcov", "cobertura"], "description": "The report's format: an LCOV tracefile or a Cobertura XML report" }
+            })),
+            "VisualEvidenceGate": gate_table(json!({
+                "exempt_authors": { "$ref": "#/$defs/StringListOrReset", "description": "Pull request author logins (dependency bots) whose changes need no images" },
+                "rules": {
+                    "type": "array",
+                    "description": "Path sets whose change needs an After image, and a Before image when a matched path existed on the base side, in the pull request body",
+                    "items": {
+                        "type": "object",
+                        "required": ["trigger_paths"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "trigger_paths": { "$ref": "#/$defs/StringList", "description": "Globs; a changed path matching any of them (either side of a rename, a deletion included) fires the rule" },
+                            "reason": { "type": "string", "description": "Why these paths need visual evidence, quoted in the finding" }
+                        }
+                    }
+                }
             })),
             "InventedNamesGate": gate_table(json!({
                 "diff_only": { "type": "boolean", "description": "When true (default), reads only the lines the change adds to a Markdown document; false reads every tracked Markdown document" },

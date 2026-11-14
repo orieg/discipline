@@ -5775,6 +5775,23 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "visual-evidence: images under Before / After headings are read outside fences, and Before is required only for a matched path the base had (#1083)",
+        || {
+            use crate::gitctx::ChangeKind;
+            use crate::guards::visual_evidence::{read_evidence, required, Required};
+            use crate::guards::PathFilter;
+            let e = read_evidence("## Before\n![b](b.png)\n## After\n```\n![a](a.png)\n```\n");
+            let rules = vec![PathFilter::new(&["web/**".to_string()])?];
+            let none = PathFilter::new(&[])?;
+            let added = required(&[(ChangeKind::Added, "web/a.tsx".into(), String::new())], &rules, &none);
+            let edited = required(&[(ChangeKind::Modified, "web/b.tsx".into(), String::new())], &rules, &none);
+            Ok(e.before_shown()
+                && !e.after_shown()
+                && matches!(added, Required::After { .. })
+                && matches!(edited, Required::BeforeAndAfter { .. }))
+        },
+    ),
+    (
         "invented-names: a tool's flags in a shell fence and its keys in a marked toml block resolve against its surface, and prose is not read (#1090)",
         || {
             use crate::config::InventedNamesTool;

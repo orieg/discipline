@@ -653,6 +653,16 @@ pub const GATES: &[GateInfo] = &[
         triggers: &[],
     },
     GateInfo {
+        id: "visual-evidence",
+        suite: Suite::Hygiene,
+        summary: "a change to UI paths needs before and after images in the pull request body",
+        coverage: Coverage::Stated("any"),
+        available: true,
+        delta_only: true,
+        scope: Scope::Provenance,
+        triggers: &[],
+    },
+    GateInfo {
         id: "invented-names",
         suite: Suite::Hygiene,
         summary: "a flag or configuration key a document gives a tool that the tool's declared surface does not list",
@@ -1127,6 +1137,7 @@ pub struct Gates {
     pub claim_labels: ClaimLabelsGate,
     pub companion_edit: CompanionEditGate,
     pub changed_line_coverage: ChangedLineCoverageGate,
+    pub visual_evidence: VisualEvidenceGate,
     pub invented_names: InventedNamesGate,
 }
 
@@ -1240,6 +1251,7 @@ impl_gate_settings!(
     ClaimLabelsGate,
     CompanionEditGate,
     ChangedLineCoverageGate,
+    VisualEvidenceGate,
     InventedNamesGate
 );
 
@@ -2996,6 +3008,30 @@ pub struct ChangedLineCoverageGate {
     pub format: CoverageFormat,
 }
 
+/// `visual-evidence`: path sets whose change needs before and after images in the pull
+/// request body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VisualEvidenceGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Pull request authors (dependency bots) whose changes need no images.
+    pub exempt_authors: Vec<String>,
+    pub rules: Vec<VisualEvidenceRule>,
+}
+
+impl Default for VisualEvidenceGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            exempt_authors: Vec::new(),
+            rules: Vec::new(),
+        }
+    }
+}
 /// `invented-names`: each tool whose flags and configuration keys documents are checked
 /// against the list of names it declares.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3021,6 +3057,16 @@ impl Default for InventedNamesGate {
     }
 }
 
+/// One `[[gates.visual-evidence.rules]]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VisualEvidenceRule {
+    /// Globs; a changed path matching any of them needs visual evidence.
+    pub trigger_paths: Vec<String>,
+    /// Why these paths need it, quoted in the finding.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
 /// One `[[gates.invented-names.tools]]` entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3102,6 +3148,7 @@ impl Gates {
             "claim-labels" => &self.claim_labels,
             "companion-edit" => &self.companion_edit,
             "changed-line-coverage" => &self.changed_line_coverage,
+            "visual-evidence" => &self.visual_evidence,
             "invented-names" => &self.invented_names,
             _ => return None,
         })

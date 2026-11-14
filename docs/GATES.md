@@ -66,6 +66,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`claim-labels`](#claim-labels) | hygiene | **shipped** | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 | [`companion-edit`](#companion-edit) | integrity | **shipped** | any | a change to one path set must also change its companion path set |
 | [`changed-line-coverage`](#changed-line-coverage) | integrity | **shipped** | any (LCOV, Cobertura) | a line the change adds that the coverage report lists as never run |
+| [`visual-evidence`](#visual-evidence) | hygiene | **shipped** | any | a change to UI paths needs before and after images in the pull request body |
 | [`invented-names`](#invented-names) | hygiene | **shipped** | markdown, any | a flag or configuration key a document gives a tool that the tool's declared surface does not list |
 <!-- /generated -->
 
@@ -125,6 +126,7 @@ An agent's edit hook (`discipline hook run` after an edit) runs the gates about 
 | [`unsafe-safety-comment`](#unsafe-safety-comment) | file | runs |
 | [`vacuous-tests`](#vacuous-tests) | file | runs |
 | [`version-lockstep`](#version-lockstep) | repository | not evaluated; end of turn and CI |
+| [`visual-evidence`](#visual-evidence) | provenance | not evaluated; end of turn and CI |
 <!-- /generated -->
 
 ### Finding Codes
@@ -424,6 +426,8 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `claim-labels/read-label-unresolvable` | Unresolvable Read Label |
 | `companion-edit/companion-not-edited` | Companion Path Not Edited |
 | `changed-line-coverage/uncovered-lines` | Changed Lines Not Covered |
+| `visual-evidence/visual-evidence-missing` | After Image Missing |
+| `visual-evidence/visual-evidence-incomplete` | Before Image Missing |
 | `invented-names/unknown-flag` | Flag Not In Declared Surface |
 | `invented-names/unknown-config-key` | Configuration Key Not In Declared Surface |
 | `engine/could-not-run` | Check Could Not Run |
@@ -1553,6 +1557,46 @@ How a gate's default severity is allowed to move. This section is doctrine for c
 - **Lifting directive:** `allow-claim-label: <subject> <reason>` (or `discipline:allow(claim-labels)` in Markdown).
 - **Default:** off, severity `warning`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `extra_patterns`, `allow_patterns`.
+
+#### `visual-evidence`
+- **Rule:** A change to UI paths must show what it changed: the pull request body has an `After` heading with an image under it, and a `Before` heading with one too when a matched path existed on the base side. Each `[[gates.visual-evidence.rules]]` entry is a set of `trigger_paths` globs (`web/src/**/*.tsx`, `**/*.css`, `src/tui/**`) with an optional `reason`.
+- **Which images are required** (decided from the diff, never from the body):
+  - A changed path matching a rule fires it: an added, modified or deleted path, and both sides of a rename.
+  - Every matched path added (a new page or component): only `After` is required; a note records that `Before` was not.
+  - Any matched path modified, deleted or renamed: `Before` is required as well, and the finding names that path. A new page together with an edit to a matched router or layout file therefore needs `Before`: narrow `trigger_paths`, or lift it with `allow-visual-evidence: before <reason>`. No text in the body can claim the added-only case.
+- **Languages:** Any; the gate reads paths and the body text.
+- **What is read:** the body the declared-surface contract reads, through `directives.sources`: the pull request body, the merged pull request's body on a push (`merged-pr-body`), else the head commit message (`commits`). A heading of any level whose text is `Before` or `After` (any case, emphasis and a trailing `:` ignored) opens a section that runs to the next heading of the same or a higher level. An image is a Markdown `![alt](url)` or an HTML `<img src=...>` with a non-empty target. Headings and images in fenced code, HTML comments and `>` quotes are not read, as in [`pr-checklist`](#pr-checklist) (#896). Images are never fetched (no network), and a finding never echoes their URLs.
+- **What it catches:**
+  - No `After` image (`visual-evidence-missing`): no `After` heading, or one with no image under it, or no body to read at all.
+  - No `Before` image where one is required (`visual-evidence-incomplete`), naming the matched path that existed on the base side.
+- **Could not check (exit 2):** reason `configuration` for the gate enabled with no rules, an empty `trigger_paths`, a blank glob, a glob that does not compile, or an `exempt_authors` entry that is not a login.
+- **Failing PR description (rejected):** a change edits `web/src/Nav.tsx` and the body reads:
+  ```text
+  ## After
+  ![nav](https://example.com/nav.png)
+  ```
+  `visual-evidence-incomplete`: `web/src/Nav.tsx` existed before the change, and the body has no `Before` heading.
+- **Passing PR description (accepted):**
+  ```text
+  ## Before
+  ![nav before](https://example.com/nav-old.png)
+
+  ## After
+  ![nav after](https://example.com/nav.png)
+  ```
+- **What it does NOT catch:**
+  - Whether the images show the change, or are a real before/after pair: any image under each heading meets the rule, a placeholder that shows nothing included (#1083).
+  - A broken or private image URL: images are never fetched.
+  - A visual change outside `trigger_paths`, such as a theme constant or a shared stylesheet in a path no rule matches, including one a new page uses to change an existing screen.
+  - Evidence laid out another way: a two-column table with no `Before` / `After` headings, a bold line that is not a heading, a video or a text snapshot. Such a body is reported until it uses the headings.
+  - A whole-tree run (`baseline --whole-tree`): there is no change to judge, so the gate is not evaluated there. An agent's edit hook does not run it: it reads the pull request.
+- **No change:** when no changed path outside `exempt_paths` matches any rule, the gate passes with a note and `examined` is 0. `examined` is 1 when a rule fired.
+- **Exempt authors:** a pull request opened by a login in `exempt_authors` (dependency bots) needs no images; the author is read as [`issue-link`](#issue-link) reads it.
+- **Weakening the gate:** disabling it, lowering its severity, growing `exempt_paths` or `exempt_authors`, and removing or editing a rule are weakenings [`config-integrity`](#config-integrity) reports (`allow-gate-weakening:`).
+- **Lifting directive:** `allow-visual-evidence: before <reason>` lifts the `Before` requirement; `allow-visual-evidence: after <reason>` lifts the `After` one. Each counts against `max_overrides`.
+- **Baseline:** each finding is located at the `PR body`, on the heading's line when the heading exists.
+- **Default:** off, severity `error`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `exempt_authors`, `rules` (`trigger_paths`, `reason`).
 
 #### `invented-names`
 - **Rule:** A flag or configuration key a Markdown document gives a tool must be one the tool declares. Each `[[gates.invented-names.tools]]` entry names a tool (`name`) and its surface (`surface`): a tracked file listing the names the tool accepts. The surface is reviewed content; the tool's build should write it, and a [`command`](#command) `snapshot` or a generated-file check keeps it equal to what the tool accepts.

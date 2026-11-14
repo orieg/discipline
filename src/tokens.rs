@@ -565,11 +565,18 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_kind: DirectiveSubjectKind::FilePath,
         subject_doc: "The changed source file whose uncovered lines are accepted",
     },
+    DirectiveSpec {
+        canonical: "allow-visual-evidence",
+        deprecated: None,
+        gate: "visual-evidence",
+        subject_kind: DirectiveSubjectKind::RuleName,
+        subject_doc: "`before` (the Before image) or `after` (the visual evidence as a whole)",
+    },
 ];
 
-/// The 49 named directives recognized by discipline (39 canonical + 10 deprecated aliases).
+/// The 50 named directives recognized by discipline (40 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 39 Canonical
+    // 40 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -609,6 +616,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-claim-label",
     "allow-companion-edit",
     "allow-uncovered",
+    "allow-visual-evidence",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -839,6 +847,12 @@ pub const ALLOW_UNCOVERED: &[&str] = &[
     "allow(changed-line-coverage)",
 ];
 
+pub const ALLOW_VISUAL_EVIDENCE: &[&str] = &[
+    "allow-visual-evidence",
+    "discipline:allow(visual-evidence)",
+    "allow(visual-evidence)",
+];
+
 /// Returns the slice of aliases accepted for a given directive name.
 pub fn names_for_directive(name: &str) -> &'static [&'static str] {
     let lower = name.to_ascii_lowercase();
@@ -882,6 +896,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-claim-label" => ALLOW_CLAIM_LABEL,
         "allow-companion-edit" => ALLOW_COMPANION_EDIT,
         "allow-uncovered" => ALLOW_UNCOVERED,
+        "allow-visual-evidence" => ALLOW_VISUAL_EVIDENCE,
         _ => &[],
     }
 }
@@ -896,7 +911,7 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 39 Canonical
+    // 40 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -936,6 +951,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-claim-label",
     "allow-companion-edit",
     "allow-uncovered",
+    "allow-visual-evidence",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -1022,6 +1038,8 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(companion-edit)",
     "discipline:allow(changed-line-coverage)",
     "allow(changed-line-coverage)",
+    "discipline:allow(visual-evidence)",
+    "allow(visual-evidence)",
 ];
 
 const PLACEHOLDERS: &[&str] = &[

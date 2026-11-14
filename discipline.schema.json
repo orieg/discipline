@@ -1806,6 +1806,47 @@
         }
       },
       "type": "object"
+    },
+    "VisualEvidenceGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_authors": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Pull request author logins (dependency bots) whose changes need no images"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "rules": {
+          "description": "Path sets whose change needs an After image, and a Before image when a matched path existed on the base side, in the pull request body",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "description": "Why these paths need visual evidence, quoted in the finding",
+                "type": "string"
+              },
+              "trigger_paths": {
+                "$ref": "#/$defs/StringList",
+                "description": "Globs; a changed path matching any of them (either side of a rename, a deletion included) fires the rule"
+              }
+            },
+            "required": [
+              "trigger_paths"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2260,6 +2301,14 @@
             }
           ],
           "description": "version declarations across headers, manifests, and files must remain in lockstep"
+        },
+        "visual-evidence": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/VisualEvidenceGate"
+            }
+          ],
+          "description": "a change to UI paths needs before and after images in the pull request body"
         }
       },
       "type": "object"

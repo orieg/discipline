@@ -26,6 +26,7 @@ fn dogfood_config_loads_with_every_available_gate_on() {
             || gate.id == "claim-labels"
             || gate.id == "companion-edit"
             || gate.id == "changed-line-coverage"
+            || gate.id == "visual-evidence"
             // On in this repository at `warning`, its default, until its replay (#1090).
             || gate.id == "invented-names"
         {
@@ -326,6 +327,7 @@ name = "my-test-proj"
             || g.id == "claim-labels"
             || g.id == "companion-edit"
             || g.id == "changed-line-coverage"
+            || g.id == "visual-evidence"
             || g.id == "invented-names"
         {
             assert!(
@@ -775,6 +777,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("claim-labels", false, Severity::Warning),
     ("companion-edit", false, Severity::Error),
     ("changed-line-coverage", false, Severity::Error),
+    ("visual-evidence", false, Severity::Error),
     ("invented-names", false, Severity::Warning),
 ];
 
