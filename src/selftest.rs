@@ -4766,6 +4766,40 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-cpp")]
+    (
+        "assertion-reduction: a C/C++ assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let cc = |check: &str| format!("TEST(S, T) {{\n    {check};\n}}\n");
+            let mut ok = true;
+            for (base, head) in [
+                ("EXPECT_GT(F(6), 6)", "EXPECT_GE(F(6), 6)"),
+                ("EXPECT_TRUE(F(6))", "EXPECT_FALSE(F(6))"),
+                ("REQUIRE(F(6) > 6)", "REQUIRE(F(6) >= 6)"),
+                ("EXPECT_THAT(F(6), Gt(6))", "EXPECT_THAT(F(6), Ge(6))"),
+                ("EXPECT_EQ(0, F(0))", "EXPECT_NE(1, F(0))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("tests/TTest.cpp", &cc(base), &cc(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: T the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "tests/TTest.cpp",
+                    &cc("EXPECT_GE(F(6), 6)"),
+                    &cc("EXPECT_GT(F(6), 6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",
