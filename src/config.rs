@@ -652,6 +652,16 @@ pub const GATES: &[GateInfo] = &[
         scope: Scope::Repository,
         triggers: &[],
     },
+    GateInfo {
+        id: "visual-evidence",
+        suite: Suite::Hygiene,
+        summary: "a change to UI paths needs before and after images in the pull request body",
+        coverage: Coverage::Stated("any"),
+        available: true,
+        delta_only: true,
+        scope: Scope::Provenance,
+        triggers: &[],
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -1117,6 +1127,7 @@ pub struct Gates {
     pub claim_labels: ClaimLabelsGate,
     pub companion_edit: CompanionEditGate,
     pub changed_line_coverage: ChangedLineCoverageGate,
+    pub visual_evidence: VisualEvidenceGate,
 }
 
 /// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
@@ -1228,7 +1239,8 @@ impl_gate_settings!(
     CitationAnchorsGate,
     ClaimLabelsGate,
     CompanionEditGate,
-    ChangedLineCoverageGate
+    ChangedLineCoverageGate,
+    VisualEvidenceGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2984,6 +2996,42 @@ pub struct ChangedLineCoverageGate {
     pub format: CoverageFormat,
 }
 
+/// `visual-evidence`: path sets whose change needs before and after images in the pull
+/// request body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VisualEvidenceGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Pull request authors (dependency bots) whose changes need no images.
+    pub exempt_authors: Vec<String>,
+    pub rules: Vec<VisualEvidenceRule>,
+}
+
+impl Default for VisualEvidenceGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            exempt_authors: Vec::new(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+/// One `[[gates.visual-evidence.rules]]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VisualEvidenceRule {
+    /// Globs; a changed path matching any of them needs visual evidence.
+    pub trigger_paths: Vec<String>,
+    /// Why these paths need it, quoted in the finding.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 impl Default for ChangedLineCoverageGate {
     fn default() -> Self {
         Self {
@@ -3047,6 +3095,7 @@ impl Gates {
             "claim-labels" => &self.claim_labels,
             "companion-edit" => &self.companion_edit,
             "changed-line-coverage" => &self.changed_line_coverage,
+            "visual-evidence" => &self.visual_evidence,
             _ => return None,
         })
     }

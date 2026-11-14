@@ -978,6 +978,18 @@
       "gates.version-lockstep.groups[].sources[].path",
       "gates.version-lockstep.groups[].sources[].regex",
       "gates.version-lockstep.severity",
+      "gates.visual-evidence",
+      "gates.visual-evidence.enabled",
+      "gates.visual-evidence.exempt_authors",
+      "gates.visual-evidence.exempt_authors.items",
+      "gates.visual-evidence.exempt_authors.reset",
+      "gates.visual-evidence.exempt_paths",
+      "gates.visual-evidence.exempt_paths.items",
+      "gates.visual-evidence.exempt_paths.reset",
+      "gates.visual-evidence.rules",
+      "gates.visual-evidence.rules[].reason",
+      "gates.visual-evidence.rules[].trigger_paths",
+      "gates.visual-evidence.severity",
       "hooks",
       "hooks.premature-stop",
       "hooks.premature-stop.enabled",
@@ -1070,6 +1082,7 @@
       "allow(unsafe-budget)",
       "allow(vacuous-tests)",
       "allow(version-lockstep)",
+      "allow(visual-evidence)",
       "allow-agent-instructions",
       "allow-archive-leak",
       "allow-assertion-drop",
@@ -1114,6 +1127,7 @@
       "allow-unsafe-budget",
       "allow-vacuous-test",
       "allow-version-mismatch",
+      "allow-visual-evidence",
       "deletes",
       "discipline:advisory",
       "discipline:allow(archive-contents)",
@@ -1153,6 +1167,7 @@
       "discipline:allow(unsafe-budget)",
       "discipline:allow(vacuous-tests)",
       "discipline:allow(version-lockstep)",
+      "discipline:allow(visual-evidence)",
       "discipline:no-issue",
       "no-issue",
       "removes",
@@ -1542,7 +1557,9 @@
       "vacuous-tests/asserts-only-trivial-properties",
       "vacuous-tests/self-comparison-assertion-added",
       "vacuous-tests/vacuous-test-added",
-      "version-lockstep/version-mismatch"
+      "version-lockstep/version-mismatch",
+      "visual-evidence/visual-evidence-incomplete",
+      "visual-evidence/visual-evidence-missing"
     ],
     "gates": [
       "agent-scratch",
@@ -1592,7 +1609,8 @@
       "unsafe-budget",
       "unsafe-safety-comment",
       "vacuous-tests",
-      "version-lockstep"
+      "version-lockstep",
+      "visual-evidence"
     ],
     "mcp.arguments": [
       "explain_finding.query"

@@ -24,7 +24,8 @@
       "test-floor",
       "toolchain-config",
       "unsafe-safety-comment",
-      "vacuous-tests"
+      "vacuous-tests",
+      "visual-evidence"
     ],
     "exempt": {
       "agent-scratch": "Hygiene rule over text and metadata, not over the strength of a test or of the run; no evasion shape filed yet.",
@@ -3646,6 +3647,78 @@
       },
       "gate": "assertion-reduction",
       "verdict": "clean"
+    },
+    {
+      "name": "ui-edit-without-before-image",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.visual-evidence]\nenabled = true\n\n[[gates.visual-evidence.rules]]\ntrigger_paths = [\"web/**\"]\n",
+        "web/Nav.tsx": "export const Nav = 1;\n"
+      },
+      "head": {
+        "web/Nav.tsx": "export const Nav = 2;\n"
+      },
+      "body": "## After\n![after](https://example.com/after.png)\n",
+      "enable": [
+        "visual-evidence"
+      ],
+      "verdict": {
+        "caught": [
+          "visual-evidence/visual-evidence-incomplete"
+        ]
+      }
+    },
+    {
+      "name": "ui-page-added-without-images",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.visual-evidence]\nenabled = true\n\n[[gates.visual-evidence.rules]]\ntrigger_paths = [\"web/**\"]\n",
+        "web/Nav.tsx": "export const Nav = 1;\n"
+      },
+      "head": {
+        "web/Page.tsx": "export const Page = 1;\n"
+      },
+      "body": "Adds the page.\n",
+      "enable": [
+        "visual-evidence"
+      ],
+      "verdict": {
+        "caught": [
+          "visual-evidence/visual-evidence-missing"
+        ]
+      }
+    },
+    {
+      "name": "ui-edit-with-before-and-after",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.visual-evidence]\nenabled = true\n\n[[gates.visual-evidence.rules]]\ntrigger_paths = [\"web/**\"]\n",
+        "web/Nav.tsx": "export const Nav = 1;\n"
+      },
+      "head": {
+        "web/Nav.tsx": "export const Nav = 2;\n"
+      },
+      "body": "## Before\n![before](https://example.com/before.png)\n\n## After\n![after](https://example.com/after.png)\n",
+      "enable": [
+        "visual-evidence"
+      ],
+      "gate": "visual-evidence",
+      "verdict": "clean"
+    },
+    {
+      "name": "ui-evidence-placeholder-images",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.visual-evidence]\nenabled = true\n\n[[gates.visual-evidence.rules]]\ntrigger_paths = [\"web/**\"]\n",
+        "web/Nav.tsx": "export const Nav = 1;\n"
+      },
+      "head": {
+        "web/Nav.tsx": "export const Nav = 2;\n"
+      },
+      "body": "## Before\n![x](https://example.com/1x1.png)\n\n## After\n![x](https://example.com/1x1.png)\n",
+      "enable": [
+        "visual-evidence"
+      ],
+      "gate": "visual-evidence",
+      "verdict": {
+        "known_miss": "#1083"
+      }
     }
   ]
 }
