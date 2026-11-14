@@ -465,6 +465,9 @@ findings! {
     // visual-evidence
     VISUAL_EVIDENCE_MISSING = ["visual-evidence"], "visual-evidence-missing", "After Image Missing", Same;
     VISUAL_EVIDENCE_INCOMPLETE = ["visual-evidence"], "visual-evidence-incomplete", "Before Image Missing", Same;
+    // invented-names
+    UNKNOWN_FLAG = ["invented-names"], "unknown-flag", "Flag Not In Declared Surface", Same;
+    UNKNOWN_CONFIG_KEY = ["invented-names"], "unknown-config-key", "Configuration Key Not In Declared Surface", Same;
 
     // A run that could not complete (the pseudo-gate `engine`, reported only in `--json-out`).
     ENGINE_COULD_NOT_RUN = ["engine"], "could-not-run", "Check Could Not Run", Message;
