@@ -3574,6 +3574,78 @@
       },
       "gate": "assertion-reduction",
       "verdict": "clean"
+    },
+    {
+      "name": "csharp-fluent-bound-widened",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using FluentAssertions;\nusing Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Rows.Count(rows).Should().BeGreaterThan(6);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using FluentAssertions;\nusing Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Rows.Count(rows).Should().BeGreaterThanOrEqualTo(6);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "csharp-xunit-comparison-widened",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.True(Rows.Count(rows) > 6, \"seven rows\");\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.True(Rows.Count(rows) >= 6, \"seven rows\");\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "csharp-xunit-assert-inverted",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.Contains(3, rows);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.DoesNotContain(3, rows);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "csharp-nunit-constraint-widened",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using NUnit.Framework;\npublic class RowsTests\n{\n    [Test]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.That(Rows.Count(rows), Is.GreaterThan(6));\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using NUnit.Framework;\npublic class RowsTests\n{\n    [Test]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.That(Rows.Count(rows), Is.GreaterThanOrEqualTo(6));\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "csharp-fluent-bound-tightened",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using FluentAssertions;\nusing Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Rows.Count(rows).Should().BeGreaterThanOrEqualTo(6);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using FluentAssertions;\nusing Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Rows.Count(rows).Should().BeGreaterThan(6);\n    }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }

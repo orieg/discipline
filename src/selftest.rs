@@ -4730,6 +4730,42 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-csharp")]
+    (
+        "assertion-reduction: a C# assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let cs = |check: &str| {
+                format!("public class TTests\n{{\n    [Fact]\n    public void T()\n    {{\n        {check};\n    }}\n}}\n")
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("F(6).Should().BeGreaterThan(6)", "F(6).Should().BeGreaterThanOrEqualTo(6)"),
+                ("Assert.Contains(1, rows)", "Assert.DoesNotContain(1, rows)"),
+                ("Assert.True(F(6) > 6)", "Assert.True(F(6) >= 6)"),
+                ("Assert.That(F(6), Is.GreaterThan(6))", "Assert.That(F(6), Is.GreaterThanOrEqualTo(6))"),
+                ("Assert.Equal(0, F(0))", "Assert.NotEqual(1, F(0))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("tests/TTests.cs", &cs(base), &cs(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: T the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "tests/TTests.cs",
+                    &cs("F(6).Should().BeGreaterThanOrEqualTo(6)"),
+                    &cs("F(6).Should().BeGreaterThan(6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

@@ -72,6 +72,7 @@ impl LanguagePack for CSharpPack {
             super::caught_assertions::csharp(root, &anc, src, helpers, vocab)
         });
         super::expected_exceptions::csharp(root, &anc, src, &mut extractor.facts.tests);
+        super::comparisons::csharp(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
