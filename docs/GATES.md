@@ -468,6 +468,27 @@ When a change touches source files in a language without an active pack, each AS
 | **C#** | `[Fact]`, `[Theory]` (xUnit), `[Test]` (NUnit), `[TestMethod]` (MSTest) | `Assert.*`, `StringAssert.*`, `CollectionAssert.*`; strong: `Equal`, `Same`, `AreEqual` / `AreSame` (NUnit, MSTest), `Assert.That(a, Is.EqualTo(b))` / `Is.SameAs`, `Throws` | `[Ignore]`, `[Fact(Skip = "...")]`, `Assert.Ignore(..)`, `Assert.Skip(..)`; conditional: those calls under an `if`, `Assume.That(..)`, `Skip.If(..)` / `Skip.IfNot(..)`, `Assert.SkipWhen(..)` / `Assert.SkipUnless(..)`, `[Fact(Skip = "..", SkipWhen = nameof(X))]` / `SkipUnless` | `#pragma warning disable`, `[SuppressMessage]` | **shipped** |
 | **Ruby** | `def test_*` (Minitest, Test::Unit), `it` / `specify` (RSpec) | `assert_*`, `refute_*`, RSpec `expect(...).to eq(...)`; strong: `assert_equal`, `eq` | `xit`, `xdescribe`, `:skip`, `skip`, `omit`, `pending`; conditional: those calls under `if` / `unless` (statement or modifier), a ternary or `&&` / `||`, `omit_if(..)`, `omit_unless(..)` | `# rubocop:disable` / `todo`, spaced or not (`#rubocop:disable`) | **shipped** |
 
+### Public Names
+
+Some checks need the public names a change adds, removes or modifies: a companion document that must name what changed (#1089), and documentation that still names a removed symbol. Each language pack reads them the same way (`src/ast/public_names.rs`, #1086), so the checks cannot drift apart. This is plain data, never a finding.
+
+- **Public:** per language, in the table below. A name is qualified by its enclosing type or module (`Store::get`, `Config.load`).
+- **Compared** base against head by kind and qualified name. A name present on both sides is **modified** when its declaration's text changed (whitespace runs folded). For a type that is any change inside it, its members' bodies included. Overloads share one entry. A renamed file is compared under its head path.
+- **Test files** (the pack's test-path rule) are skipped: they are not public API.
+- **Could not check:** a changed file that no pack reading public names covers, or a side that does not parse or parses with errors. A consuming gate reports such a file as could not check, never as "no public name changed".
+- **The table is a contract.** Narrowing a row turns a passing change into a blocked one for the gates that read it. A change to a row carries a `discipline replay` comparison in its pull request, like a default change, and updates `tests/fixtures/public_names_corpus.json`.
+
+| Language | Public | Not public |
+|---|---|---|
+| **Rust** | items marked `pub` exactly, inside modules that are themselves `pub`: `fn`, `struct`, `enum`, `union`, `type`, `trait`, `const`, `static`, `mod`; the `pub fn`s of an inherent `impl` (`Type::method`); every item of a `pub trait` (`Trait::method`); `macro_rules!` with `#[macro_export]`, named at the crate root | `pub(crate)`, `pub(super)`, `pub(in ..)`, no `pub`; anything inside a private `mod`; the methods of a trait `impl` (they are the trait's) |
+| **Python** | module-level `def`, `class` and assigned names not starting with `_`; when the module assigns `__all__` a list or tuple of strings, exactly the names it lists; the methods of a public class not starting with `_` (`Class.method`) | a leading `_` (dunder methods included); names assigned inside `if` / `try` blocks; every name of a module whose file name starts with `_` (other than `__init__.py`) |
+| **Go** | top-level `func`, `type`, `const` and `var` names starting with an upper-case letter; methods with such a name on such a receiver type (`Type.Method`, type arguments ignored) | lower-case names; methods on an unexported type; everything in a package under an `internal/` directory |
+| **JavaScript / TypeScript** | what the module exports: `export` before a function, class, variable, interface, type alias, enum or namespace; the exported names of `export { a, b as c }` and `export { x } from "./m"`; `export default` as `default`; the methods of an exported class (`Class.method`) | anything not exported; `private`, `protected` and `#name` members; the names behind `export * from "./m"`, which are not read |
+
+The other packs (Java, Kotlin, Scala, C#, Swift, Objective-C, C / C++, PHP, Ruby) do not read public names yet. A changed file in their languages is "could not check".
+
+Measured on `tests/fixtures/public_names_corpus.json` by `tests/test_public_names_corpus.rs`: precision and recall per language, both 1.0 for Rust, Python, Go and JavaScript / TypeScript (RUN). The corpus was written with the extraction and shows that it follows the table. It is not a measurement on real repositories.
+
 ---
 
 ## Confidence & Stakes Severity Hierarchy
