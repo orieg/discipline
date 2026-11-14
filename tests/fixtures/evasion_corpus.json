@@ -3649,6 +3649,84 @@
       "verdict": "clean"
     },
     {
+      "name": "cpp-gtest-bound-widened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_GT(Count(rows, 7), 6);\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_GE(Count(rows, 7), 6);\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "cpp-gtest-assert-inverted",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_TRUE(Count(rows, 7) == 7);\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_FALSE(Count(rows, 7) == 7);\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "cpp-catch2-comparison-widened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/RowsTest.cpp": "#include <catch2/catch_test_macros.hpp>\n#include \"../src/rows.h\"\n\nTEST_CASE(\"rows are counted\") {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    REQUIRE(Count(rows, 7) > 6);\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.cpp": "#include <catch2/catch_test_macros.hpp>\n#include \"../src/rows.h\"\n\nTEST_CASE(\"rows are counted\") {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    REQUIRE(Count(rows, 7) >= 6);\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound",
+          "assertion-reduction/source-parsed-with-errors-preprocessor"
+        ]
+      }
+    },
+    {
+      "name": "c-unity-bound-widened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/test_rows.c": "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));\n}\n"
+      },
+      "head": {
+        "tests/test_rows.c": "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    TEST_ASSERT_GREATER_OR_EQUAL(6, Count(rows, 7));\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "cpp-gtest-bound-tightened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_GE(Count(rows, 7), 6);\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_GT(Count(rows, 7), 6);\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
       "name": "doc-invented-flag",
       "base": {
         "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",

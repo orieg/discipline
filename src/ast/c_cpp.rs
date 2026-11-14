@@ -217,6 +217,7 @@ fn shared_facts<'t>(
     facts: &mut ParsedFileFacts,
 ) {
     C_PACK.shared_facts(root, anc, src, path, vocab, facts);
+    super::comparisons::c_cpp(root, src, &mut facts.tests);
     facts.prose = super::prose::extract(
         root,
         src,

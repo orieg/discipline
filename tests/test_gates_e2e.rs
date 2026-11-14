@@ -1680,6 +1680,131 @@ fn a_csharp_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     }
 }
 
+/// C and C++ assertions (#1070) weakened or inverted are reported as the same finding: a
+/// GoogleTest comparison macro moved the loose way, `EXPECT_TRUE` -> `EXPECT_FALSE`, a
+/// condition's comparison widened, a GoogleMock matcher widened, `EXPECT_EQ` ->
+/// `EXPECT_NE` read as `==` -> `!=`, and a Unity threshold widened in a C test.
+#[test]
+fn a_c_cpp_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let gtest = |check: &str| {
+        format!(
+            "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {{\n    int rows[] = {{1, 2, 3, 4, 5, 6, 7}};\n    {check}\n}}\n"
+        )
+    };
+    let unity = |check: &str| {
+        format!(
+            "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {{\n    int rows[] = {{1, 2, 3, 4, 5, 6, 7}};\n    {check}\n}}\n"
+        )
+    };
+    let run = |path: &str, base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write("src/rows.h", "int Count(const int *x, int n);\n");
+        repo.write(
+            "src/rows.c",
+            "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        );
+        let wrap = |check: &str| {
+            if path.ends_with(".c") {
+                unity(check)
+            } else {
+                gtest(check)
+            }
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    const CPP: &str = "tests/RowsTest.cpp";
+    const C: &str = "tests/test_rows.c";
+    for (path, test, base, head, ops) in [
+        (
+            CPP,
+            "Counts",
+            "EXPECT_GT(Count(rows, 7), 6) << \"seven rows\";",
+            "EXPECT_GE(Count(rows, 7), 6) << \"seven rows\";",
+            "`EXPECT_GT` to `EXPECT_GE`",
+        ),
+        (
+            CPP,
+            "Counts",
+            "EXPECT_TRUE(Count(rows, 7) == 7);",
+            "EXPECT_FALSE(Count(rows, 7) == 7);",
+            "`EXPECT_TRUE` to `EXPECT_FALSE`",
+        ),
+        (
+            CPP,
+            "Counts",
+            "ASSERT_TRUE(Count(rows, 7) > 6);",
+            "ASSERT_TRUE(Count(rows, 7) >= 6);",
+            "`>` to `>=`",
+        ),
+        (
+            CPP,
+            "Counts",
+            "EXPECT_THAT(Count(rows, 7), ::testing::Gt(6));",
+            "EXPECT_THAT(Count(rows, 7), ::testing::Ge(6));",
+            "`Gt` to `Ge`",
+        ),
+        (
+            CPP,
+            "Counts",
+            "EXPECT_EQ(0, Count(rows, 0));",
+            "EXPECT_NE(1, Count(rows, 0));",
+            "`EXPECT_EQ` to `EXPECT_NE`",
+        ),
+        (
+            C,
+            "test_counts",
+            "TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));",
+            "TEST_ASSERT_GREATER_OR_EQUAL(6, Count(rows, 7));",
+            "`TEST_ASSERT_GREATER_THAN` to `TEST_ASSERT_GREATER_OR_EQUAL`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(path, base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("Count(rows"), "{message}");
+        let lifted = run(
+            path,
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a Unity
+    // threshold raised under the same operator.
+    for (path, base, head) in [
+        (
+            CPP,
+            "EXPECT_GE(Count(rows, 7), 6);",
+            "EXPECT_GT(Count(rows, 7), 6);",
+        ),
+        (
+            CPP,
+            "EXPECT_FALSE(Count(rows, 7) < 6);",
+            "EXPECT_FALSE(Count(rows, 7) <= 6);",
+        ),
+        (
+            C,
+            "TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));",
+            "TEST_ASSERT_GREATER_THAN(7, Count(rows, 8));",
+        ),
+    ] {
+        let (code, codes, _) = run(path, base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
