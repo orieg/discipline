@@ -106,6 +106,109 @@
         "Request",
         "Util"
       ]
+    },
+    {
+      "language": "java",
+      "path": "src/main/java/p/Store.java",
+      "source": "package p;\n\nimport java.util.Map;\n\npublic class Store<K, V> {\n    public static final int LIMIT = 3;\n    protected int hits, misses;\n    private Map<K, V> items;\n    int pkg;\n\n    public Store() {}\n    public V get(K k) { return items.get(k); }\n    protected void evict() {}\n    private void log() {}\n    void internal() {}\n\n    public static class Builder {\n        public Store<String, String> build() { return new Store<>(); }\n        private void reset() {}\n    }\n    private static class Node {\n        public int value;\n    }\n}\n\nclass Helper {\n    public void help() {}\n}\n",
+      "public": [
+        "Store",
+        "Store.Builder",
+        "Store.Builder.build",
+        "Store.LIMIT",
+        "Store.Store",
+        "Store.evict",
+        "Store.get",
+        "Store.hits",
+        "Store.misses"
+      ]
+    },
+    {
+      "language": "java",
+      "path": "src/main/java/p/Api.java",
+      "source": "package p;\n\npublic interface Api {\n    int VERSION = 2;\n    void call();\n    default void close() {}\n    private void secret() {}\n}\n\npublic enum Mode {\n    FAST, SLOW;\n    public boolean quick() { return this == FAST; }\n}\n\npublic record Point(int x, int y) {\n    public int sum() { return x + y; }\n}\n",
+      "public": [
+        "Api",
+        "Api.VERSION",
+        "Api.call",
+        "Api.close",
+        "Mode",
+        "Mode.FAST",
+        "Mode.SLOW",
+        "Mode.quick",
+        "Point",
+        "Point.sum"
+      ]
+    },
+    {
+      "language": "kotlin",
+      "path": "src/main/kotlin/p/Store.kt",
+      "source": "package p\n\nconst val LIMIT = 3\nprivate val cache = mutableMapOf<String, String>()\ninternal fun reset() {}\n\nfun open(): Store = Store(1)\n\nclass Store(val n: Int) {\n    val size: Int = 0\n    private var hits = 0\n\n    fun get(): Int = n\n    protected fun hook() {}\n    internal fun inner() {}\n    private fun h() {}\n\n    companion object {\n        fun create() = Store(1)\n        private fun secret() {}\n    }\n}\n\nprivate class Hidden {\n    fun x() {}\n}\n\ninterface Api {\n    fun call()\n}\n\nobject Registry {\n    fun lookup() {}\n}\n\nenum class Mode {\n    A,\n    B\n}\n\ntypealias Id = String\n",
+      "public": [
+        "Api",
+        "Api.call",
+        "Id",
+        "LIMIT",
+        "Mode",
+        "Mode.A",
+        "Mode.B",
+        "Registry",
+        "Registry.lookup",
+        "Store",
+        "Store.create",
+        "Store.get",
+        "Store.hook",
+        "Store.size",
+        "open"
+      ]
+    },
+    {
+      "language": "scala",
+      "path": "src/main/scala/p/Store.scala",
+      "source": "package p\n\nclass Store(n: Int) {\n  def get: Int = n\n  val size = 0\n  private def h(): Unit = ()\n  protected def hook(): Unit = ()\n  private[p] def scoped(): Unit = ()\n}\n\nobject Store {\n  def apply(): Store = new Store(1)\n  private val cache = 0\n}\n\nprivate class Hidden {\n  def x(): Unit = ()\n}\n\ntrait Api {\n  def call(): Unit\n}\n\ncase class Point(x: Int)\n\ntype Id = String\n\nenum Mode {\n  case A, B\n}\n\ndef top(): Unit = ()\n",
+      "public": [
+        "Api",
+        "Api.call",
+        "Id",
+        "Mode",
+        "Mode.A",
+        "Mode.B",
+        "Point",
+        "Store",
+        "Store.apply",
+        "Store.get",
+        "Store.hook",
+        "Store.size",
+        "top"
+      ]
+    },
+    {
+      "language": "csharp",
+      "path": "src/Store.cs",
+      "source": "namespace P\n{\n    public class Store\n    {\n        public const int Limit = 3;\n        private int n;\n        protected int Hits, Misses;\n\n        public Store() {}\n        public int Get() => n;\n        protected void Hook() {}\n        internal void Inner() {}\n        private protected void Narrow() {}\n        protected internal void Wide() {}\n        void Implicit() {}\n\n        public int Size { get; set; }\n        public event System.EventHandler Changed;\n\n        public class Nested\n        {\n            public void Run() {}\n        }\n    }\n\n    class Hidden\n    {\n        public void X() {}\n    }\n\n    public interface IApi\n    {\n        void Call();\n    }\n\n    public enum Mode { A, B }\n\n    public struct Point\n    {\n        public int X;\n    }\n\n    public record Rec(int X);\n\n    public delegate void Handler(int x);\n}\n",
+      "public": [
+        "Handler",
+        "IApi",
+        "IApi.Call",
+        "Mode",
+        "Mode.A",
+        "Mode.B",
+        "Point",
+        "Point.X",
+        "Rec",
+        "Store",
+        "Store.Changed",
+        "Store.Get",
+        "Store.Hits",
+        "Store.Hook",
+        "Store.Limit",
+        "Store.Misses",
+        "Store.Nested",
+        "Store.Nested.Run",
+        "Store.Size",
+        "Store.Store",
+        "Store.Wide"
+      ]
     }
   ]
 }
