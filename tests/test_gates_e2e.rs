@@ -1512,6 +1512,90 @@ fn a_js_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     }
 }
 
+/// Java assertions (#1070) weakened or inverted are reported as the same finding: an
+/// AssertJ comparison method moved the loose way, an AssertJ twin negated, a JUnit
+/// `assertTrue` comparison widened, `assertTrue` -> `assertFalse`, and `assertEquals` ->
+/// `assertNotEquals` read as `==` -> `!=`.
+#[test]
+fn a_java_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let java = |check: &str| {
+        format!(
+            "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {{\n    @Test\n    void counts() {{\n        int[] rows = {{1, 2, 3, 4, 5, 6, 7}};\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "src/main/java/Rows.java",
+            "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        );
+        repo.commit_base("src/test/java/RowsTest.java", &java(base), "test: counts");
+        repo.write("src/test/java/RowsTest.java", &java(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "assertThat(Rows.count(rows)).isGreaterThan(6);",
+            "assertThat(Rows.count(rows)).isGreaterThanOrEqualTo(6);",
+            "`isGreaterThan` to `isGreaterThanOrEqualTo`",
+        ),
+        (
+            "assertThat(rows).contains(3);",
+            "assertThat(rows).doesNotContain(3);",
+            "`contains` to `doesNotContain`",
+        ),
+        (
+            "assertTrue(Rows.count(rows) > 6, \"seven rows\");",
+            "assertTrue(Rows.count(rows) >= 6, \"seven rows\");",
+            "`>` to `>=`",
+        ),
+        (
+            "assertTrue(Rows.count(rows) == 7);",
+            "assertFalse(Rows.count(rows) == 7);",
+            "`assertTrue` to `assertFalse`",
+        ),
+        (
+            "assertEquals(0, Rows.count(new int[0]));",
+            "assertNotEquals(1, Rows.count(new int[0]));",
+            "`assertEquals` to `assertNotEquals`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("Rows.count("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: RowsTest.counts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, and a failure condition tightened.
+    for (base, head) in [
+        (
+            "assertThat(Rows.count(rows)).isGreaterThanOrEqualTo(6);",
+            "assertThat(Rows.count(rows)).isGreaterThan(6);",
+        ),
+        (
+            "assertFalse(Rows.count(rows) < 6);",
+            "assertFalse(Rows.count(rows) <= 6);",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.

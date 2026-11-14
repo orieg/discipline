@@ -11,8 +11,8 @@
 //! more.
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
-//! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, and JS/TS `expect(..)`
-//! matchers and `assert(..)` calls (#1070).
+//! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
+//! matchers and `assert(..)` calls, and Java assertions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -24,7 +24,13 @@
 //! `==` / `!=`, so `assert_eq!(n, 0)` -> `assert_ne!(n, 1)` is `== 0` -> `!= 1`. JS/TS
 //! reads a comparison matcher (`toBe`, `toBeGreaterThan`, ..) as its operator, `.not`
 //! as its negation, the `.not` of any other matcher of a closed list as a polarity, and
-//! `assert(x)` / `assert(!x)` and the `assert.*` twins the same way.
+//! `assert(x)` / `assert(!x)` and the `assert.*` twins the same way. Java reads the
+//! comparisons of an `assert` statement and of a JUnit / TestNG `assertTrue` /
+//! `assertFalse` condition, `assertEquals` / `assertNotEquals` as `==` / `!=`, the
+//! JUnit twins (`assertTrue` / `assertFalse`, `assertNull` / `assertNotNull`, ..) as a
+//! polarity, and in an AssertJ / Truth `assertThat(..)` chain the comparison methods
+//! (`isGreaterThan`, ..) as their operator and the methods with a negated twin
+//! (`contains` / `doesNotContain`, ..) as a polarity.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -167,7 +173,13 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
         "assert.doesNotThrow" => ("js-throws", true),
         "assert.rejects" => ("js-rejects", false),
         "assert.doesNotReject" => ("js-rejects", true),
-        _ => return js_matcher_polarity(operator),
+        "assertNull" => ("null", false),
+        "assertNotNull" => ("null", true),
+        "assertSame" => ("same", false),
+        "assertNotSame" => ("same", true),
+        JAVA_ASSERT => ("java-assert", false),
+        JAVA_ASSERT_NOT => ("java-assert", true),
+        _ => return js_matcher_polarity(operator).or_else(|| java_chain_polarity(operator)),
     })
 }
 
@@ -847,6 +859,326 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+const JAVA_OPERATORS: &[&str] = &["==", "!=", "<", "<=", ">", ">="];
+
+/// The operators written for a Java `assert` statement's condition and its negation.
+const JAVA_ASSERT: &str = "assert x";
+const JAVA_ASSERT_NOT: &str = "assert !x";
+
+/// JUnit / TestNG methods with a negated twin, read as a polarity, the method masked.
+const JAVA_POLAR: &[&str] = &[
+    "assertTrue",
+    "assertFalse",
+    "assertNull",
+    "assertNotNull",
+    "assertSame",
+    "assertNotSame",
+];
+
+/// JUnit / TestNG methods read as `==` / `!=`, the literal they are given masked.
+const JAVA_EQUALITY: &[&str] = &["assertEquals", "assertNotEquals"];
+
+/// AssertJ / Truth methods of an `assertThat(..)` chain read as a comparison: the literal
+/// they are given is masked.
+const JAVA_CHAIN_COMPARISON: &[&str] = &[
+    "isEqualTo",
+    "isNotEqualTo",
+    "isGreaterThan",
+    "isGreaterThanOrEqualTo",
+    "isLessThan",
+    "isLessThanOrEqualTo",
+];
+
+/// AssertJ / Truth methods of an `assertThat(..)` chain with a negated twin, as
+/// (method, twin). A method outside both lists is not read.
+const JAVA_CHAIN_TWINS: &[(&str, &str)] = &[
+    ("isTrue", "isFalse"),
+    ("isNull", "isNotNull"),
+    ("isEmpty", "isNotEmpty"),
+    ("isBlank", "isNotBlank"),
+    ("isZero", "isNotZero"),
+    ("isNaN", "isNotNaN"),
+    ("isPresent", "isNotPresent"),
+    ("contains", "doesNotContain"),
+    ("containsKey", "doesNotContainKey"),
+    ("containsValue", "doesNotContainValue"),
+    ("containsEntry", "doesNotContainEntry"),
+    ("startsWith", "doesNotStartWith"),
+    ("endsWith", "doesNotEndWith"),
+    ("matches", "doesNotMatch"),
+    ("isInstanceOf", "isNotInstanceOf"),
+    ("isSameAs", "isNotSameAs"),
+    ("isIn", "isNotIn"),
+];
+
+/// Java: the polarity of an `assertThat(..)` chain method with a negated twin.
+fn java_chain_polarity(operator: &str) -> Option<(&'static str, bool)> {
+    JAVA_CHAIN_TWINS.iter().find_map(|(m, twin)| {
+        if *m == operator {
+            Some((*m, false))
+        } else if *twin == operator {
+            Some((*m, true))
+        } else {
+            None
+        }
+    })
+}
+
+fn java_literal(n: Node, src: &str) -> bool {
+    let num = |n: Node| {
+        matches!(
+            n.kind(),
+            "decimal_integer_literal"
+                | "hex_integer_literal"
+                | "octal_integer_literal"
+                | "binary_integer_literal"
+                | "decimal_floating_point_literal"
+                | "hex_floating_point_literal"
+        )
+    };
+    match n.kind() {
+        "string_literal" | "character_literal" | "null_literal" | "true" | "false" => true,
+        "unary_expression" => {
+            n.child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "-")
+                && n.child_by_field_name("operand").is_some_and(num)
+        }
+        _ => num(n),
+    }
+}
+
+/// Java: each comparison that is a whole operand of a condition, through `&&`, `||` and
+/// parentheses. One inside a call's arguments or after `!` is not read.
+fn java_operands(
+    records: &mut Records<Comparison>,
+    stmt: Node,
+    cond: Node,
+    src: &str,
+    fails_when_true: bool,
+) {
+    let cond = unparenthesized(cond);
+    if cond.kind() != "binary_expression" {
+        return;
+    }
+    let (Some(l), Some(op), Some(r)) = (
+        cond.child_by_field_name("left").map(unparenthesized),
+        cond.child_by_field_name("operator"),
+        cond.child_by_field_name("right").map(unparenthesized),
+    ) else {
+        return;
+    };
+    match text(op, src) {
+        "&&" | "||" => {
+            java_operands(records, stmt, l, src, fails_when_true);
+            java_operands(records, stmt, r, src, fails_when_true);
+        }
+        o if JAVA_OPERATORS.contains(&o) => {
+            record(
+                records,
+                stmt,
+                (l, op, r),
+                &|n| java_literal(n, src),
+                src,
+                fails_when_true,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn java_args(call: Node) -> Vec<Node> {
+    call.child_by_field_name("arguments")
+        .map(|a| {
+            let mut c = a.walk();
+            a.named_children(&mut c)
+                .filter(|n| !n.is_extra())
+                .map(unparenthesized)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Java: the `assert` statement: the polarity of a condition that is one value
+/// (`assert x;` / `assert !x;`) and its comparisons ([`java_operands`]).
+fn java_assert(records: &mut Records<Comparison>, stmt: Node, src: &str) {
+    let Some(cond) = stmt.named_child(0) else {
+        return;
+    };
+    let bare = unparenthesized(cond);
+    let not = |n: Node| {
+        n.kind() == "unary_expression"
+            && n.child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "!")
+    };
+    let (negated, checked) = if not(bare) {
+        match bare.child_by_field_name("operand").map(unparenthesized) {
+            Some(a) => (true, a),
+            None => return,
+        }
+    } else {
+        (false, bare)
+    };
+    let joined = matches!(
+        checked.kind(),
+        "binary_expression" | "ternary_expression" | "instanceof_expression"
+    ) && !negated;
+    if !not(checked) && !joined {
+        let rest = src.get(cond.end_byte()..stmt.end_byte()).unwrap_or("");
+        count(rest.len() + checked.end_byte().saturating_sub(checked.start_byte()));
+        let written = format!("assert @ {} {rest}", text(checked, src));
+        records.add(Comparison {
+            line: stmt.start_position().row + 1,
+            skeleton: written.split_whitespace().collect::<Vec<_>>().join(" "),
+            operator: (if negated {
+                JAVA_ASSERT_NOT
+            } else {
+                JAVA_ASSERT
+            })
+            .to_string(),
+            literal: None,
+            fails_when_true: false,
+        });
+    }
+    if !negated {
+        java_operands(records, stmt, cond, src, false);
+    }
+}
+
+/// Java: a JUnit / TestNG assertion call, unqualified or on `Assertions`, `Assert` or
+/// `AssertJUnit`: the method of [`JAVA_POLAR`] and [`JAVA_EQUALITY`] masked, the literal
+/// of an equality masked, and the comparisons of an `assertTrue` / `assertFalse`
+/// condition, which `assertFalse` reads as a failure condition. A JUnit 4 message comes
+/// first (`assertTrue("m", ok)`), a JUnit 5 or TestNG one last.
+fn java_junit(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let Some(name) = call.child_by_field_name("name") else {
+        return false;
+    };
+    let method = text(name, src);
+    let polar = JAVA_POLAR.contains(&method);
+    let equality = JAVA_EQUALITY.contains(&method);
+    if !polar && !equality {
+        return false;
+    }
+    if let Some(o) = call.child_by_field_name("object") {
+        let owner = text(o, src);
+        let owner = owner.rsplit('.').next().unwrap_or(owner);
+        if !matches!(owner, "Assertions" | "Assert" | "AssertJUnit") {
+            return false;
+        }
+    }
+    let args = java_args(call);
+    // A JUnit 4 message is a string literal before the operands: `assertTrue("m", ok)`,
+    // `assertEquals("m", 3, n)`; `assertEquals("a", s, "m")` compares the first.
+    let message_first = args.first().is_some_and(|a| a.kind() == "string_literal")
+        && if equality {
+            args.len() >= 3 && args.last().is_some_and(|l| l.kind() != "string_literal")
+        } else {
+            args.len() >= 2
+        };
+    let operands = if message_first { &args[1..] } else { &args[..] };
+    let mut holes = vec![(name, '@')];
+    let literal = if equality {
+        operands
+            .iter()
+            .take(2)
+            .rev()
+            .copied()
+            .find(|a| java_literal(*a, src))
+    } else {
+        None
+    };
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: method.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    if matches!(method, "assertTrue" | "assertFalse") {
+        if let Some(cond) = operands.first() {
+            java_operands(records, stmt, *cond, src, method == "assertFalse");
+        }
+    }
+    true
+}
+
+/// Java: each method of an AssertJ / Truth `assertThat(..)` (or `then(..)`) chain that
+/// is in [`JAVA_CHAIN_COMPARISON`] or [`JAVA_CHAIN_TWINS`], its name masked and, for a
+/// comparison, its literal argument.
+fn java_chain(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let mut links = Vec::new();
+    let mut cur = call;
+    loop {
+        match cur.child_by_field_name("object") {
+            Some(o) if o.kind() == "method_invocation" => {
+                links.push(cur);
+                cur = o;
+            }
+            _ => break,
+        }
+    }
+    let root = cur.child_by_field_name("name").map_or("", |n| text(n, src));
+    // A Mockito `then(mock).should()..` verifies a call, it asserts no value.
+    let verifies = links.iter().any(|l| {
+        l.child_by_field_name("name")
+            .is_some_and(|n| text(n, src) == "should")
+    });
+    if links.is_empty() || !matches!(root, "assertThat" | "then") || verifies {
+        return false;
+    }
+    for link in links.into_iter().rev() {
+        let Some(name) = link.child_by_field_name("name") else {
+            continue;
+        };
+        let method = text(name, src);
+        let compared = JAVA_CHAIN_COMPARISON.contains(&method);
+        if !compared && java_chain_polarity(method).is_none() {
+            continue;
+        }
+        let literal = java_args(link)
+            .first()
+            .copied()
+            .filter(|a| compared && java_literal(*a, src));
+        let mut holes = vec![(name, '@')];
+        holes.extend(literal.map(|l| (l, '#')));
+        records.add(Comparison {
+            line: name.start_position().row + 1,
+            skeleton: skeleton(stmt, &mut holes, src),
+            operator: method.to_string(),
+            literal: literal.map(|l| text(l, src).to_string()),
+            fails_when_true: false,
+        });
+    }
+    true
+}
+
+/// Java: comparisons and polarity in `assert` statements ([`java_assert`]), JUnit /
+/// TestNG assertion calls ([`java_junit`]) and AssertJ / Truth `assertThat(..)` chains
+/// ([`java_chain`]), each read from a statement that is the call.
+pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| match node.kind() {
+        "assert_statement" => {
+            java_assert(records, node, src);
+            false
+        }
+        "expression_statement" => {
+            let Some(call) = node
+                .named_child(0)
+                .filter(|c| c.kind() == "method_invocation")
+            else {
+                return true;
+            };
+            !(java_junit(records, node, call, src) || java_chain(records, node, call, src))
+        }
+        _ => true,
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
@@ -880,6 +1212,12 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         | "assert.notStrictEqual"
         | "assert.notDeepEqual"
         | "assert.notDeepStrictEqual" => ("!=", "=="),
+        "assertEquals" | "isEqualTo" => ("==", "!="),
+        "assertNotEquals" | "isNotEqualTo" => ("!=", "=="),
+        "isGreaterThan" => (">", "<="),
+        "isGreaterThanOrEqualTo" => (">=", "<"),
+        "isLessThan" => ("<", ">="),
+        "isLessThanOrEqualTo" => ("<=", ">"),
         _ => return None,
     };
     Some(if fails_when_true != not { negated } else { op })
@@ -974,7 +1312,13 @@ pub fn weakened(base: &[Comparison], head: &[Comparison]) -> Vec<Weakened> {
             continue;
         };
         let b = &base[at];
-        if let (Some((bf, bn)), Some((hf, hn))) = (polarity(&b.operator), polarity(&h.operator)) {
+        // A polarity is judged against the same literal; a Java `assertEquals(0, n)` ->
+        // `assertNotEquals(1, n)` is the comparison `== 0` -> `!= 1` below.
+        if let (Some((bf, bn)), Some((hf, hn)), true) = (
+            polarity(&b.operator),
+            polarity(&h.operator),
+            b.literal == h.literal,
+        ) {
             if bf == hf && bn != hn {
                 out.push(Weakened {
                     line: h.line,
@@ -1531,6 +1875,274 @@ mod tests {
             ),
         ] {
             assert_eq!(js_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn java(check: &str) -> Vec<Comparison> {
+        let src = format!(
+            "import static org.junit.jupiter.api.Assertions.*;\nimport org.junit.jupiter.api.Test;\n\nclass XTest {{\n    @Test\n    void x() {{\n        int[] rows = {{1}};\n        {check}\n    }}\n}}\n"
+        );
+        comparisons(
+            &crate::ast::java::JavaPack,
+            "src/test/java/XTest.java",
+            &src,
+        )
+    }
+
+    fn java_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&java(a), &java(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn java_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        java(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    fn read(op: &str, lit: Option<&str>, skeleton: &str) -> (String, Option<String>, String) {
+        (
+            op.to_string(),
+            lit.map(str::to_string),
+            skeleton.to_string(),
+        )
+    }
+
+    #[test]
+    fn java_records_junit_assertj_and_assert_comparisons_with_literals_masked() {
+        let got = java("assertThat(f(rows)).isGreaterThan(6);");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].line, 8);
+        assert_eq!(
+            java_read("assertThat(f(rows)).isGreaterThan(6);"),
+            vec![read(
+                "isGreaterThan",
+                Some("6"),
+                "assertThat(f(rows)).@(#);"
+            )]
+        );
+        // Each method of a chain is read, its own name and literal masked.
+        assert_eq!(
+            java_read("assertThat(f(rows)).as(\"n\").isGreaterThan(-1).isLessThan(9);"),
+            vec![
+                read(
+                    "isGreaterThan",
+                    Some("-1"),
+                    "assertThat(f(rows)).as(\"n\").@(#).isLessThan(9);"
+                ),
+                read(
+                    "isLessThan",
+                    Some("9"),
+                    "assertThat(f(rows)).as(\"n\").isGreaterThan(-1).@(#);"
+                ),
+            ]
+        );
+        assert_eq!(
+            java_read("assertTrue(f(rows) > 6 && rows.length < 2, \"m\");"),
+            vec![
+                read(
+                    "assertTrue",
+                    None,
+                    "@(f(rows) > 6 && rows.length < 2, \"m\");"
+                ),
+                read(
+                    ">",
+                    Some("6"),
+                    "assertTrue(f(rows) @ # && rows.length < 2, \"m\");"
+                ),
+                read(
+                    "<",
+                    Some("2"),
+                    "assertTrue(f(rows) > 6 && rows.length @ #, \"m\");"
+                ),
+            ]
+        );
+        assert_eq!(
+            java_read("Assertions.assertEquals(3, f(rows));"),
+            vec![read("assertEquals", Some("3"), "Assertions.@(#, f(rows));")]
+        );
+        // A JUnit 4 message comes first and is not the literal compared.
+        assert_eq!(
+            java_read("assertEquals(\"m\", 3, f(rows));"),
+            vec![read("assertEquals", Some("3"), "@(\"m\", #, f(rows));")]
+        );
+        assert_eq!(
+            java_read("assertEquals(\"m\", want, f(rows));"),
+            vec![read("assertEquals", None, "@(\"m\", want, f(rows));")]
+        );
+        assert_eq!(
+            java_read("assertTrue(\"m\", f(rows) > 6);"),
+            vec![
+                read("assertTrue", None, "@(\"m\", f(rows) > 6);"),
+                read(">", Some("6"), "assertTrue(\"m\", f(rows) @ #);"),
+            ]
+        );
+        assert_eq!(
+            java_read("assertEquals(\"a\", s(rows), \"m\");"),
+            vec![read("assertEquals", Some("\"a\""), "@(#, s(rows), \"m\");")]
+        );
+        assert_eq!(
+            java_read("assert f(rows) >= 0 : \"m\";"),
+            vec![read(">=", Some("0"), "assert f(rows) @ # : \"m\";")]
+        );
+        // A condition that is one value carries the statement's polarity.
+        assert_eq!(
+            java_read("assert ok(rows) : \"m\";"),
+            vec![read(JAVA_ASSERT, None, "assert @ ok(rows) : \"m\";")]
+        );
+        // A method outside the closed lists, Hamcrest, a comparison inside a call's
+        // arguments, a call on another receiver and a Mockito `then(..).should()` are
+        // not read.
+        for check in [
+            "assertThat(f(rows)).satisfies(ok);",
+            "assertThat(f(rows), greaterThan(6));",
+            "System.out.println(f(rows) > 6);",
+            "other.assertTrue(f(rows) > 6);",
+            "then(rows).should().contains(1);",
+        ] {
+            assert_eq!(java(check), vec![], "{check}");
+        }
+        assert_eq!(
+            java_read("assertTrue(check(f(rows) > 6));"),
+            vec![read("assertTrue", None, "@(check(f(rows) > 6));")]
+        );
+    }
+
+    #[test]
+    fn java_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "assertThat(f(rows)).isGreaterThan(6);",
+                "assertThat(f(rows)).isGreaterThanOrEqualTo(6);",
+                "isGreaterThan",
+                "isGreaterThanOrEqualTo",
+            ),
+            (
+                "assertThat(f(rows)).isEqualTo(0);",
+                "assertThat(f(rows)).isNotEqualTo(1);",
+                "isEqualTo",
+                "isNotEqualTo",
+            ),
+            (
+                "assertThat(f(rows)).isLessThan(7);",
+                "assertThat(f(rows)).isLessThanOrEqualTo(7);",
+                "isLessThan",
+                "isLessThanOrEqualTo",
+            ),
+            (
+                "assertEquals(0, f(rows));",
+                "assertNotEquals(1, f(rows));",
+                "assertEquals",
+                "assertNotEquals",
+            ),
+            (
+                "assertTrue(f(rows) > 6);",
+                "assertTrue(f(rows) >= 6);",
+                ">",
+                ">=",
+            ),
+            // `assertFalse` reads its condition as a failure condition: failing on
+            // `<= 6` became failing on `< 6`, so 6 now passes.
+            (
+                "assertFalse(f(rows) <= 6);",
+                "assertFalse(f(rows) < 6);",
+                "<=",
+                "<",
+            ),
+            ("assert f(rows) == 3;", "assert f(rows) != 4;", "==", "!="),
+        ] {
+            assert_eq!(
+                java_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Tightened, kept, integers that accept the same values, a failure condition
+        // tightened, and `!=` back to `==`.
+        for (a, b) in [
+            (
+                "assertThat(f(rows)).isGreaterThanOrEqualTo(6);",
+                "assertThat(f(rows)).isGreaterThan(6);",
+            ),
+            ("assertEquals(6, f(rows));", "assertEquals(6, f(rows));"),
+            (
+                "assertThat(f(rows)).isGreaterThan(5);",
+                "assertThat(f(rows)).isGreaterThanOrEqualTo(6);",
+            ),
+            ("assertFalse(f(rows) < 6);", "assertFalse(f(rows) <= 6);"),
+            (
+                "assertThat(f(rows)).isNotEqualTo(1);",
+                "assertThat(f(rows)).isEqualTo(0);",
+            ),
+        ] {
+            assert_eq!(java_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn java_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            (
+                "assertTrue(f(rows));",
+                "assertFalse(f(rows));",
+                "assertTrue",
+                "assertFalse",
+            ),
+            (
+                "assertNull(\"m\", f(rows));",
+                "assertNotNull(\"m\", f(rows));",
+                "assertNull",
+                "assertNotNull",
+            ),
+            (
+                "assertEquals(3, f(rows));",
+                "assertNotEquals(3, f(rows));",
+                "assertEquals",
+                "assertNotEquals",
+            ),
+            (
+                "assertThat(rows).contains(1);",
+                "assertThat(rows).doesNotContain(1);",
+                "contains",
+                "doesNotContain",
+            ),
+            (
+                "assertThat(f(rows)).isFalse();",
+                "assertThat(f(rows)).isTrue();",
+                "isFalse",
+                "isTrue",
+            ),
+            (
+                "assert f(rows) : \"m\";",
+                "assert !f(rows) : \"m\";",
+                JAVA_ASSERT,
+                JAVA_ASSERT_NOT,
+            ),
+        ] {
+            assert_eq!(
+                java_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // `!a && b` does not negate `a && b`; a checked value that changed is not
+        // paired; two methods of different families are not twins.
+        for (a, b) in [
+            ("assert a && b;", "assert !a && b;"),
+            (
+                "assertThat(rows).contains(1);",
+                "assertThat(rows).doesNotContain(2);",
+            ),
+            ("assertTrue(f(rows));", "assertFalse(g(rows));"),
+            (
+                "assertThat(f(rows)).isTrue();",
+                "assertThat(f(rows)).isNotNull();",
+            ),
+        ] {
+            assert_eq!(java_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }

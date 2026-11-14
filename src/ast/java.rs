@@ -73,6 +73,7 @@ impl LanguagePack for JavaPack {
             super::caught_assertions::java(root, &anc, src, helpers, vocab)
         });
         super::expected_exceptions::java(root, &anc, src, &mut extractor.facts.tests);
+        super::comparisons::java(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
