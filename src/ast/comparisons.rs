@@ -12,8 +12,8 @@
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
 //! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
-//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP, Kotlin and Ruby assertions
-//! (#1070).
+//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP, Kotlin, Ruby and Swift
+//! assertions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -54,6 +54,10 @@
 //! `refute_equal` as `==` / `!=`, `assert_operator` as its symbol) and the comparisons of
 //! an `assert` / `refute` condition, and RSpec expectations by their runner and matcher
 //! (`to eq`, `not_to be >`, `to be_truthy`).
+//! Swift reads XCTest assertions the same way: an equality or ordering
+//! (`XCTAssertEqual`, `XCTAssertGreaterThan`) as its operator, an assertion with a
+//! negated twin as a polarity, and the comparisons of an `XCTAssert` / `XCTAssertTrue` /
+//! `XCTAssertFalse` or Swift Testing `#expect` / `#require` condition.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -210,6 +214,7 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
                 .or_else(|| php_polarity(operator))
                 .or_else(|| kotest_polarity(operator))
                 .or_else(|| rb_polarity(operator))
+                .or_else(|| xct_check(operator).and_then(|c| c.polar))
         }
     })
 }
@@ -2787,6 +2792,227 @@ pub fn ruby(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+/// Swift and Objective-C: what an XCTest assertion checks, as [`c_check`] says for C: the
+/// operator its operands must satisfy, its polarity family, and whether its first
+/// argument is a condition. A name outside these lists is not read.
+fn xct_check(name: &str) -> Option<CCheck> {
+    let compare = |op| CCheck {
+        compare: Some(op),
+        ..NO_CHECK
+    };
+    let polar = |family, not| CCheck {
+        polar: Some((family, not)),
+        ..NO_CHECK
+    };
+    let condition = |family, not| CCheck {
+        polar: Some((family, not)),
+        condition: Some(not),
+        ..NO_CHECK
+    };
+    let equality = |family, not| CCheck {
+        compare: Some(if not { "!=" } else { "==" }),
+        polar: Some((family, not)),
+        ..NO_CHECK
+    };
+    Some(match name.strip_prefix("XCTAssert")? {
+        "" | "True" => condition("xct-true", false),
+        "False" => condition("xct-true", true),
+        "Equal" => equality("xct-equal", false),
+        "NotEqual" => equality("xct-equal", true),
+        "Identical" => polar("xct-identical", false),
+        "NotIdentical" => polar("xct-identical", true),
+        "Nil" => polar("xct-nil", false),
+        "NotNil" => polar("xct-nil", true),
+        "ThrowsError" => polar("xct-throws", false),
+        "NoThrow" => polar("xct-throws", true),
+        "GreaterThan" => compare(">"),
+        "GreaterThanOrEqual" => compare(">="),
+        "LessThan" => compare("<"),
+        "LessThanOrEqual" => compare("<="),
+        _ => return None,
+    })
+}
+
+/// Swift comparison operators in a condition; `===` / `!==` are identity.
+const SW_OPERATORS: &[&str] = &["==", "!=", "===", "!==", "<", "<=", ">", ">="];
+
+fn sw_literal(n: Node, src: &str) -> bool {
+    let num = |n: Node| matches!(n.kind(), "integer_literal" | "real_literal");
+    match n.kind() {
+        "boolean_literal" | "nil_literal" => true,
+        // A string without interpolation.
+        "line_string_literal" => {
+            let mut c = n.walk();
+            let plain = n
+                .named_children(&mut c)
+                .all(|k| matches!(k.kind(), "line_str_text" | "str_escaped_char"));
+            plain
+        }
+        "prefix_expression" => {
+            n.child_by_field_name("operation")
+                .is_some_and(|o| text(o, src) == "-")
+                && n.child_by_field_name("target").is_some_and(num)
+        }
+        _ => num(n),
+    }
+}
+
+/// A Swift expression without its parentheses: a one-element tuple.
+fn sw_bare(mut n: Node) -> Node {
+    while n.kind() == "tuple_expression" && n.named_child_count() == 1 {
+        match n.named_child(0) {
+            Some(inner) => n = inner,
+            None => break,
+        }
+    }
+    n
+}
+
+/// The value of each argument of a Swift call or macro.
+fn sw_args(call: Node) -> Vec<Node> {
+    let mut c = call.walk();
+    let Some(list) = call
+        .named_children(&mut c)
+        .find(|n| n.kind() == "call_suffix")
+        .and_then(|s| {
+            let mut sc = s.walk();
+            let list = s
+                .named_children(&mut sc)
+                .find(|n| n.kind() == "value_arguments");
+            list
+        })
+    else {
+        return Vec::new();
+    };
+    let mut lc = list.walk();
+    list.named_children(&mut lc)
+        .filter(|a| a.kind() == "value_argument")
+        .filter_map(|a| a.child_by_field_name("value").map(sw_bare))
+        .collect()
+}
+
+/// Swift: each comparison that is a whole operand of a condition, through `&&`, `||` and
+/// parentheses. The grammar reads `a > 1 && b < 2` as `a > (1 && b < 2)`, so a comparison
+/// with a joined operand is not read; neither is one inside a call's arguments or after
+/// `!`.
+fn sw_operands(records: &mut Records<Comparison>, stmt: Node, cond: Node, src: &str, fails: bool) {
+    let cond = sw_bare(cond);
+    let (Some(l), Some(op), Some(r)) = (
+        cond.child_by_field_name("lhs").map(sw_bare),
+        cond.child_by_field_name("op"),
+        cond.child_by_field_name("rhs").map(sw_bare),
+    ) else {
+        return;
+    };
+    match cond.kind() {
+        "conjunction_expression" | "disjunction_expression" => {
+            sw_operands(records, stmt, l, src, fails);
+            sw_operands(records, stmt, r, src, fails);
+        }
+        "comparison_expression" | "equality_expression" | "infix_expression"
+            if SW_OPERATORS.contains(&text(op, src)) =>
+        {
+            let joined = |n: Node| {
+                matches!(
+                    n.kind(),
+                    "conjunction_expression"
+                        | "disjunction_expression"
+                        | "comparison_expression"
+                        | "equality_expression"
+                        | "infix_expression"
+                )
+            };
+            if !joined(l) && !joined(r) {
+                record(
+                    records,
+                    stmt,
+                    (l, op, r),
+                    &|n| sw_literal(n, src),
+                    src,
+                    fails,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Swift: an XCTest assertion ([`xct_check`]): its name masked, the literal of an
+/// equality (either argument) or an ordering (the second) masked, and the comparisons of
+/// its condition ([`sw_operands`]).
+fn sw_xctest(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let Some(name) = call
+        .named_child(0)
+        .filter(|n| n.kind() == "simple_identifier")
+    else {
+        return false;
+    };
+    let method = text(name, src);
+    let Some(check) = xct_check(method) else {
+        return false;
+    };
+    let args = sw_args(call);
+    let literal = match (check.compare, check.polar) {
+        (Some(_), Some(_)) => args.iter().take(2).copied().find(|a| sw_literal(*a, src)),
+        (Some(_), None) => args.get(1).copied().filter(|a| sw_literal(*a, src)),
+        _ => None,
+    };
+    let mut holes = vec![(name, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: method.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    if let (Some(fails), Some(cond)) = (check.condition, args.first()) {
+        sw_operands(records, stmt, *cond, src, fails);
+    }
+    true
+}
+
+/// Swift: comparisons and polarity in XCTest assertions ([`sw_xctest`]) and the
+/// comparisons of a Swift Testing `#expect(..)` / `#require(..)` condition, each read
+/// from a statement that is the call (after `try` or not).
+pub fn swift(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if node.kind() != "statements" {
+            return true;
+        }
+        let mut cursor = node.walk();
+        let statements: Vec<Node> = node.named_children(&mut cursor).collect();
+        for stmt in statements {
+            let mut expr = stmt;
+            while expr.kind() == "try_expression" || expr.kind() == "await_expression" {
+                match expr.child_by_field_name("expr") {
+                    Some(e) => expr = e,
+                    None => break,
+                }
+            }
+            match expr.kind() {
+                "call_expression" => {
+                    sw_xctest(records, stmt, expr, src);
+                }
+                "macro_invocation" => {
+                    let is_expectation = expr
+                        .named_child(0)
+                        .is_some_and(|n| matches!(text(n, src), "expect" | "require"));
+                    if let Some(cond) = sw_args(expr).first().filter(|_| is_expectation) {
+                        sw_operands(records, stmt, *cond, src, false);
+                    }
+                }
+                _ => {}
+            }
+        }
+        true
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
@@ -2844,7 +3070,10 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         "GreaterOrEqual" | "BeGreaterThanOrEqualTo" | "BeGreaterOrEqualTo" => (">=", "<"),
         "Less" | "BeLessThan" => ("<", ">="),
         "LessOrEqual" | "BeLessThanOrEqualTo" | "BeLessOrEqualTo" => ("<=", ">"),
-        _ => match c_check(operator).and_then(|c| c.compare) {
+        _ => match c_check(operator)
+            .or_else(|| xct_check(operator))
+            .and_then(|c| c.compare)
+        {
             Some(op) => return passing(op, fails_when_true != not),
             None => {
                 return cs_constraint_passing(operator, fails_when_true != not)
@@ -5324,6 +5553,271 @@ mod tests {
             ),
         ] {
             assert_eq!(rb_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn sw(check: &str) -> Vec<Comparison> {
+        let src = if check.contains('#') {
+            format!("import Testing\n\n@Test func counts() throws {{\n    let rows = [1]\n    {check}\n}}\n")
+        } else {
+            format!(
+                "import XCTest\n\nfinal class RowsTests: XCTestCase {{\n    func testCounts() throws {{\n        let rows = [1]\n        {check}\n    }}\n}}\n"
+            )
+        };
+        comparisons(&crate::ast::swift::SwiftPack, "Tests/RowsTests.swift", &src)
+    }
+
+    fn sw_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&sw(a), &sw(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn sw_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        sw(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    #[test]
+    fn swift_records_xctest_and_swift_testing_comparisons_with_literals_masked() {
+        assert_eq!(
+            sw_read("XCTAssertGreaterThan(f(rows), 6, \"seven rows\")"),
+            vec![read(
+                "XCTAssertGreaterThan",
+                Some("6"),
+                "@(f(rows), #, \"seven rows\")"
+            )]
+        );
+        assert_eq!(
+            sw_read("XCTAssertEqual(3, f(rows))"),
+            vec![read("XCTAssertEqual", Some("3"), "@(#, f(rows))")]
+        );
+        assert_eq!(
+            sw_read("XCTAssertNotEqual(f(rows), -1.5)"),
+            vec![read("XCTAssertNotEqual", Some("-1.5"), "@(f(rows), #)")]
+        );
+        assert_eq!(
+            sw_read("XCTAssertTrue(f(rows) > 6)"),
+            vec![
+                read("XCTAssertTrue", None, "@(f(rows) > 6)"),
+                read(">", Some("6"), "XCTAssertTrue(f(rows) @ #)"),
+            ]
+        );
+        assert_eq!(
+            sw_read("XCTAssertFalse((f(rows) == nil) || ok)"),
+            vec![
+                read("XCTAssertFalse", None, "@((f(rows) == nil) || ok)"),
+                read("==", Some("nil"), "XCTAssertFalse((f(rows) @ #) || ok)"),
+            ]
+        );
+        assert_eq!(
+            sw_read("try XCTAssert(f(rows) >= \"a\")"),
+            vec![
+                read("XCTAssert", None, "try @(f(rows) >= \"a\")"),
+                read(">=", Some("\"a\""), "try XCTAssert(f(rows) @ #)"),
+            ]
+        );
+        assert_eq!(
+            sw_read("#expect(f(rows) <= 6)"),
+            vec![read("<=", Some("6"), "#expect(f(rows) @ #)")]
+        );
+        assert_eq!(
+            sw_read("try #require(f(rows) != nil)"),
+            vec![read("!=", Some("nil"), "try #require(f(rows) @ #)")]
+        );
+        assert_eq!(
+            sw_read("XCTAssertNil(f(rows))"),
+            vec![read("XCTAssertNil", None, "@(f(rows))")]
+        );
+        // Not read: a call outside the lists, an ordering whose second argument is not a
+        // literal, a comparison the grammar joins with `&&`, inside a call's arguments or
+        // after `!`, a macro other than `#expect` / `#require`.
+        for check in [
+            "XCTAssertEqualish(f(rows), 6)",
+            "XCTUnwrap(f(rows))",
+            "#warning(f(rows) > 6)",
+        ] {
+            assert_eq!(sw_read(check), vec![], "{check}");
+        }
+        assert_eq!(
+            sw_read("XCTAssertLessThan(6, f(rows))"),
+            vec![read("XCTAssertLessThan", None, "@(6, f(rows))")]
+        );
+        for check in [
+            "XCTAssertTrue(f(rows) > 6 && g(rows) <= -1)",
+            "XCTAssertTrue(g(f(rows) > 6))",
+            "XCTAssertTrue(!(f(rows) > 6))",
+        ] {
+            assert_eq!(
+                sw_read(check).into_iter().map(|r| r.0).collect::<Vec<_>>(),
+                vec!["XCTAssertTrue".to_string()],
+                "{check}"
+            );
+        }
+        assert_eq!(
+            sw_read("XCTAssertTrue((f(rows) > 6) && (g(rows) < 2))"),
+            vec![
+                read("XCTAssertTrue", None, "@((f(rows) > 6) && (g(rows) < 2))"),
+                read(
+                    ">",
+                    Some("6"),
+                    "XCTAssertTrue((f(rows) @ #) && (g(rows) < 2))"
+                ),
+                read(
+                    "<",
+                    Some("2"),
+                    "XCTAssertTrue((f(rows) > 6) && (g(rows) @ #))"
+                ),
+            ]
+        );
+        assert_eq!(
+            sw_read("XCTAssertEqual(f(rows), \"a\\(x)\")"),
+            vec![read("XCTAssertEqual", None, "@(f(rows), \"a\\(x)\")")]
+        );
+    }
+
+    #[test]
+    fn swift_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "XCTAssertGreaterThan(f(rows), 6)",
+                "XCTAssertGreaterThanOrEqual(f(rows), 6)",
+                "XCTAssertGreaterThan",
+                "XCTAssertGreaterThanOrEqual",
+            ),
+            (
+                "XCTAssertLessThan(f(rows), 6)",
+                "XCTAssertLessThanOrEqual(f(rows), 7)",
+                "XCTAssertLessThan",
+                "XCTAssertLessThanOrEqual",
+            ),
+            (
+                "XCTAssertEqual(f(rows), 0)",
+                "XCTAssertNotEqual(f(rows), 1)",
+                "XCTAssertEqual",
+                "XCTAssertNotEqual",
+            ),
+            (
+                "XCTAssertTrue(f(rows) > 6)",
+                "XCTAssertTrue(f(rows) >= 6)",
+                ">",
+                ">=",
+            ),
+            (
+                "XCTAssert(f(rows) == 7)",
+                "XCTAssert(f(rows) != 8)",
+                "==",
+                "!=",
+            ),
+            // A failure condition that now fails less often.
+            (
+                "XCTAssertFalse(f(rows) <= 6)",
+                "XCTAssertFalse(f(rows) < 6)",
+                "<=",
+                "<",
+            ),
+            ("#expect(f(rows) > 6)", "#expect(f(rows) >= 6)", ">", ">="),
+            (
+                "try #require(f(rows) < 6)",
+                "try #require(f(rows) <= 6)",
+                "<",
+                "<=",
+            ),
+        ] {
+            assert_eq!(
+                sw_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Negative controls: tightened, kept, moved to an integer that accepts the same
+        // values, `!=` back to `==`, a failure condition tightened, a checked value that
+        // changed, a literal raised under the same operator.
+        for (a, b) in [
+            (
+                "XCTAssertGreaterThanOrEqual(f(rows), 6)",
+                "XCTAssertGreaterThan(f(rows), 6)",
+            ),
+            ("XCTAssertTrue(f(rows) > 6)", "XCTAssert(f(rows) > 6)"),
+            (
+                "XCTAssertGreaterThan(f(rows), 6)",
+                "XCTAssertGreaterThanOrEqual(f(rows), 7)",
+            ),
+            (
+                "XCTAssertNotEqual(f(rows), 1)",
+                "XCTAssertEqual(f(rows), 2)",
+            ),
+            (
+                "XCTAssertFalse(f(rows) < 6)",
+                "XCTAssertFalse(f(rows) <= 6)",
+            ),
+            (
+                "XCTAssertGreaterThan(f(rows), 6)",
+                "XCTAssertGreaterThanOrEqual(g(rows), 6)",
+            ),
+            ("#expect(f(rows) > 6)", "#expect(f(rows) > 7)"),
+        ] {
+            assert_eq!(sw_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn swift_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            (
+                "XCTAssertTrue(f(rows))",
+                "XCTAssertFalse(f(rows))",
+                "XCTAssertTrue",
+                "XCTAssertFalse",
+            ),
+            (
+                "XCTAssert(f(rows))",
+                "XCTAssertFalse(f(rows))",
+                "XCTAssert",
+                "XCTAssertFalse",
+            ),
+            (
+                "XCTAssertEqual(f(rows), 3)",
+                "XCTAssertNotEqual(f(rows), 3)",
+                "XCTAssertEqual",
+                "XCTAssertNotEqual",
+            ),
+            (
+                "XCTAssertNotNil(f(rows))",
+                "XCTAssertNil(f(rows))",
+                "XCTAssertNotNil",
+                "XCTAssertNil",
+            ),
+            (
+                "XCTAssertIdentical(f(rows), x)",
+                "XCTAssertNotIdentical(f(rows), x)",
+                "XCTAssertIdentical",
+                "XCTAssertNotIdentical",
+            ),
+            (
+                "XCTAssertThrowsError(try f(rows))",
+                "XCTAssertNoThrow(try f(rows))",
+                "XCTAssertThrowsError",
+                "XCTAssertNoThrow",
+            ),
+        ] {
+            assert_eq!(
+                sw_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // A checked value that changed is not paired; two assertions of different
+        // families are not twins; `XCTAssert` -> `XCTAssertTrue` keeps the polarity.
+        for (a, b) in [
+            ("XCTAssertTrue(f(rows))", "XCTAssertFalse(g(rows))"),
+            ("XCTAssertNil(f(rows))", "XCTAssertFalse(f(rows))"),
+            ("XCTAssert(f(rows))", "XCTAssertTrue(f(rows))"),
+        ] {
+            assert_eq!(sw_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }

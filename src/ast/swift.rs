@@ -168,6 +168,7 @@ impl LanguagePack for SwiftPack {
         extractor.resolve_same_file_helpers();
         SWIFT_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::swift(root, &anc, src, &mut extractor.facts.tests);
+        super::comparisons::swift(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
