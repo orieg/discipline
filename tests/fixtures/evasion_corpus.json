@@ -4057,6 +4057,78 @@
       },
       "gate": "assertion-reduction",
       "verdict": "clean"
+    },
+    {
+      "name": "kotlin-kotest-bound-widened",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsSpec.kt": "import io.kotest.core.spec.style.StringSpec\nimport io.kotest.matchers.shouldBe\n\nclass RowsSpec : StringSpec({\n    \"rows are counted\" {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        countRows(rows) shouldBeGreaterThan 6\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsSpec.kt": "import io.kotest.core.spec.style.StringSpec\nimport io.kotest.matchers.shouldBe\n\nclass RowsSpec : StringSpec({\n    \"rows are counted\" {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        countRows(rows) shouldBeGreaterThanOrEqual 6\n    }\n})\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "kotlin-test-assert-inverted",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertTrue(countRows(rows) == 7)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertFalse(countRows(rows) == 7)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "kotlin-test-condition-widened",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertTrue(countRows(rows) > 6)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertTrue(countRows(rows) >= 6)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "kotlin-assertj-bound-widened",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertThat(countRows(rows)).isGreaterThan(6)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertThat(countRows(rows)).isGreaterThanOrEqualTo(6)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "kotlin-kotest-bound-tightened",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsSpec.kt": "import io.kotest.core.spec.style.StringSpec\nimport io.kotest.matchers.shouldBe\n\nclass RowsSpec : StringSpec({\n    \"rows are counted\" {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        countRows(rows) shouldBeGreaterThanOrEqual 6\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsSpec.kt": "import io.kotest.core.spec.style.StringSpec\nimport io.kotest.matchers.shouldBe\n\nclass RowsSpec : StringSpec({\n    \"rows are counted\" {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        countRows(rows) shouldBeGreaterThan 6\n    }\n})\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }

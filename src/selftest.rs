@@ -4845,6 +4845,46 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-kotlin")]
+    (
+        "assertion-reduction: a Kotlin assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let kt = |check: &str| {
+                format!("class STest {{\n    @Test\n    fun t() {{\n        {check}\n    }}\n}}\n")
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("f(6) shouldBeGreaterThan 6", "f(6) shouldBeGreaterThanOrEqual 6"),
+                ("assertTrue(f(6))", "assertFalse(f(6))"),
+                ("assertTrue(f(6) > 6)", "assertTrue(f(6) >= 6)"),
+                ("assertEquals(0, f(0))", "assertNotEquals(1, f(0))"),
+                (
+                    "assertThat(f(6)).isGreaterThan(6)",
+                    "assertThat(f(6)).isGreaterThanOrEqualTo(6)",
+                ),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("src/test/kotlin/STest.kt", &kt(base), &kt(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: STest.t the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "src/test/kotlin/STest.kt",
+                    &kt("f(6) shouldBeGreaterThanOrEqual 6"),
+                    &kt("f(6) shouldBeGreaterThan 6"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

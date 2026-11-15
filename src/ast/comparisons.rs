@@ -12,7 +12,7 @@
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
 //! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
-//! matchers and `assert(..)` calls, and Java, C#, C/C++ and PHP assertions (#1070).
+//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP and Kotlin assertions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -45,6 +45,10 @@
 //! its operator (`->not` negating the matcher), a method or matcher with a negated twin
 //! as a polarity, and the comparisons of an `assertTrue` / `assertFalse` / `assert(..)`
 //! condition.
+//! Kotlin reads kotlin.test / JUnit assertions and AssertJ / Truth chains as Java does,
+//! and Kotest matchers, infix (`x shouldBe 6`) or called: a comparison matcher
+//! (`shouldBeGreaterThan`) as its operator and a matcher with a negated twin
+//! (`shouldContain` / `shouldNotContain`) as a polarity.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -199,6 +203,7 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
                 .or_else(|| cs_polarity(operator))
                 .or_else(|| c_check(operator).and_then(|c| c.polar))
                 .or_else(|| php_polarity(operator))
+                .or_else(|| kotest_polarity(operator))
         }
     })
 }
@@ -979,9 +984,9 @@ fn java_literal(n: Node, src: &str) -> bool {
     }
 }
 
-/// Java, C#, C/C++ and PHP: each comparison that is a whole operand of a condition,
-/// through `&&`, `||` (`and`, `or`) and parentheses. One inside a call's arguments or
-/// after `!` is not read.
+/// Java, C#, C/C++, PHP and Kotlin: each comparison that is a whole operand of a
+/// condition, through `&&`, `||` (`and`, `or`) and parentheses. One inside a call's
+/// arguments or after `!` is not read.
 fn c_operands(
     records: &mut Records<Comparison>,
     stmt: Node,
@@ -2150,6 +2155,317 @@ pub fn php(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+/// Kotest matchers read as a comparison, infix (`x shouldBe 6`) or called
+/// (`x.shouldBe(6)`): the literal they are given is masked.
+const KOTEST_COMPARISON: &[&str] = &[
+    "shouldBe",
+    "shouldNotBe",
+    "shouldBeGreaterThan",
+    "shouldBeGreaterThanOrEqual",
+    "shouldBeLessThan",
+    "shouldBeLessThanOrEqual",
+];
+
+/// Kotest matchers with a negated twin, as (matcher, twin): `shouldBe` -> `shouldNotBe`
+/// with the same literal kept is an inverted check. A matcher outside both lists is not
+/// read.
+const KOTEST_TWINS: &[(&str, &str)] = &[
+    ("shouldBe", "shouldNotBe"),
+    ("shouldBeTrue", "shouldBeFalse"),
+    ("shouldBeNull", "shouldNotBeNull"),
+    ("shouldBeEmpty", "shouldNotBeEmpty"),
+    ("shouldBeBlank", "shouldNotBeBlank"),
+    ("shouldBeZero", "shouldNotBeZero"),
+    ("shouldContain", "shouldNotContain"),
+    ("shouldContainAll", "shouldNotContainAll"),
+    ("shouldContainKey", "shouldNotContainKey"),
+    ("shouldContainValue", "shouldNotContainValue"),
+    ("shouldContainExactly", "shouldNotContainExactly"),
+    ("shouldStartWith", "shouldNotStartWith"),
+    ("shouldEndWith", "shouldNotEndWith"),
+    ("shouldMatch", "shouldNotMatch"),
+    ("shouldHaveSize", "shouldNotHaveSize"),
+    ("shouldHaveLength", "shouldNotHaveLength"),
+    ("shouldBeIn", "shouldNotBeIn"),
+    ("shouldBeSameInstanceAs", "shouldNotBeSameInstanceAs"),
+    ("shouldBeEqualIgnoringCase", "shouldNotBeEqualIgnoringCase"),
+];
+
+/// Kotlin: the polarity of a Kotest matcher of [`KOTEST_TWINS`].
+fn kotest_polarity(operator: &str) -> Option<(&'static str, bool)> {
+    KOTEST_TWINS.iter().find_map(|(m, twin)| {
+        if *m == operator {
+            Some((*m, false))
+        } else if *twin == operator {
+            Some((*m, true))
+        } else {
+            None
+        }
+    })
+}
+
+fn kt_literal(n: Node, src: &str) -> bool {
+    let num = |n: Node| matches!(n.kind(), "number_literal" | "float_literal");
+    match n.kind() {
+        "character_literal" | "boolean_literal" | "null_literal" => true,
+        "identifier" => matches!(text(n, src), "true" | "false" | "null"),
+        // A string without a template.
+        "string_literal" => {
+            let mut c = n.walk();
+            let plain = n
+                .named_children(&mut c)
+                .all(|k| matches!(k.kind(), "string_content" | "escape_sequence"))
+                && !text(n, src).contains('$');
+            plain
+        }
+        "unary_expression" => {
+            n.child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "-")
+                && n.child_by_field_name("argument").is_some_and(num)
+        }
+        _ => num(n),
+    }
+}
+
+/// The expressions of a Kotlin call's arguments, a named argument's value included.
+fn kt_args(call: Node) -> Vec<Node> {
+    let mut c = call.walk();
+    let Some(list) = call
+        .named_children(&mut c)
+        .find(|n| n.kind() == "value_arguments")
+    else {
+        return Vec::new();
+    };
+    let mut lc = list.walk();
+    list.named_children(&mut lc)
+        .filter(|a| a.kind() == "value_argument")
+        .filter_map(|a| {
+            let mut ac = a.walk();
+            let value = a
+                .named_children(&mut ac)
+                .filter(|n| !n.is_extra())
+                .last()
+                .map(unparenthesized);
+            value
+        })
+        .collect()
+}
+
+/// A Kotlin call's callee and the identifier it names: `assertTrue` of `assertTrue(..)`,
+/// (`x.shouldBe`, `shouldBe`) of `x.shouldBe(6)`.
+fn kt_callee(call: Node) -> Option<(Node, Node)> {
+    let callee = call.named_child(0)?;
+    let name = match callee.kind() {
+        "identifier" => callee,
+        "navigation_expression" => callee
+            .named_child(callee.named_child_count().checked_sub(1)?)
+            .filter(|n| n.kind() == "identifier")?,
+        _ => return None,
+    };
+    Some((callee, name))
+}
+
+/// Kotlin: a kotlin.test / JUnit assertion call, unqualified or on `Assertions`, `Assert`
+/// or `AssertJUnit`: the method of [`JAVA_POLAR`] and [`JAVA_EQUALITY`] masked, the
+/// literal of an equality masked, the comparisons of an `assertTrue` / `assertFalse`
+/// condition (`assertFalse` read as a failure condition), and the comparisons of an
+/// `assert(..)` condition.
+fn kt_junit(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let Some((callee, name)) = kt_callee(call) else {
+        return false;
+    };
+    let method = text(name, src);
+    if callee.kind() == "navigation_expression" {
+        let owner = callee.named_child(0).map_or("", |o| text(o, src));
+        let owner = owner.rsplit('.').next().unwrap_or(owner);
+        if !matches!(owner, "Assertions" | "Assert" | "AssertJUnit") {
+            return false;
+        }
+    }
+    let args = kt_args(call);
+    if method == "assert" && callee.kind() == "identifier" {
+        if let Some(cond) = args.first() {
+            c_operands(records, stmt, *cond, src, false, &|n| kt_literal(n, src));
+        }
+        return true;
+    }
+    let polar = JAVA_POLAR.contains(&method);
+    let equality = JAVA_EQUALITY.contains(&method);
+    if !polar && !equality {
+        return false;
+    }
+    // A JUnit 4 message is a string literal before the operands: `assertTrue("m", ok)`,
+    // `assertEquals("m", 3, n)`; `assertEquals("a", s, "m")` compares the first.
+    let message_first = args.first().is_some_and(|a| a.kind() == "string_literal")
+        && if equality {
+            args.len() >= 3 && args.last().is_some_and(|l| l.kind() != "string_literal")
+        } else {
+            args.len() >= 2
+        };
+    let operands = if message_first { &args[1..] } else { &args[..] };
+    let literal = if equality {
+        operands
+            .iter()
+            .take(2)
+            .copied()
+            .find(|a| kt_literal(*a, src))
+    } else {
+        None
+    };
+    let mut holes = vec![(name, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: method.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    if matches!(method, "assertTrue" | "assertFalse") {
+        if let Some(cond) = operands.first() {
+            c_operands(records, stmt, *cond, src, method == "assertFalse", &|n| {
+                kt_literal(n, src)
+            });
+        }
+    }
+    true
+}
+
+/// Kotlin: each method of an AssertJ / Truth `assertThat(..)` (or `then(..)`) chain that
+/// is in [`JAVA_CHAIN_COMPARISON`] or [`JAVA_CHAIN_TWINS`], its name masked and, for a
+/// comparison, its literal argument.
+fn kt_chain(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let mut links = Vec::new();
+    let mut cur = call;
+    let rooted = loop {
+        let Some((callee, name)) = kt_callee(cur) else {
+            break false;
+        };
+        if callee.kind() == "identifier" {
+            break matches!(text(name, src), "assertThat" | "then");
+        }
+        links.push((cur, name));
+        match callee.named_child(0) {
+            Some(r) if r.kind() == "call_expression" => cur = r,
+            _ => break false,
+        }
+    };
+    if !rooted || links.is_empty() {
+        return false;
+    }
+    for (link, name) in links.into_iter().rev() {
+        let method = text(name, src);
+        let compared = JAVA_CHAIN_COMPARISON.contains(&method);
+        if !compared && java_chain_polarity(method).is_none() {
+            continue;
+        }
+        let literal = kt_args(link)
+            .first()
+            .copied()
+            .filter(|a| compared && kt_literal(*a, src));
+        let mut holes = vec![(name, '@')];
+        holes.extend(literal.map(|l| (l, '#')));
+        records.add(Comparison {
+            line: name.start_position().row + 1,
+            skeleton: skeleton(stmt, &mut holes, src),
+            operator: method.to_string(),
+            literal: literal.map(|l| text(l, src).to_string()),
+            fails_when_true: false,
+        });
+    }
+    true
+}
+
+/// Kotlin: a Kotest matcher of [`KOTEST_COMPARISON`] or [`KOTEST_TWINS`], infix
+/// (`x shouldBe 6`) or called (`x.shouldBe(6)`): its name masked and, for a comparison,
+/// its literal argument.
+fn kt_kotest(records: &mut Records<Comparison>, stmt: Node, expr: Node, src: &str) -> bool {
+    let (name, arg) = match expr.kind() {
+        "infix_expression" => {
+            let mut c = expr.walk();
+            let kids: Vec<Node> = expr.named_children(&mut c).collect();
+            match kids.as_slice() {
+                [_, name, arg] if name.kind() == "identifier" => {
+                    (*name, Some(unparenthesized(*arg)))
+                }
+                _ => return false,
+            }
+        }
+        "call_expression" => match kt_callee(expr) {
+            Some((callee, name)) if callee.kind() == "navigation_expression" => {
+                (name, kt_args(expr).first().copied())
+            }
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let matcher = text(name, src);
+    let compared = KOTEST_COMPARISON.contains(&matcher);
+    if !compared && kotest_polarity(matcher).is_none() {
+        return false;
+    }
+    let literal = arg.filter(|a| compared && kt_literal(*a, src));
+    let mut holes = vec![(name, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: matcher.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    true
+}
+
+/// Kotlin: comparisons and polarity in kotlin.test / JUnit assertions ([`kt_junit`]),
+/// AssertJ / Truth `assertThat(..)` chains ([`kt_chain`]) and Kotest matchers
+/// ([`kt_kotest`]), each read from a statement that is the call or the infix expression.
+pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        // The statements of a body: a call or an infix expression that is a child of
+        // one, not an `if` condition.
+        if !matches!(
+            node.kind(),
+            "block"
+                | "lambda_literal"
+                | "statements"
+                | "if_expression"
+                | "control_structure_body"
+                | "function_body"
+        ) {
+            return true;
+        }
+        let condition = node.child_by_field_name("condition");
+        let mut cursor = node.walk();
+        let statements: Vec<Node> = node
+            .named_children(&mut cursor)
+            .filter(|c| matches!(c.kind(), "call_expression" | "infix_expression"))
+            .filter(|c| Some(*c) != condition)
+            .collect();
+        for stmt in statements {
+            // `assert(cond) { "message" }`: the call before the trailing lambda.
+            let mut call = stmt;
+            if let (Some(inner), Some(lambda)) = (stmt.named_child(0), stmt.named_child(1)) {
+                if inner.kind() == "call_expression" && lambda.kind() == "annotated_lambda" {
+                    call = inner;
+                }
+            }
+            if stmt.kind() == "infix_expression" {
+                kt_kotest(records, stmt, stmt, src);
+            } else {
+                let _ = kt_junit(records, stmt, call, src)
+                    || kt_kotest(records, stmt, call, src)
+                    || kt_chain(records, stmt, call, src);
+            }
+        }
+        true
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
@@ -2189,6 +2505,12 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         "assertGreaterThanOrEqual" => (">=", "<"),
         "assertLessThan" => ("<", ">="),
         "assertLessThanOrEqual" => ("<=", ">"),
+        "shouldBe" => ("==", "!="),
+        "shouldNotBe" => ("!=", "=="),
+        "shouldBeGreaterThan" => (">", "<="),
+        "shouldBeGreaterThanOrEqual" => (">=", "<"),
+        "shouldBeLessThan" => ("<", ">="),
+        "shouldBeLessThanOrEqual" => ("<=", ">"),
         "isGreaterThan" => (">", "<="),
         "isGreaterThanOrEqualTo" => (">=", "<"),
         "isLessThan" => ("<", ">="),
@@ -4113,6 +4435,303 @@ mod tests {
             ),
         ] {
             assert_eq!(php_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn kt(check: &str) -> Vec<Comparison> {
+        let src = if check.contains("should") {
+            format!(
+                "class RowsSpec : StringSpec({{\n    \"rows\" {{\n        val rows = listOf(1)\n        {check}\n    }}\n}})\n"
+            )
+        } else {
+            format!(
+                "class RowsTest {{\n    @Test\n    fun x() {{\n        val rows = listOf(1)\n        {check}\n    }}\n}}\n"
+            )
+        };
+        comparisons(
+            &crate::ast::kotlin::KotlinPack,
+            "src/test/kotlin/RowsTest.kt",
+            &src,
+        )
+    }
+
+    fn kt_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&kt(a), &kt(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn kt_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        kt(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    #[test]
+    fn kotlin_records_junit_assertj_kotest_comparisons_with_literals_masked() {
+        assert_eq!(
+            kt_read("assertEquals(3, f(rows), \"three rows\")"),
+            vec![read(
+                "assertEquals",
+                Some("3"),
+                "@(#, f(rows), \"three rows\")"
+            )]
+        );
+        assert_eq!(
+            kt_read("Assertions.assertNotEquals(f(rows), -1.5)"),
+            vec![read(
+                "assertNotEquals",
+                Some("-1.5"),
+                "Assertions.@(f(rows), #)"
+            )]
+        );
+        assert_eq!(
+            kt_read("assertTrue(f(rows) > 6 && g(rows) <= -1)"),
+            vec![
+                read("assertTrue", None, "@(f(rows) > 6 && g(rows) <= -1)"),
+                read(">", Some("6"), "assertTrue(f(rows) @ # && g(rows) <= -1)"),
+                read("<=", Some("-1"), "assertTrue(f(rows) > 6 && g(rows) @ #)"),
+            ]
+        );
+        assert_eq!(
+            kt_read("assertFalse(\"none\", (f(rows) == null) || ok)"),
+            vec![
+                read("assertFalse", None, "@(\"none\", (f(rows) == null) || ok)"),
+                read(
+                    "==",
+                    Some("null"),
+                    "assertFalse(\"none\", (f(rows) @ #) || ok)"
+                ),
+            ]
+        );
+        assert_eq!(
+            kt_read("assert(f(rows) >= 6) { \"m\" }"),
+            vec![read(">=", Some("6"), "assert(f(rows) @ #) { \"m\" }")]
+        );
+        assert_eq!(
+            kt_read("assertThat(f(rows)).isGreaterThan(6).isNotNull()"),
+            vec![
+                read(
+                    "isGreaterThan",
+                    Some("6"),
+                    "assertThat(f(rows)).@(#).isNotNull()"
+                ),
+                read(
+                    "isNotNull",
+                    None,
+                    "assertThat(f(rows)).isGreaterThan(6).@()"
+                ),
+            ]
+        );
+        assert_eq!(
+            kt_read("f(rows) shouldBe 6"),
+            vec![read("shouldBe", Some("6"), "f(rows) @ #")]
+        );
+        assert_eq!(
+            kt_read("f(rows).shouldBeLessThan(\"b\")"),
+            vec![read("shouldBeLessThan", Some("\"b\""), "f(rows).@(#)")]
+        );
+        assert_eq!(
+            kt_read("f(rows) shouldNotBe true"),
+            vec![read("shouldNotBe", Some("true"), "f(rows) @ #")]
+        );
+        assert_eq!(
+            kt_read("f(rows).shouldBeTrue()"),
+            vec![read("shouldBeTrue", None, "f(rows).@()")]
+        );
+        // Not read: a call outside the lists, a call on another object, a matcher
+        // outside the lists or through `should`, a template string as the literal, a
+        // comparison inside a call's arguments or after `!`, or used as a value.
+        for check in [
+            "assertContentEquals(listOf(6), f(rows))",
+            "other.assertTrue(f(rows) > 6)",
+            "f(rows) shouldBeOneOf listOf(6)",
+            "f(rows) should beGreaterThan(6)",
+            "check(f(rows) > 6)",
+            "val ok = assertTrue(f(rows) > 6)",
+        ] {
+            assert_eq!(kt_read(check), vec![], "{check}");
+        }
+        assert_eq!(
+            kt_read("f(rows) shouldBe \"$x\""),
+            vec![read("shouldBe", None, "f(rows) @ \"$x\"")]
+        );
+        assert_eq!(
+            kt_read("assertTrue(g(f(rows) > 6))"),
+            vec![read("assertTrue", None, "@(g(f(rows) > 6))")]
+        );
+        assert_eq!(
+            kt_read("assertTrue(!(f(rows) > 6))"),
+            vec![read("assertTrue", None, "@(!(f(rows) > 6))")]
+        );
+    }
+
+    #[test]
+    fn kotlin_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "f(rows) shouldBeGreaterThan 6",
+                "f(rows) shouldBeGreaterThanOrEqual 6",
+                "shouldBeGreaterThan",
+                "shouldBeGreaterThanOrEqual",
+            ),
+            (
+                "f(rows).shouldBeLessThan(6)",
+                "f(rows).shouldBeLessThanOrEqual(7)",
+                "shouldBeLessThan",
+                "shouldBeLessThanOrEqual",
+            ),
+            (
+                "f(rows) shouldBe 0",
+                "f(rows) shouldNotBe 1",
+                "shouldBe",
+                "shouldNotBe",
+            ),
+            (
+                "f(rows) shouldBe 0",
+                "f(rows) shouldBeGreaterThanOrEqual 0",
+                "shouldBe",
+                "shouldBeGreaterThanOrEqual",
+            ),
+            (
+                "assertEquals(0, f(rows))",
+                "assertNotEquals(1, f(rows))",
+                "assertEquals",
+                "assertNotEquals",
+            ),
+            (
+                "assertTrue(f(rows) > 6)",
+                "assertTrue(f(rows) >= 6)",
+                ">",
+                ">=",
+            ),
+            (
+                "assertTrue(f(rows) === 7)",
+                "assertTrue(f(rows) !== 8)",
+                "===",
+                "!==",
+            ),
+            // A failure condition that now fails less often.
+            (
+                "assertFalse(f(rows) <= 6)",
+                "assertFalse(f(rows) < 6)",
+                "<=",
+                "<",
+            ),
+            ("assert(f(rows) > 6)", "assert(f(rows) >= 6)", ">", ">="),
+            (
+                "assertThat(f(rows)).isGreaterThan(6)",
+                "assertThat(f(rows)).isGreaterThanOrEqualTo(6)",
+                "isGreaterThan",
+                "isGreaterThanOrEqualTo",
+            ),
+        ] {
+            assert_eq!(
+                kt_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Negative controls: tightened, kept (infix -> called), moved to an integer that
+        // accepts the same values, `!=` back to `==`, a failure condition tightened, a
+        // checked value that changed, a literal raised under the same operator.
+        for (a, b) in [
+            (
+                "f(rows) shouldBeGreaterThanOrEqual 6",
+                "f(rows) shouldBeGreaterThan 6",
+            ),
+            (
+                "f(rows) shouldBeGreaterThan 6",
+                "f(rows).shouldBeGreaterThan(6)",
+            ),
+            (
+                "f(rows) shouldBeGreaterThan 6",
+                "f(rows) shouldBeGreaterThanOrEqual 7",
+            ),
+            ("f(rows) shouldNotBe 1", "f(rows) shouldBe 2"),
+            ("assertFalse(f(rows) < 6)", "assertFalse(f(rows) <= 6)"),
+            (
+                "f(rows) shouldBeGreaterThan 6",
+                "g(rows) shouldBeGreaterThanOrEqual 6",
+            ),
+            (
+                "f(rows) shouldBeGreaterThan 6",
+                "f(rows) shouldBeGreaterThan 7",
+            ),
+        ] {
+            assert_eq!(kt_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn kotlin_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            (
+                "assertTrue(f(rows))",
+                "assertFalse(f(rows))",
+                "assertTrue",
+                "assertFalse",
+            ),
+            (
+                "assertEquals(3, f(rows))",
+                "assertNotEquals(3, f(rows))",
+                "assertEquals",
+                "assertNotEquals",
+            ),
+            (
+                "assertNotNull(f(rows))",
+                "assertNull(f(rows))",
+                "assertNotNull",
+                "assertNull",
+            ),
+            (
+                "f(rows) shouldBe 3",
+                "f(rows) shouldNotBe 3",
+                "shouldBe",
+                "shouldNotBe",
+            ),
+            (
+                "f(rows).shouldBeTrue()",
+                "f(rows).shouldBeFalse()",
+                "shouldBeTrue",
+                "shouldBeFalse",
+            ),
+            (
+                "f(rows) shouldContain 'a'",
+                "f(rows) shouldNotContain 'a'",
+                "shouldContain",
+                "shouldNotContain",
+            ),
+            (
+                "f(rows).shouldNotBeNull()",
+                "f(rows).shouldBeNull()",
+                "shouldNotBeNull",
+                "shouldBeNull",
+            ),
+            (
+                "assertThat(f(rows)).contains(\"a\")",
+                "assertThat(f(rows)).doesNotContain(\"a\")",
+                "contains",
+                "doesNotContain",
+            ),
+        ] {
+            assert_eq!(
+                kt_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // A checked value that changed is not paired; two matchers of different families
+        // are not twins.
+        for (a, b) in [
+            ("assertTrue(f(rows))", "assertFalse(g(rows))"),
+            ("f(rows).shouldBeTrue()", "f(rows).shouldBeNull()"),
+            ("f(rows).shouldBeEmpty()", "f(rows).shouldNotBeBlank()"),
+            ("assertNull(f(rows))", "assertFalse(f(rows))"),
+        ] {
+            assert_eq!(kt_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }
