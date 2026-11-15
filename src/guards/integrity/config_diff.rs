@@ -12,10 +12,16 @@ use toml::Value;
 /// Whether `entry`, a base entry of `key` missing from head as written, is on head under the
 /// same identity with only tightening edits. Anything ambiguous reads as lost.
 fn entry_tightened(key: &str, entry: &Value, base: &[Value], head: &[Value]) -> bool {
-    let Some(shape) = ENTRY_SHAPES.iter().find(|s| s.key == key) else {
+    let Some(b) = entry.as_table() else {
         return false;
     };
-    let Some(b) = entry.as_table() else {
+    // Two gates' lists share a key (`rules`): the shape is the one whose identity fields
+    // the entry has.
+    let Some(shape) = ENTRY_SHAPES
+        .iter()
+        .filter(|s| s.key == key)
+        .find(|s| s.identity.iter().all(|f| b.contains_key(*f)))
+    else {
         return false;
     };
     let id = |t: &toml::Table| -> Vec<Option<Value>> {
@@ -42,6 +48,9 @@ fn entry_tightened(key: &str, entry: &Value, base: &[Value], head: &[Value]) -> 
             within(bv, hv)
         } else if shape.stricter_when_shrunk.contains(&field.as_str()) {
             within(hv, bv)
+        } else if shape.stricter_when_true.contains(&field.as_str()) {
+            // Unchanged, or tightened to `true`.
+            bv == hv || hv == Some(&Value::Boolean(true))
         } else if shape.stricter_when_added.contains(&field.as_str()) && bv.is_none() {
             // Over a preset that supplies the field, the added value replaces the
             // preset's instead of adding a check: stricter only when it is that value.
@@ -1329,6 +1338,20 @@ mod tests {
         assert_eq!(count(&rule("argo/**", "docs/other.md")), 1);
         assert_eq!(count(&rule("argo/x/**", "docs/threat.md")), 1);
         assert_eq!(count(&rule("test/**", "docs/testing.md")), 1);
+        // `require_mention` added to the same rule tightens it; removed, it loosens.
+        let mention = format!(
+            "{}require_mention = true\n",
+            rule("argo/**", "docs/threat.md")
+        );
+        assert_eq!(count(&mention), 0);
+        assert_eq!(
+            diff_configs(&cfg(&mention), &base).unwrap().len(),
+            1,
+            "removing require_mention is a weakening"
+        );
+        // Any other edit to the rule is still a lost entry.
+        let all = format!("{}require_all = true\n", rule("argo/**", "docs/threat.md"));
+        assert_eq!(count(&all), 1);
     }
 
     #[test]
