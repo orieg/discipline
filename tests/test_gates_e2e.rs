@@ -1782,8 +1782,19 @@ fn a_c_cpp_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
         assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
     }
     // Negative controls: the bound tightened, a failure condition tightened, and a Unity
-    // threshold raised under the same operator.
+    // threshold raised under the same operator. A Unity `GREATER_OR_EQUAL` tightened to
+    // `GREATER_THAN` is an ordering both sides, not an equality assertion dropped.
     for (path, base, head) in [
+        (
+            C,
+            "TEST_ASSERT_GREATER_OR_EQUAL(6, Count(rows, 7));",
+            "TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));",
+        ),
+        (
+            C,
+            "TEST_ASSERT_LESS_OR_EQUAL_INT(8, Count(rows, 7));",
+            "TEST_ASSERT_LESS_THAN_INT(8, Count(rows, 7));",
+        ),
         (
             CPP,
             "EXPECT_GE(Count(rows, 7), 6);",
@@ -2207,6 +2218,20 @@ fn a_swift_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
             "#expect(countRows(rows) >= 7)",
             "#expect(countRows(rows) != 0)",
             "`>=` to `!=`",
+        ),
+        // The grammar reads `>=` and `<=` as a custom infix operator; each is still a
+        // comparison, so the widened bound is this finding and not a count decrease.
+        (
+            "counts",
+            "#expect(countRows(rows) > 6)",
+            "#expect(countRows(rows) >= 6)",
+            "`>` to `>=`",
+        ),
+        (
+            "counts",
+            "#expect(countRows(rows) < 8)",
+            "#expect(countRows(rows) <= 8)",
+            "`<` to `<=`",
         ),
     ] {
         let (code, codes, outcome) = run(base, head, "");

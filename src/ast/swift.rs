@@ -560,33 +560,45 @@ impl<'a> SwiftExtractor<'a> {
         };
         match first.kind() {
             "boolean_literal" if self.text(*first) == "true" => test_fn.tautologies += 1,
-            "equality_expression" | "comparison_expression" => {
-                let lhs = first.child_by_field_name("lhs");
-                let rhs = first.child_by_field_name("rhs");
-                // `a == a` is recorded; `a != a` and `a <= a` are counted as before.
-                let mut cursor = first.walk();
-                let equality = first
-                    .children(&mut cursor)
-                    .any(|c| matches!(self.text(c).trim(), "==" | "==="));
-                let same = match (lhs, rhs) {
-                    (Some(l), Some(r)) if equality => super::self_comparison::note(
-                        &mut test_fn.equality_operands,
-                        l,
-                        r,
-                        self.anc,
-                        self.src,
-                    ),
-                    (Some(l), Some(r)) => super::self_comparison::same(l, r, self.src),
-                    _ => false,
-                };
-                if same {
-                    test_fn.tautologies += 1;
-                } else {
-                    test_fn.strong_asserts += 1;
-                }
+            "equality_expression" | "comparison_expression" => self.compared(*first, test_fn),
+            // The grammar reads `>=`, `<=`, `!=` and `!==` as an infix expression with a
+            // custom operator; each is a comparison like `>` and `==`.
+            "infix_expression"
+                if first
+                    .child_by_field_name("op")
+                    .is_some_and(|op| matches!(self.text(op), ">=" | "<=" | "!=" | "!==")) =>
+            {
+                self.compared(*first, test_fn)
             }
             _ if name == "require" => test_fn.strong_asserts += 1,
             _ => {}
+        }
+    }
+
+    /// A condition that compares two values: strong, or a tautology when it compares a
+    /// value with itself (`a == a` is recorded; `a != a` and `a <= a` are counted).
+    fn compared(&self, first: Node<'a>, test_fn: &mut TestFn) {
+        let lhs = first.child_by_field_name("lhs");
+        let rhs = first.child_by_field_name("rhs");
+        let mut cursor = first.walk();
+        let equality = first
+            .children(&mut cursor)
+            .any(|c| matches!(self.text(c).trim(), "==" | "==="));
+        let same = match (lhs, rhs) {
+            (Some(l), Some(r)) if equality => super::self_comparison::note(
+                &mut test_fn.equality_operands,
+                l,
+                r,
+                self.anc,
+                self.src,
+            ),
+            (Some(l), Some(r)) => super::self_comparison::same(l, r, self.src),
+            _ => false,
+        };
+        if same {
+            test_fn.tautologies += 1;
+        } else {
+            test_fn.strong_asserts += 1;
         }
     }
 
@@ -936,6 +948,32 @@ final class WrapTests: XCTestCase {
         assert!(later.ignored);
         assert_eq!(later.tautologies, 1);
         assert_eq!(by("free").strong_asserts, 1);
+    }
+
+    #[test]
+    fn swift_testing_every_comparison_operator_is_a_strong_condition() {
+        // The grammar reads `>=`, `<=` and `!=` as an infix expression with a custom
+        // operator, not a comparison or equality expression; each is still a comparison.
+        let src = "import Testing\n\n@Test func ops() {\n    #expect(n > 6)\n    #expect(n >= 6)\n    #expect(n <= 6)\n    #expect(n != 6)\n    #expect(n < 6)\n    #expect(n == 6)\n}\n\n@Test func not_compared() {\n    #expect(ok)\n    #expect(a ?? b)\n    #expect(a &+ b)\n    #expect(n >= n)\n}\n";
+        let f = facts("Tests/OpsTests.swift", src);
+        let by = |n: &str| {
+            f.tests
+                .iter()
+                .find(|t| t.name == n)
+                .unwrap_or_else(|| panic!("{n}: {:?}", f.tests))
+        };
+        let ops = by("ops");
+        assert_eq!(
+            (ops.total_asserts, ops.strong_asserts, ops.tautologies),
+            (6, 6, 0)
+        );
+        // A value, two operators that do not compare (`&+` is an infix expression too),
+        // and a value compared with itself.
+        let not = by("not_compared");
+        assert_eq!(
+            (not.total_asserts, not.strong_asserts, not.tautologies),
+            (4, 0, 1)
+        );
     }
 
     #[test]

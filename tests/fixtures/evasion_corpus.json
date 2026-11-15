@@ -3715,6 +3715,19 @@
       }
     },
     {
+      "name": "c-unity-or-equal-tightened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/test_rows.c": "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    TEST_ASSERT_GREATER_OR_EQUAL(6, Count(rows, 7));\n}\n"
+      },
+      "head": {
+        "tests/test_rows.c": "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
       "name": "cpp-gtest-bound-tightened",
       "base": {
         "src/rows.h": "int Count(const int *x, int n);\n",
@@ -4267,6 +4280,21 @@
       },
       "head": {
         "Tests/RowsTests/CountTests.swift": "import Testing\n@testable import Rows\n\n@Test func counts() {\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    #expect(countRows(rows) != 0)\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "swift-testing-ordering-widened",
+      "base": {
+        "Sources/Rows/Rows.swift": "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        "Tests/RowsTests/CountTests.swift": "import Testing\n@testable import Rows\n\n@Test func counts() {\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    #expect(countRows(rows) > 6)\n}\n"
+      },
+      "head": {
+        "Tests/RowsTests/CountTests.swift": "import Testing\n@testable import Rows\n\n@Test func counts() {\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    #expect(countRows(rows) >= 6)\n}\n"
       },
       "verdict": {
         "caught": [
