@@ -12,8 +12,8 @@
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
 //! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
-//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP, Kotlin, Ruby, Swift and
-//! Scala assertions (#1070).
+//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP, Kotlin, Ruby, Swift, Scala
+//! and Objective-C assertions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -62,6 +62,9 @@
 //! `should not equal`, `should contain`), MUnit / JUnit `assertEquals` /
 //! `assertNotEquals` and twins as Java's, and the comparisons of an `assert(..)`
 //! condition.
+//! Objective-C reads XCTest macros as Swift does (`XCTAssertEqualObjects` /
+//! `XCTAssertNotEqualObjects` as `==` / `!=` too), and the comparisons of an `NSAssert` /
+//! `NSCAssert` / `assert(..)` condition.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -2800,7 +2803,7 @@ pub fn ruby(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
-/// Swift and Objective-C: what an XCTest assertion checks, as [`c_check`] says for C: the
+/// Swift and Objective-C: what an XCTest assertion or macro checks, as [`c_check`] says for C: the
 /// operator its operands must satisfy, its polarity family, and whether its first
 /// argument is a condition. A name outside these lists is not read.
 fn xct_check(name: &str) -> Option<CCheck> {
@@ -2831,8 +2834,13 @@ fn xct_check(name: &str) -> Option<CCheck> {
         "NotIdentical" => polar("xct-identical", true),
         "Nil" => polar("xct-nil", false),
         "NotNil" => polar("xct-nil", true),
-        "ThrowsError" => polar("xct-throws", false),
+        "ThrowsError" | "Throws" => polar("xct-throws", false),
         "NoThrow" => polar("xct-throws", true),
+        // Objective-C only.
+        "EqualObjects" => equality("xct-equal-objects", false),
+        "NotEqualObjects" => equality("xct-equal-objects", true),
+        "EqualWithAccuracy" => polar("xct-accuracy", false),
+        "NotEqualWithAccuracy" => polar("xct-accuracy", true),
         "GreaterThan" => compare(">"),
         "GreaterThanOrEqual" => compare(">="),
         "LessThan" => compare("<"),
@@ -3258,6 +3266,68 @@ pub fn scala(root: Node, src: &str, tests: &mut [TestFn]) {
             }
         }
         true
+    });
+}
+
+fn objc_literal(n: Node, src: &str) -> bool {
+    c_literal(n, src)
+        || (n.kind() == "identifier" && matches!(text(n, src), "YES" | "NO" | "nil" | "Nil"))
+}
+
+/// Objective-C: an XCTest assertion macro ([`xct_check`]) or an `NSAssert` / `NSCAssert`
+/// / `assert(..)` condition: the macro masked, the literal of an equality (either
+/// argument) or an ordering (the second) masked, and the comparisons of its condition
+/// ([`c_operands`]).
+pub fn objc(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if node.kind() != "expression_statement" {
+            return true;
+        }
+        let Some(call) = node
+            .named_child(0)
+            .filter(|c| c.kind() == "call_expression")
+        else {
+            return true;
+        };
+        let Some(name) = call
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "identifier")
+        else {
+            return true;
+        };
+        let method = text(name, src);
+        let args = c_args(call);
+        if matches!(method, "NSAssert" | "NSCAssert" | "assert") {
+            if let Some(cond) = args.first() {
+                c_operands(records, node, *cond, src, false, &|n| objc_literal(n, src));
+            }
+            return false;
+        }
+        let Some(check) = xct_check(method) else {
+            return true;
+        };
+        let literal = match (check.compare, check.polar) {
+            (Some(_), Some(_)) => args.iter().take(2).copied().find(|a| objc_literal(*a, src)),
+            (Some(_), None) => args.get(1).copied().filter(|a| objc_literal(*a, src)),
+            _ => None,
+        };
+        let mut holes = vec![(name, '@')];
+        holes.extend(literal.map(|l| (l, '#')));
+        records.add(Comparison {
+            line: name.start_position().row + 1,
+            skeleton: skeleton(node, &mut holes, src),
+            operator: method.to_string(),
+            literal: literal.map(|l| text(l, src).to_string()),
+            fails_when_true: false,
+        });
+        if let (Some(fails), Some(cond)) = (check.condition, args.first()) {
+            c_operands(records, node, *cond, src, fails, &|n| objc_literal(n, src));
+        }
+        false
     });
 }
 
@@ -6291,6 +6361,251 @@ mod tests {
             ),
         ] {
             assert_eq!(sc_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn oc(check: &str) -> Vec<Comparison> {
+        let src = format!(
+            "#import <XCTest/XCTest.h>\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {{\n    NSArray *rows = @[@1];\n    {check}\n}}\n\n@end\n"
+        );
+        comparisons(&crate::ast::objc::ObjcPack, "Tests/RowsTests.m", &src)
+    }
+
+    fn oc_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&oc(a), &oc(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn oc_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        oc(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    #[test]
+    fn objc_records_xctest_and_nsassert_comparisons_with_literals_masked() {
+        assert_eq!(
+            oc_read("XCTAssertGreaterThan(F(rows), 6, @\"seven rows\");"),
+            vec![read(
+                "XCTAssertGreaterThan",
+                Some("6"),
+                "@(F(rows), #, @\"seven rows\");"
+            )]
+        );
+        assert_eq!(
+            oc_read("XCTAssertEqual(3, F(rows));"),
+            vec![read("XCTAssertEqual", Some("3"), "@(#, F(rows));")]
+        );
+        assert_eq!(
+            oc_read("XCTAssertEqualObjects(F(rows), @\"a\");"),
+            vec![read(
+                "XCTAssertEqualObjects",
+                Some("@\"a\""),
+                "@(F(rows), #);"
+            )]
+        );
+        assert_eq!(
+            oc_read("XCTAssertTrue(F(rows) > 6 && G(rows) <= -1);"),
+            vec![
+                read("XCTAssertTrue", None, "@(F(rows) > 6 && G(rows) <= -1);"),
+                read(
+                    ">",
+                    Some("6"),
+                    "XCTAssertTrue(F(rows) @ # && G(rows) <= -1);"
+                ),
+                read(
+                    "<=",
+                    Some("-1"),
+                    "XCTAssertTrue(F(rows) > 6 && G(rows) @ #);"
+                ),
+            ]
+        );
+        assert_eq!(
+            oc_read("XCTAssertFalse(F(rows) == YES);"),
+            vec![
+                read("XCTAssertFalse", None, "@(F(rows) == YES);"),
+                read("==", Some("YES"), "XCTAssertFalse(F(rows) @ #);"),
+            ]
+        );
+        assert_eq!(
+            oc_read("NSAssert(F(rows) >= 6, @\"m\");"),
+            vec![read(">=", Some("6"), "NSAssert(F(rows) @ #, @\"m\");")]
+        );
+        assert_eq!(
+            oc_read("assert(F(rows) != nil);"),
+            vec![read("!=", Some("nil"), "assert(F(rows) @ #);")]
+        );
+        assert_eq!(
+            oc_read("XCTAssertNil(F(rows));"),
+            vec![read("XCTAssertNil", None, "@(F(rows));")]
+        );
+        // Not read: a macro outside the lists, an ordering whose second argument is not a
+        // literal, a comparison inside a call's arguments or after `!`, or in a call
+        // that takes no condition.
+        for check in [
+            "XCTAssertEqualish(F(rows), 6);",
+            "XCTFail(@\"x\");",
+            "check(F(rows) > 6);",
+        ] {
+            assert_eq!(oc_read(check), vec![], "{check}");
+        }
+        assert_eq!(
+            oc_read("XCTAssertLessThan(6, F(rows));"),
+            vec![read("XCTAssertLessThan", None, "@(6, F(rows));")]
+        );
+        assert_eq!(
+            oc_read("XCTAssertTrue(G(F(rows) > 6));"),
+            vec![read("XCTAssertTrue", None, "@(G(F(rows) > 6));")]
+        );
+        assert_eq!(
+            oc_read("XCTAssertTrue(!(F(rows) > 6));"),
+            vec![read("XCTAssertTrue", None, "@(!(F(rows) > 6));")]
+        );
+    }
+
+    #[test]
+    fn objc_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "XCTAssertGreaterThan(F(rows), 6);",
+                "XCTAssertGreaterThanOrEqual(F(rows), 6);",
+                "XCTAssertGreaterThan",
+                "XCTAssertGreaterThanOrEqual",
+            ),
+            (
+                "XCTAssertLessThan(F(rows), 6);",
+                "XCTAssertLessThanOrEqual(F(rows), 7);",
+                "XCTAssertLessThan",
+                "XCTAssertLessThanOrEqual",
+            ),
+            (
+                "XCTAssertEqual(F(rows), 0);",
+                "XCTAssertNotEqual(F(rows), 1);",
+                "XCTAssertEqual",
+                "XCTAssertNotEqual",
+            ),
+            (
+                "XCTAssertEqualObjects(F(rows), @\"a\");",
+                "XCTAssertNotEqualObjects(F(rows), @\"b\");",
+                "XCTAssertEqualObjects",
+                "XCTAssertNotEqualObjects",
+            ),
+            (
+                "XCTAssertTrue(F(rows) > 6);",
+                "XCTAssertTrue(F(rows) >= 6);",
+                ">",
+                ">=",
+            ),
+            // A failure condition that now fails less often.
+            (
+                "XCTAssertFalse(F(rows) <= 6);",
+                "XCTAssertFalse(F(rows) < 6);",
+                "<=",
+                "<",
+            ),
+            (
+                "NSAssert(F(rows) > 6, @\"m\");",
+                "NSAssert(F(rows) >= 6, @\"m\");",
+                ">",
+                ">=",
+            ),
+            ("assert(F(rows) < 6);", "assert(F(rows) <= 6);", "<", "<="),
+        ] {
+            assert_eq!(
+                oc_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Negative controls: tightened, kept, moved to an integer that accepts the same
+        // values, `!=` back to `==`, a failure condition tightened, a checked value that
+        // changed, a literal raised under the same operator.
+        for (a, b) in [
+            (
+                "XCTAssertGreaterThanOrEqual(F(rows), 6);",
+                "XCTAssertGreaterThan(F(rows), 6);",
+            ),
+            ("XCTAssertTrue(F(rows) > 6);", "XCTAssert(F(rows) > 6);"),
+            (
+                "XCTAssertGreaterThan(F(rows), 6);",
+                "XCTAssertGreaterThanOrEqual(F(rows), 7);",
+            ),
+            (
+                "XCTAssertNotEqual(F(rows), 1);",
+                "XCTAssertEqual(F(rows), 2);",
+            ),
+            (
+                "XCTAssertFalse(F(rows) < 6);",
+                "XCTAssertFalse(F(rows) <= 6);",
+            ),
+            (
+                "XCTAssertGreaterThan(F(rows), 6);",
+                "XCTAssertGreaterThanOrEqual(G(rows), 6);",
+            ),
+            (
+                "XCTAssertGreaterThan(F(rows), 6);",
+                "XCTAssertGreaterThan(F(rows), 7);",
+            ),
+        ] {
+            assert_eq!(oc_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn objc_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            (
+                "XCTAssertTrue(F(rows));",
+                "XCTAssertFalse(F(rows));",
+                "XCTAssertTrue",
+                "XCTAssertFalse",
+            ),
+            (
+                "XCTAssertEqualObjects(F(rows), @\"a\");",
+                "XCTAssertNotEqualObjects(F(rows), @\"a\");",
+                "XCTAssertEqualObjects",
+                "XCTAssertNotEqualObjects",
+            ),
+            (
+                "XCTAssertNotNil(F(rows));",
+                "XCTAssertNil(F(rows));",
+                "XCTAssertNotNil",
+                "XCTAssertNil",
+            ),
+            (
+                "XCTAssertThrows(F(rows));",
+                "XCTAssertNoThrow(F(rows));",
+                "XCTAssertThrows",
+                "XCTAssertNoThrow",
+            ),
+            (
+                "XCTAssertEqualWithAccuracy(F(rows), 1.0, 0.1);",
+                "XCTAssertNotEqualWithAccuracy(F(rows), 1.0, 0.1);",
+                "XCTAssertEqualWithAccuracy",
+                "XCTAssertNotEqualWithAccuracy",
+            ),
+        ] {
+            assert_eq!(
+                oc_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // A checked value that changed is not paired; two macros of different families
+        // are not twins; `XCTAssert` -> `XCTAssertTrue` keeps the polarity.
+        for (a, b) in [
+            ("XCTAssertTrue(F(rows));", "XCTAssertFalse(G(rows));"),
+            ("XCTAssertNil(F(rows));", "XCTAssertFalse(F(rows));"),
+            (
+                "XCTAssertEqual(F(rows), 3);",
+                "XCTAssertNotEqualObjects(F(rows), 3);",
+            ),
+            ("XCTAssert(F(rows));", "XCTAssertTrue(F(rows));"),
+        ] {
+            assert_eq!(oc_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }
