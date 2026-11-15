@@ -205,6 +205,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.companion-edit.rules[].reason` | string | *(per entry)* | Why the two path sets change together, quoted in the finding |
 | `gates.companion-edit.rules[].require_all` | boolean | *(per entry)* | Whether every require_edits_to glob must match a changed path, rather than any one |
 | `gates.companion-edit.rules[].require_edits_to` | list | *(required)* | Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside |
+| `gates.companion-edit.rules[].require_mention` | boolean | *(per entry)* | Whether the companion's added lines must name a public name the triggering change added, removed or modified (prose and table cells; not fenced code, HTML comments or changelog files) |
 | `gates.companion-edit.rules[].trigger_paths` | list | *(required)* | Globs; a changed path matching any of them fires the rule |
 | `gates.companion-edit.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.config-integrity.compare_effective` | boolean | `false` | Whether command-line --enable and --disable switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared) |

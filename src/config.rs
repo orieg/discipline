@@ -2968,6 +2968,10 @@ pub struct CompanionEditRule {
     pub require_edits_to: Vec<String>,
     #[serde(default)]
     pub require_all: bool,
+    /// The companion's added lines must name a public name the triggering change added,
+    /// removed or modified (`companion-edit/companion-not-specific`).
+    #[serde(default)]
+    pub require_mention: bool,
     /// Why the two sets move together, quoted in the finding.
     #[serde(default)]
     pub reason: Option<String>,

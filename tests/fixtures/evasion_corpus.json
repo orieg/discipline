@@ -3889,6 +3889,102 @@
       "verdict": {
         "known_miss": "#1090"
       }
+    },
+    {
+      "name": "companion-mention-only-in-a-comment",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n\n<!-- TODO: document close -->\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "verdict": {
+        "caught": [
+          "companion-edit/companion-not-specific"
+        ]
+      }
+    },
+    {
+      "name": "companion-whitespace-edit-with-require-mention",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open`  opens.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "verdict": {
+        "caught": [
+          "companion-edit/companion-not-specific"
+        ]
+      }
+    },
+    {
+      "name": "companion-names-the-new-function",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n\n`close` releases the handle `open` took.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "gate": "companion-edit",
+      "verdict": "clean"
+    },
+    {
+      "name": "companion-one-line-mention",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n\nUpdated for `close`.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "gate": "companion-edit",
+      "verdict": {
+        "known_miss": "#1089"
+      }
+    },
+    {
+      "name": "companion-mention-only-on-an-unchanged-line",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens. `close` is planned.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open` opens. `close` is planned.\n\nReworded intro.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "verdict": {
+        "caught": [
+          "companion-edit/companion-not-specific"
+        ]
+      }
     }
   ]
 }

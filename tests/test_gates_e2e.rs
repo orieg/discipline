@@ -26735,3 +26735,98 @@ config_files = ["mytool.toml"]
     assert_eq!(reason, "configuration");
     assert_eq!(gate.as_deref(), Some("invented-names"));
 }
+
+#[test]
+fn companion_edit_require_mention_needs_the_doc_to_name_what_changed() {
+    let config = r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.companion-edit]
+enabled = true
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["src/**"]
+require_edits_to = ["docs/api.md"]
+require_mention = true
+"#;
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("src/lib.rs", "pub fn open() {}\nfn private() {}\n"),
+            ("docs/api.md", "# API\n\n`open` opens.\n"),
+        ],
+        "base: companion-edit with require_mention",
+    );
+    let codes = |run: &Run| -> Vec<String> {
+        run.violations("companion-edit")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // 1. A new public fn, and a doc edit that does not name it: reported.
+    repo.write(
+        "src/lib.rs",
+        "pub fn open() {}\npub fn close() {}\nfn private() {}\n",
+    );
+    repo.write(
+        "docs/api.md",
+        "# API\n\n`open` opens.\n\nReworded intro.\n\n```rust\nclose();\n```\n<!-- close -->\n",
+    );
+    repo.commit("feat: close");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(codes(&run), ["companion-edit/companion-not-specific"]);
+    let found = &run.violations("companion-edit")[0];
+    assert_eq!(found["file"], "docs/api.md");
+    assert!(
+        found["message"].as_str().unwrap().contains("`close`"),
+        "{found}"
+    );
+
+    // 2. The doc names it on an added prose line: met.
+    repo.write(
+        "docs/api.md",
+        "# API\n\n`open` opens.\n\n`close` releases what `open` took.\n",
+    );
+    repo.commit("docs: close");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+
+    // 3. Only a private fn changed: a note, never a finding.
+    repo.git(&["checkout", "-q", "-B", "refactor", "main"]);
+    repo.write(
+        "src/lib.rs",
+        "pub fn open() {}\nfn private() { let _ = 1; }\n",
+    );
+    repo.write("docs/api.md", "# API\n\n`open` opens, faster.\n");
+    repo.commit("refactor: private");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+    assert!(
+        run.outcome("companion-edit")["notes"]
+            .to_string()
+            .contains("no public name"),
+        "{}",
+        run.stdout
+    );
+
+    // 4. The finding is lifted by the rule's directive.
+    repo.git(&["checkout", "-q", "-B", "waived", "main"]);
+    repo.write(
+        "src/lib.rs",
+        "pub fn open() {}\npub fn close() {}\nfn private() {}\n",
+    );
+    repo.write("docs/api.md", "# API\n\n`open` opens. Reworded.\n");
+    repo.commit("feat: close");
+    let run = repo.check_with_pr(
+        &[],
+        "allow-companion-edit: docs/api.md the reference is regenerated in a follow-up\n",
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+}

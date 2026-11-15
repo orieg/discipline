@@ -761,6 +761,7 @@ pub fn generate_schema() -> Value {
                             "trigger_paths": { "$ref": "#/$defs/StringList", "description": "Globs; a changed path matching any of them fires the rule" },
                             "require_edits_to": { "$ref": "#/$defs/StringList", "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside" },
                             "require_all": { "type": "boolean", "description": "Whether every require_edits_to glob must match a changed path, rather than any one" },
+                            "require_mention": { "type": "boolean", "description": "Whether the companion's added lines must name a public name the triggering change added, removed or modified (prose and table cells; not fenced code, HTML comments or changelog files)" },
                             "reason": { "type": "string", "description": "Why the two path sets change together, quoted in the finding" }
                         }
                     }
