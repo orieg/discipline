@@ -1805,6 +1805,118 @@ fn a_c_cpp_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     }
 }
 
+/// PHP assertions (#1070) weakened or inverted are reported as the same finding: a
+/// PHPUnit ordering moved the loose way, `assertTrue` -> `assertFalse`, a condition's
+/// comparison widened, `assertSame` -> `assertNotSame` read as `==` -> `!=`, and a Pest
+/// matcher widened or negated.
+#[test]
+fn a_php_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let phpunit = |check: &str| {
+        format!(
+            "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{{\n    public function testCounts(): void\n    {{\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let pest = |check: &str| {
+        format!(
+            "<?php\n\ntest('counts', function () {{\n    $rows = [1, 2, 3, 4, 5, 6, 7];\n    {check}\n}});\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "src/Rows.php",
+            "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        );
+        let wrap = |check: &str| {
+            if check.starts_with("expect(") {
+                pest(check)
+            } else {
+                phpunit(check)
+            }
+        };
+        repo.commit_base("tests/RowsTest.php", &wrap(base), "test: counts");
+        repo.write("tests/RowsTest.php", &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (test, base, head, ops) in [
+        (
+            "testCounts",
+            "$this->assertGreaterThan(6, count_rows($rows), 'seven rows');",
+            "$this->assertGreaterThanOrEqual(6, count_rows($rows), 'seven rows');",
+            "`assertGreaterThan` to `assertGreaterThanOrEqual`",
+        ),
+        (
+            "testCounts",
+            "$this->assertTrue(count_rows($rows) === 7);",
+            "$this->assertFalse(count_rows($rows) === 7);",
+            "`assertTrue` to `assertFalse`",
+        ),
+        (
+            "testCounts",
+            "self::assertTrue(count_rows($rows) > 6);",
+            "self::assertTrue(count_rows($rows) >= 6);",
+            "`>` to `>=`",
+        ),
+        (
+            "testCounts",
+            "$this->assertSame(0, count_rows([]));",
+            "$this->assertNotSame(1, count_rows([]));",
+            "`assertSame` to `assertNotSame`",
+        ),
+        (
+            "test: counts",
+            "expect(count_rows($rows))->toBeGreaterThan(6);",
+            "expect(count_rows($rows))->toBeGreaterThanOrEqual(6);",
+            "`toBeGreaterThan` to `toBeGreaterThanOrEqual`",
+        ),
+        (
+            "test: counts",
+            "expect(count_rows($rows))->toContain(7);",
+            "expect(count_rows($rows))->not->toContain(7);",
+            "`toContain` to `not->toContain`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("count_rows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // threshold raised under the same operator.
+    for (base, head) in [
+        (
+            "$this->assertGreaterThanOrEqual(6, count_rows($rows));",
+            "$this->assertGreaterThan(6, count_rows($rows));",
+        ),
+        (
+            "$this->assertFalse(count_rows($rows) < 6);",
+            "$this->assertFalse(count_rows($rows) <= 6);",
+        ),
+        (
+            "$this->assertGreaterThan(6, count_rows($rows));",
+            "$this->assertGreaterThan(7, count_rows($rows));",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.

@@ -12,7 +12,7 @@
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
 //! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
-//! matchers and `assert(..)` calls, and Java, C# and C/C++ assertions (#1070).
+//! matchers and `assert(..)` calls, and Java, C#, C/C++ and PHP assertions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -40,6 +40,11 @@
 //! macro (`EXPECT_GT`, `TEST_ASSERT_LESS_THAN`, `assert_int_equal`) or GoogleMock
 //! matcher (`Gt`) as its operator, a macro with a negated twin as a polarity, and the
 //! comparisons of a condition (`EXPECT_TRUE`, `REQUIRE`, `assert`).
+//! PHP reads PHPUnit assertions and Pest `expect(..)` chains the same way: an equality
+//! or ordering method (`assertSame`, `assertGreaterThan`) or a Pest comparison matcher as
+//! its operator (`->not` negating the matcher), a method or matcher with a negated twin
+//! as a polarity, and the comparisons of an `assertTrue` / `assertFalse` / `assert(..)`
+//! condition.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -193,6 +198,7 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
                 .or_else(|| java_chain_polarity(operator))
                 .or_else(|| cs_polarity(operator))
                 .or_else(|| c_check(operator).and_then(|c| c.polar))
+                .or_else(|| php_polarity(operator))
         }
     })
 }
@@ -200,16 +206,30 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
 /// JS/TS: the polarity of an `expect(..)` matcher with a negated form, `.not` or its
 /// twin (`toBeTruthy` / `toBeFalsy`, `toBeDefined` / `toBeUndefined`).
 fn js_matcher_polarity(operator: &str) -> Option<(&'static str, bool)> {
-    let (matcher, not) = match operator.strip_prefix("not.") {
+    let (matcher, not) = match negated_matcher(operator) {
         Some(m) => (m, true),
         None => (operator, false),
     };
     let (family, negated) = match matcher {
         "toBeFalsy" => ("toBeTruthy", true),
         "toBeUndefined" => ("toBeDefined", true),
-        _ => (*JS_POLAR_MATCHERS.iter().find(|m| **m == matcher)?, false),
+        "toBeFalse" => ("toBeTrue", true),
+        _ => (
+            *JS_POLAR_MATCHERS
+                .iter()
+                .chain(PEST_POLAR_MATCHERS)
+                .find(|m| **m == matcher)?,
+            false,
+        ),
     };
     Some((family, negated != not))
+}
+
+/// The matcher of a JS/TS `not.matcher` or a Pest `not->matcher`.
+fn negated_matcher(operator: &str) -> Option<&str> {
+    operator
+        .strip_prefix("not.")
+        .or_else(|| operator.strip_prefix("not->"))
 }
 
 /// Python: the polarity of a `self.assert*(..)` call statement whose method has a
@@ -873,8 +893,6 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
-const JAVA_OPERATORS: &[&str] = &["==", "!=", "<", "<=", ">", ">="];
-
 /// The operators written for a Java `assert` statement's condition and its negation.
 const JAVA_ASSERT: &str = "assert x";
 const JAVA_ASSERT_NOT: &str = "assert !x";
@@ -961,8 +979,9 @@ fn java_literal(n: Node, src: &str) -> bool {
     }
 }
 
-/// Java and C#: each comparison that is a whole operand of a condition, through `&&`,
-/// `||` and parentheses. One inside a call's arguments or after `!` is not read.
+/// Java, C#, C/C++ and PHP: each comparison that is a whole operand of a condition,
+/// through `&&`, `||` (`and`, `or`) and parentheses. One inside a call's arguments or
+/// after `!` is not read.
 fn c_operands(
     records: &mut Records<Comparison>,
     stmt: Node,
@@ -983,11 +1002,11 @@ fn c_operands(
         return;
     };
     match text(op, src) {
-        "&&" | "||" => {
+        "&&" | "||" | "and" | "or" => {
             c_operands(records, stmt, l, src, fails_when_true, is_literal);
             c_operands(records, stmt, r, src, fails_when_true, is_literal);
         }
-        o if JAVA_OPERATORS.contains(&o) => {
+        o if JS_OPERATORS.contains(&o) => {
             record(records, stmt, (l, op, r), is_literal, src, fails_when_true);
         }
         _ => {}
@@ -1825,11 +1844,317 @@ pub fn c_cpp(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+/// PHP PHPUnit methods with a negated twin, read as a polarity, as (method, twin): the
+/// method masked.
+const PHP_TWINS: &[(&str, &str)] = &[
+    ("assertTrue", "assertFalse"),
+    ("assertNull", "assertNotNull"),
+    ("assertSame", "assertNotSame"),
+    ("assertEquals", "assertNotEquals"),
+    (
+        "assertEqualsCanonicalizing",
+        "assertNotEqualsCanonicalizing",
+    ),
+    ("assertEqualsIgnoringCase", "assertNotEqualsIgnoringCase"),
+    ("assertEqualsWithDelta", "assertNotEqualsWithDelta"),
+    ("assertContains", "assertNotContains"),
+    ("assertContainsEquals", "assertNotContainsEquals"),
+    ("assertContainsOnly", "assertNotContainsOnly"),
+    ("assertCount", "assertNotCount"),
+    ("assertEmpty", "assertNotEmpty"),
+    ("assertArrayHasKey", "assertArrayNotHasKey"),
+    ("assertInstanceOf", "assertNotInstanceOf"),
+    ("assertSameSize", "assertNotSameSize"),
+    (
+        "assertStringContainsString",
+        "assertStringNotContainsString",
+    ),
+    (
+        "assertStringContainsStringIgnoringCase",
+        "assertStringNotContainsStringIgnoringCase",
+    ),
+    ("assertStringStartsWith", "assertStringStartsNotWith"),
+    ("assertStringEndsWith", "assertStringEndsNotWith"),
+    (
+        "assertMatchesRegularExpression",
+        "assertDoesNotMatchRegularExpression",
+    ),
+    ("assertFileExists", "assertFileDoesNotExist"),
+    ("assertDirectoryExists", "assertDirectoryDoesNotExist"),
+    ("assertIsArray", "assertIsNotArray"),
+    ("assertIsBool", "assertIsNotBool"),
+    ("assertIsInt", "assertIsNotInt"),
+    ("assertIsString", "assertIsNotString"),
+    ("assertIsObject", "assertIsNotObject"),
+    ("assertIsCallable", "assertIsNotCallable"),
+    ("assertNan", ""),
+];
+
+/// PHP PHPUnit methods read as `==` / `!=`, the literal they are given masked.
+const PHP_EQUALITY: &[&str] = &[
+    "assertSame",
+    "assertNotSame",
+    "assertEquals",
+    "assertNotEquals",
+];
+
+/// PHP PHPUnit methods read as a comparison of their second argument with their first,
+/// the threshold, which is the literal masked.
+const PHP_ORDERED: &[&str] = &[
+    "assertGreaterThan",
+    "assertGreaterThanOrEqual",
+    "assertLessThan",
+    "assertLessThanOrEqual",
+];
+
+/// Pest `expect(..)` matchers whose `->not` form is read as the polarity inverted; the
+/// comparison matchers are JS's ([`JS_COMPARISON_MATCHERS`]).
+const PEST_POLAR_MATCHERS: &[&str] = &[
+    "toBeTrue",
+    "toBeFalse",
+    "toBeTruthy",
+    "toBeFalsy",
+    "toBeNull",
+    "toBeEmpty",
+    "toBeInstanceOf",
+    "toBeArray",
+    "toBeString",
+    "toBeInt",
+    "toBeBool",
+    "toBeNumeric",
+    "toBeIn",
+    "toContain",
+    "toHaveCount",
+    "toHaveKey",
+    "toHaveKeys",
+    "toHaveLength",
+    "toHaveProperty",
+    "toMatch",
+    "toMatchArray",
+    "toStartWith",
+    "toEndWith",
+    "toThrow",
+];
+
+/// PHP: the polarity of a PHPUnit method of [`PHP_TWINS`].
+fn php_polarity(operator: &str) -> Option<(&'static str, bool)> {
+    PHP_TWINS.iter().find_map(|(m, twin)| {
+        if *m == operator {
+            Some((*m, false))
+        } else if !twin.is_empty() && *twin == operator {
+            Some((*m, true))
+        } else {
+            None
+        }
+    })
+}
+
+fn php_literal(n: Node, src: &str) -> bool {
+    let num = |n: Node| matches!(n.kind(), "integer" | "float");
+    match n.kind() {
+        "string" | "boolean" | "null" => true,
+        // A double-quoted string without interpolation.
+        "encapsed_string" => {
+            let mut c = n.walk();
+            let plain = n
+                .named_children(&mut c)
+                .all(|k| matches!(k.kind(), "string_content" | "escape_sequence"));
+            plain
+        }
+        "unary_op_expression" => {
+            n.child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "-")
+                && n.child_by_field_name("argument").is_some_and(num)
+        }
+        _ => num(n),
+    }
+}
+
+/// The expressions of a PHP call's arguments, a named argument's value included.
+fn php_args(call: Node) -> Vec<Node> {
+    let Some(list) = call.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut c = list.walk();
+    list.named_children(&mut c)
+        .filter(|a| a.kind() == "argument")
+        .filter_map(|a| {
+            let mut ac = a.walk();
+            let value = a
+                .named_children(&mut ac)
+                .filter(|n| !n.is_extra())
+                .last()
+                .map(unparenthesized);
+            value
+        })
+        .collect()
+}
+
+/// PHP: a PHPUnit assertion on `$this`, on `self`, `static` or `parent`, on `Assert` or
+/// `TestCase`, or called as a function: the method of [`PHP_TWINS`], [`PHP_EQUALITY`] and
+/// [`PHP_ORDERED`] masked with the literal of an equality or an ordering, and the
+/// comparisons of an `assertTrue` / `assertFalse` condition, `assertFalse` read as a
+/// failure condition.
+fn php_assert(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let owned = match call.kind() {
+        "member_call_expression" => call
+            .child_by_field_name("object")
+            .is_some_and(|o| text(o, src) == "$this"),
+        "scoped_call_expression" => call.child_by_field_name("scope").is_some_and(|s| {
+            let scope = text(s, src);
+            s.kind() == "relative_scope"
+                || matches!(
+                    scope.rsplit('\\').next().unwrap_or(scope),
+                    "Assert" | "TestCase"
+                )
+        }),
+        "function_call_expression" => true,
+        _ => false,
+    };
+    let name = match call.kind() {
+        "function_call_expression" => call
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "name"),
+        _ => call.child_by_field_name("name"),
+    };
+    let Some(name) = name.filter(|_| owned) else {
+        return false;
+    };
+    let method = text(name, src);
+    let args = php_args(call);
+    if method == "assert" && call.kind() == "function_call_expression" {
+        if let Some(cond) = args.first() {
+            c_operands(records, stmt, *cond, src, false, &|n| php_literal(n, src));
+        }
+        return true;
+    }
+    let equality = PHP_EQUALITY.contains(&method);
+    let ordered = PHP_ORDERED.contains(&method);
+    if !ordered && php_polarity(method).is_none() {
+        return false;
+    }
+    let literal = if equality {
+        args.iter().take(2).copied().find(|a| php_literal(*a, src))
+    } else if ordered {
+        args.first().copied().filter(|a| php_literal(*a, src))
+    } else {
+        None
+    };
+    let mut holes = vec![(name, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: method.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    if matches!(method, "assertTrue" | "assertFalse") {
+        if let Some(cond) = args.first() {
+            let fails = method == "assertFalse";
+            c_operands(records, stmt, *cond, src, fails, &|n| php_literal(n, src));
+        }
+    }
+    true
+}
+
+/// PHP: each matcher of a Pest `expect(..)` chain that is in [`JS_COMPARISON_MATCHERS`]
+/// or [`PEST_POLAR_MATCHERS`], its name and the `->not` before it masked and, for a
+/// comparison, its literal argument. `->not` negates the matcher after it; `->and(..)`
+/// starts the next expectation.
+fn php_expect(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    // The chain's links from the outermost in, and the call it is rooted at.
+    let mut links = Vec::new();
+    let mut cur = call;
+    loop {
+        match cur.kind() {
+            "member_call_expression" | "member_access_expression" => {
+                links.push(cur);
+                match cur.child_by_field_name("object") {
+                    Some(o) => cur = o,
+                    None => return false,
+                }
+            }
+            "function_call_expression" => break,
+            _ => return false,
+        }
+    }
+    let rooted = cur
+        .child_by_field_name("function")
+        .is_some_and(|f| text(f, src) == "expect");
+    if !rooted || links.is_empty() {
+        return false;
+    }
+    let mut not = None;
+    for link in links.into_iter().rev() {
+        let Some(name) = link.child_by_field_name("name") else {
+            continue;
+        };
+        let matcher = text(name, src);
+        if link.kind() == "member_access_expression" {
+            if matcher == "not" {
+                not = Some(link);
+            }
+            continue;
+        }
+        let negation = not.take();
+        let compared = JS_COMPARISON_MATCHERS.contains(&matcher);
+        if !compared && !PEST_POLAR_MATCHERS.contains(&matcher) {
+            continue;
+        }
+        let literal = php_args(link)
+            .first()
+            .copied()
+            .filter(|a| compared && php_literal(*a, src));
+        let mut holes = vec![(name.start_byte(), name.end_byte(), "@")];
+        if let Some(n) = negation {
+            let inner = n
+                .child_by_field_name("object")
+                .map_or(n.start_byte(), |o| o.end_byte());
+            holes.push((inner, n.end_byte(), ""));
+        }
+        if let Some(l) = literal {
+            holes.push((l.start_byte(), l.end_byte(), "#"));
+        }
+        records.add(Comparison {
+            line: name.start_position().row + 1,
+            skeleton: spliced(stmt, &mut holes, src),
+            operator: if negation.is_some() {
+                format!("not->{matcher}")
+            } else {
+                matcher.to_string()
+            },
+            literal: literal.map(|l| text(l, src).to_string()),
+            fails_when_true: false,
+        });
+    }
+    true
+}
+
+/// PHP: comparisons and polarity in PHPUnit assertions ([`php_assert`]), Pest
+/// `expect(..)` chains ([`php_expect`]) and the condition of `assert(..)`, each read
+/// from a statement that is the call.
+pub fn php(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if node.kind() != "expression_statement" {
+            return true;
+        }
+        let Some(call) = node.named_child(0) else {
+            return true;
+        };
+        !(php_expect(records, node, call, src) || php_assert(records, node, call, src))
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
-    // A JS/TS matcher after `.not` checks the negation.
-    let (operator, not) = match operator.strip_prefix("not.") {
+    // A JS/TS matcher after `.not`, or a Pest one after `->not`, checks the negation.
+    let (operator, not) = match negated_matcher(operator) {
         Some(m) => (m, true),
         None => (operator, false),
     };
@@ -1858,8 +2183,12 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         | "assert.notStrictEqual"
         | "assert.notDeepEqual"
         | "assert.notDeepStrictEqual" => ("!=", "=="),
-        "assertEquals" | "isEqualTo" => ("==", "!="),
-        "assertNotEquals" | "isNotEqualTo" => ("!=", "=="),
+        "assertEquals" | "isEqualTo" | "assertSame" => ("==", "!="),
+        "assertNotEquals" | "isNotEqualTo" | "assertNotSame" => ("!=", "=="),
+        "assertGreaterThan" => (">", "<="),
+        "assertGreaterThanOrEqual" => (">=", "<"),
+        "assertLessThan" => ("<", ">="),
+        "assertLessThanOrEqual" => ("<=", ">"),
         "isGreaterThan" => (">", "<="),
         "isGreaterThanOrEqualTo" => (">=", "<"),
         "isLessThan" => ("<", ">="),
@@ -3410,6 +3739,380 @@ mod tests {
             ("assert_null(F(rows));", "assert_false(F(rows));"),
         ] {
             assert_eq!(cc_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn php(check: &str) -> Vec<Comparison> {
+        let src = if check.starts_with("expect(") {
+            format!("<?php\ntest('rows', function () {{\n    $rows = [1];\n    {check}\n}});\n")
+        } else {
+            format!(
+                "<?php\nclass RowsTest extends TestCase {{\n    public function testX(): void {{\n        $rows = [1];\n        {check}\n    }}\n}}\n"
+            )
+        };
+        comparisons(&crate::ast::php::PhpPack, "tests/RowsTest.php", &src)
+    }
+
+    fn php_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&php(a), &php(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn php_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        php(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    #[test]
+    fn php_records_phpunit_pest_and_assert_comparisons_with_literals_masked() {
+        assert_eq!(
+            php_read("$this->assertGreaterThan(6, f($rows), 'seven rows');"),
+            vec![read(
+                "assertGreaterThan",
+                Some("6"),
+                "$this->@(#, f($rows), 'seven rows');"
+            )]
+        );
+        assert_eq!(
+            php_read("self::assertSame(3, f($rows));"),
+            vec![read("assertSame", Some("3"), "self::@(#, f($rows));")]
+        );
+        assert_eq!(
+            php_read("static::assertEquals(f($rows), -1.5);"),
+            vec![read(
+                "assertEquals",
+                Some("-1.5"),
+                "static::@(f($rows), #);"
+            )]
+        );
+        assert_eq!(
+            php_read("Assert::assertNotSame(\"a\", f($rows));"),
+            vec![read(
+                "assertNotSame",
+                Some("\"a\""),
+                "Assert::@(#, f($rows));"
+            )]
+        );
+        assert_eq!(
+            php_read("$this->assertTrue(f($rows) > 6 && g($rows) <= -1);"),
+            vec![
+                read(
+                    "assertTrue",
+                    None,
+                    "$this->@(f($rows) > 6 && g($rows) <= -1);"
+                ),
+                read(
+                    ">",
+                    Some("6"),
+                    "$this->assertTrue(f($rows) @ # && g($rows) <= -1);"
+                ),
+                read(
+                    "<=",
+                    Some("-1"),
+                    "$this->assertTrue(f($rows) > 6 && g($rows) @ #);"
+                ),
+            ]
+        );
+        assert_eq!(
+            php_read("$this->assertFalse((f($rows) === null) and $ok);"),
+            vec![
+                read(
+                    "assertFalse",
+                    None,
+                    "$this->@((f($rows) === null) and $ok);"
+                ),
+                read(
+                    "===",
+                    Some("null"),
+                    "$this->assertFalse((f($rows) @ #) and $ok);"
+                ),
+            ]
+        );
+        assert_eq!(
+            php_read("parent::assertSame(3, f($rows));"),
+            vec![read("assertSame", Some("3"), "parent::@(#, f($rows));")]
+        );
+        assert_eq!(
+            php_read("assertSame(3, f($rows));"),
+            vec![read("assertSame", Some("3"), "@(#, f($rows));")]
+        );
+        assert_eq!(
+            php_read("$this->assertTrue($ok or f($rows) < 2);"),
+            vec![
+                read("assertTrue", None, "$this->@($ok or f($rows) < 2);"),
+                read("<", Some("2"), "$this->assertTrue($ok or f($rows) @ #);"),
+            ]
+        );
+        assert_eq!(
+            php_read("assert(f($rows) >= 6);"),
+            vec![read(">=", Some("6"), "assert(f($rows) @ #);")]
+        );
+        assert_eq!(
+            php_read("$this->assertNull(f($rows));"),
+            vec![read("assertNull", None, "$this->@(f($rows));")]
+        );
+        assert_eq!(
+            php_read("expect(f($rows))->not->toBeGreaterThan(6);"),
+            vec![read(
+                "not->toBeGreaterThan",
+                Some("6"),
+                "expect(f($rows))->@(#);"
+            )]
+        );
+        assert_eq!(
+            php_read("expect(f($rows))->toBe(3)->and(g($rows))->toBeTrue();"),
+            vec![
+                read(
+                    "toBe",
+                    Some("3"),
+                    "expect(f($rows))->@(#)->and(g($rows))->toBeTrue();"
+                ),
+                read(
+                    "toBeTrue",
+                    None,
+                    "expect(f($rows))->toBe(3)->and(g($rows))->@();"
+                ),
+            ]
+        );
+        // Not read: a method outside the lists, a call on another object, an ordering
+        // whose threshold is not a literal, a comparison inside a call's arguments or
+        // after `!`, a matcher outside the lists, a chain not rooted at `expect(..)`.
+        for check in [
+            "$this->assertEqualsWithin(6, f($rows));",
+            "$other->assertTrue(f($rows) > 6);",
+            "check(f($rows) > 6);",
+            "expect(f($rows))->toBeOne(6);",
+            "want(f($rows))->toBe(6);",
+        ] {
+            assert_eq!(php_read(check), vec![], "{check}");
+        }
+        assert_eq!(
+            php_read("$this->assertLessThan($max, f($rows));"),
+            vec![read("assertLessThan", None, "$this->@($max, f($rows));")]
+        );
+        assert_eq!(
+            php_read("$this->assertTrue(g(f($rows) > 6));"),
+            vec![read("assertTrue", None, "$this->@(g(f($rows) > 6));")]
+        );
+        assert_eq!(
+            php_read("$this->assertTrue(!(f($rows) > 6));"),
+            vec![read("assertTrue", None, "$this->@(!(f($rows) > 6));")]
+        );
+    }
+
+    #[test]
+    fn php_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "$this->assertGreaterThan(6, f($rows));",
+                "$this->assertGreaterThanOrEqual(6, f($rows));",
+                "assertGreaterThan",
+                "assertGreaterThanOrEqual",
+            ),
+            (
+                "self::assertLessThan(6, f($rows));",
+                "self::assertLessThanOrEqual(7, f($rows));",
+                "assertLessThan",
+                "assertLessThanOrEqual",
+            ),
+            (
+                "$this->assertSame(0, f($rows));",
+                "$this->assertNotSame(1, f($rows));",
+                "assertSame",
+                "assertNotSame",
+            ),
+            (
+                "$this->assertEquals(0, f($rows));",
+                "$this->assertNotEquals(1, f($rows));",
+                "assertEquals",
+                "assertNotEquals",
+            ),
+            (
+                "$this->assertTrue(f($rows) > 6);",
+                "$this->assertTrue(f($rows) >= 6);",
+                ">",
+                ">=",
+            ),
+            (
+                "$this->assertTrue(f($rows) === 7);",
+                "$this->assertTrue(f($rows) !== 8);",
+                "===",
+                "!==",
+            ),
+            // A failure condition that now fails less often.
+            (
+                "$this->assertFalse(f($rows) <= 6);",
+                "$this->assertFalse(f($rows) < 6);",
+                "<=",
+                "<",
+            ),
+            ("assert(f($rows) > 6);", "assert(f($rows) >= 6);", ">", ">="),
+            (
+                "expect(f($rows))->toBeGreaterThan(6);",
+                "expect(f($rows))->toBeGreaterThanOrEqual(6);",
+                "toBeGreaterThan",
+                "toBeGreaterThanOrEqual",
+            ),
+            (
+                "expect(f($rows))->toBe(0);",
+                "expect(f($rows))->not->toBe(1);",
+                "toBe",
+                "not->toBe",
+            ),
+            // `->not` reads the negation: `> 6` -> `>= 6`.
+            (
+                "expect(f($rows))->not->toBeLessThanOrEqual(6);",
+                "expect(f($rows))->not->toBeLessThan(6);",
+                "not->toBeLessThanOrEqual",
+                "not->toBeLessThan",
+            ),
+        ] {
+            assert_eq!(
+                php_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Negative controls: tightened, kept, moved to an integer that accepts the same
+        // values, `!=` back to `==`, a failure condition tightened, a checked value that
+        // changed, a threshold raised under the same operator.
+        for (a, b) in [
+            (
+                "$this->assertGreaterThanOrEqual(6, f($rows));",
+                "$this->assertGreaterThan(6, f($rows));",
+            ),
+            (
+                "$this->assertGreaterThan(6, f($rows));",
+                "self::assertGreaterThan(6, f($rows));",
+            ),
+            (
+                "$this->assertGreaterThan(6, f($rows));",
+                "$this->assertGreaterThanOrEqual(7, f($rows));",
+            ),
+            (
+                "$this->assertNotSame(1, f($rows));",
+                "$this->assertSame(2, f($rows));",
+            ),
+            (
+                "$this->assertFalse(f($rows) < 6);",
+                "$this->assertFalse(f($rows) <= 6);",
+            ),
+            (
+                "$this->assertGreaterThan(6, f($rows));",
+                "$this->assertGreaterThanOrEqual(6, g($rows));",
+            ),
+            (
+                "$this->assertGreaterThan(6, f($rows));",
+                "$this->assertGreaterThan(7, f($rows));",
+            ),
+            (
+                "expect(f($rows))->not->toBeGreaterThan(6);",
+                "expect(f($rows))->not->toBeGreaterThanOrEqual(6);",
+            ),
+        ] {
+            assert_eq!(php_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn php_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            (
+                "$this->assertTrue(f($rows));",
+                "$this->assertFalse(f($rows));",
+                "assertTrue",
+                "assertFalse",
+            ),
+            (
+                "self::assertSame(3, f($rows));",
+                "self::assertNotSame(3, f($rows));",
+                "assertSame",
+                "assertNotSame",
+            ),
+            (
+                "$this->assertNotNull(f($rows));",
+                "$this->assertNull(f($rows));",
+                "assertNotNull",
+                "assertNull",
+            ),
+            (
+                "$this->assertContains('a', f($rows));",
+                "$this->assertNotContains('a', f($rows));",
+                "assertContains",
+                "assertNotContains",
+            ),
+            (
+                "$this->assertEmpty(f($rows));",
+                "$this->assertNotEmpty(f($rows));",
+                "assertEmpty",
+                "assertNotEmpty",
+            ),
+            (
+                "$this->assertArrayHasKey('a', f($rows));",
+                "$this->assertArrayNotHasKey('a', f($rows));",
+                "assertArrayHasKey",
+                "assertArrayNotHasKey",
+            ),
+            (
+                "$this->assertStringStartsWith('a', f($rows));",
+                "$this->assertStringStartsNotWith('a', f($rows));",
+                "assertStringStartsWith",
+                "assertStringStartsNotWith",
+            ),
+            (
+                "expect(f($rows))->toBeTrue();",
+                "expect(f($rows))->toBeFalse();",
+                "toBeTrue",
+                "toBeFalse",
+            ),
+            (
+                "expect(f($rows))->toContain('a');",
+                "expect(f($rows))->not->toContain('a');",
+                "toContain",
+                "not->toContain",
+            ),
+            (
+                "expect(f($rows))->not->toBeNull();",
+                "expect(f($rows))->toBeNull();",
+                "not->toBeNull",
+                "toBeNull",
+            ),
+        ] {
+            assert_eq!(
+                php_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // A checked value that changed is not paired; two methods of different families
+        // are not twins; a method swapped for its own spelling keeps the polarity.
+        for (a, b) in [
+            (
+                "$this->assertTrue(f($rows));",
+                "$this->assertFalse(g($rows));",
+            ),
+            (
+                "$this->assertNull(f($rows));",
+                "$this->assertFalse(f($rows));",
+            ),
+            (
+                "$this->assertEmpty(f($rows));",
+                "$this->assertNotCount(0, f($rows));",
+            ),
+            (
+                "$this->assertTrue(f($rows));",
+                "self::assertTrue(f($rows));",
+            ),
+            (
+                "expect(f($rows))->toBeTrue();",
+                "expect(f($rows))->toBeTruthy();",
+            ),
+        ] {
+            assert_eq!(php_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }
