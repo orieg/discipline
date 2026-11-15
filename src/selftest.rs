@@ -4964,6 +4964,45 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-scala")]
+    (
+        "assertion-reduction: a Scala assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let sc = |check: &str| {
+                format!(
+                    "class SSuite extends munit.FunSuite {{\n  test(\"t\") {{\n    {check}\n  }}\n}}\n"
+                )
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("f(6) should be > 6", "f(6) should be >= 6"),
+                ("f(0) shouldBe 0", "f(0) should not be 1"),
+                ("assert(f(6) > 6)", "assert(f(6) >= 6)"),
+                ("assertEquals(f(0), 0)", "assertNotEquals(f(0), 1)"),
+                ("assertTrue(f(6))", "assertFalse(f(6))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("src/test/scala/SSuite.scala", &sc(base), &sc(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: SSuite.t the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "src/test/scala/SSuite.scala",
+                    &sc("f(6) should be >= 6"),
+                    &sc("f(6) should be > 6"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

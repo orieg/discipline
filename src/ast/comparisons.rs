@@ -12,8 +12,8 @@
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
 //! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
-//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP, Kotlin, Ruby and Swift
-//! assertions (#1070).
+//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP, Kotlin, Ruby, Swift and
+//! Scala assertions (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -58,6 +58,10 @@
 //! (`XCTAssertEqual`, `XCTAssertGreaterThan`) as its operator, an assertion with a
 //! negated twin as a polarity, and the comparisons of an `XCTAssert` / `XCTAssertTrue` /
 //! `XCTAssertFalse` or Swift Testing `#expect` / `#require` condition.
+//! Scala reads ScalaTest infix matchers by their phrase (`shouldBe`, `should be >`,
+//! `should not equal`, `should contain`), MUnit / JUnit `assertEquals` /
+//! `assertNotEquals` and twins as Java's, and the comparisons of an `assert(..)`
+//! condition.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -215,6 +219,7 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
                 .or_else(|| kotest_polarity(operator))
                 .or_else(|| rb_polarity(operator))
                 .or_else(|| xct_check(operator).and_then(|c| c.polar))
+                .or_else(|| sc_polarity(operator))
         }
     })
 }
@@ -1009,8 +1014,8 @@ fn c_bare(mut n: Node) -> Node {
     }
 }
 
-/// Java, C#, C/C++, PHP, Kotlin and Ruby: each comparison that is a whole operand of a
-/// condition, through `&&`, `||` (`and`, `or`) and parentheses. One inside a call's
+/// Java, C#, C/C++, PHP, Kotlin, Ruby and Scala: each comparison that is a whole operand
+/// of a condition, through `&&`, `||` (`and`, `or`) and parentheses. One inside a call's
 /// arguments or after `!` is not read.
 fn c_operands(
     records: &mut Records<Comparison>,
@@ -1021,7 +1026,10 @@ fn c_operands(
     is_literal: &dyn Fn(Node) -> bool,
 ) {
     let cond = c_bare(cond);
-    if !matches!(cond.kind(), "binary_expression" | "binary") {
+    if !matches!(
+        cond.kind(),
+        "binary_expression" | "binary" | "infix_expression"
+    ) {
         return;
     }
     let (Some(l), Some(op), Some(r)) = (
@@ -3013,6 +3021,246 @@ pub fn swift(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+/// ScalaTest matcher words a call expands into (`equal (6)`, `contain ("a")`).
+const SC_WORDS: &[&str] = &[
+    "be",
+    "equal",
+    "===",
+    "contain",
+    "startWith",
+    "endWith",
+    "include",
+];
+
+/// ScalaTest matchers read as a polarity, `not` / `shouldNot` negating.
+const SC_POLAR: &[&str] = &["contain", "startWith", "endWith", "include"];
+
+/// ScalaTest: a matcher phrase (`should not be >`, `shouldBe`) as whether it is negated
+/// and the matcher after `should` / `shouldNot` / `should not`.
+fn sc_phrase(operator: &str) -> Option<(bool, String)> {
+    let words: Vec<&str> = operator.split(' ').collect();
+    let (not, rest): (bool, &[&str]) = match words.as_slice() {
+        ["shouldBe"] => return Some((false, "be".into())),
+        ["shouldEqual"] => return Some((false, "equal".into())),
+        ["shouldNot", rest @ ..] => (true, rest),
+        ["should", "not", rest @ ..] => (true, rest),
+        ["should", rest @ ..] => (false, rest),
+        _ => return None,
+    };
+    let matcher = rest.join(" ");
+    let known = matches!(
+        rest,
+        ["be"] | ["equal"] | ["==="] | ["be", "<" | "<=" | ">" | ">="]
+    ) || matches!(rest, [m] if SC_POLAR.contains(m));
+    known.then_some((not, matcher))
+}
+
+/// ScalaTest: the operator a matcher phrase must satisfy, a negation applied.
+fn sc_passing(operator: &str, negate: bool) -> Option<&'static str> {
+    let (not, matcher) = sc_phrase(operator)?;
+    let op = match matcher.as_str() {
+        "be" | "equal" | "===" => "==",
+        "be <" => "<",
+        "be <=" => "<=",
+        "be >" => ">",
+        "be >=" => ">=",
+        _ => return None,
+    };
+    passing(op, negate != not)
+}
+
+/// ScalaTest: the polarity of a matcher phrase: an equality (`shouldBe` / `should not
+/// be`) or a matcher of [`SC_POLAR`].
+fn sc_polarity(operator: &str) -> Option<(&'static str, bool)> {
+    let (not, matcher) = sc_phrase(operator)?;
+    let family = match matcher.as_str() {
+        // `shouldBe` is read first as Kotest's (`kotest_polarity`), under its own name.
+        "be" | "equal" | "===" => "shouldBe",
+        m => *SC_POLAR.iter().find(|p| **p == m)?,
+    };
+    Some((family, not))
+}
+
+fn sc_literal(n: Node, src: &str) -> bool {
+    let num = |n: Node| matches!(n.kind(), "integer_literal" | "floating_point_literal");
+    match n.kind() {
+        "string" | "boolean_literal" | "character_literal" | "null_literal" => true,
+        "prefix_expression" => {
+            let mut c = n.walk();
+            let kids: Vec<Node> = n.children(&mut c).collect();
+            matches!(kids.as_slice(), [op, operand] if text(*op, src) == "-" && num(*operand))
+        }
+        _ => num(n),
+    }
+}
+
+/// The expressions of a Scala call's arguments.
+fn sc_args(call: Node) -> Vec<Node> {
+    call.child_by_field_name("arguments")
+        .filter(|a| a.kind() == "arguments")
+        .map(|a| {
+            let mut c = a.walk();
+            a.named_children(&mut c)
+                .filter(|n| !n.is_extra())
+                .map(unparenthesized)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// ScalaTest: the words of an infix matcher statement, the subject first and the value
+/// last: `f(rows) should not be > 6` is `f(rows)`, `should`, `not`, `be`, `>`, `6`.
+fn sc_words<'t>(n: Node<'t>, src: &str, out: &mut Vec<Node<'t>>) {
+    match n.kind() {
+        "infix_expression" => {
+            let (Some(l), Some(op), Some(r)) = (
+                n.child_by_field_name("left"),
+                n.child_by_field_name("operator"),
+                n.child_by_field_name("right"),
+            ) else {
+                out.push(n);
+                return;
+            };
+            sc_words(l, src, out);
+            out.push(op);
+            sc_words(r, src, out);
+        }
+        "call_expression" => {
+            let function = n.child_by_field_name("function");
+            let args = sc_args(n);
+            match (function, args.as_slice()) {
+                (Some(f), [arg]) if SC_WORDS.contains(&text(f, src)) => {
+                    out.push(f);
+                    out.push(*arg);
+                }
+                _ => out.push(n),
+            }
+        }
+        _ => out.push(unparenthesized(n)),
+    }
+}
+
+/// Scala: a ScalaTest infix matcher (`x shouldBe 6`, `x should be > 6`, `x should not
+/// equal (6)`, `x should contain ("a")`): the phrase between the subject and the value
+/// masked as the operator, and the value when it is a literal.
+fn sc_matcher(records: &mut Records<Comparison>, stmt: Node, src: &str) -> bool {
+    let mut words = Vec::new();
+    sc_words(stmt, src, &mut words);
+    let [_, phrase @ .., value] = words.as_slice() else {
+        return false;
+    };
+    if phrase.is_empty()
+        || !phrase
+            .iter()
+            .all(|w| matches!(w.kind(), "identifier" | "operator_identifier"))
+    {
+        return false;
+    }
+    let operator = phrase
+        .iter()
+        .map(|w| text(*w, src))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let compared = sc_passing(&operator, false).is_some();
+    if !compared && sc_polarity(&operator).is_none() {
+        return false;
+    }
+    let (first, last) = (phrase[0], phrase[phrase.len() - 1]);
+    // Only spaces and a parenthesis between the phrase and the value: the grammar reads
+    // `x should not be > 6` as `be` given `> 6`, which is not the phrase it looks like.
+    let gap = src.get(last.end_byte()..value.start_byte()).unwrap_or("");
+    if !gap.chars().all(|c| c.is_whitespace() || c == '(') {
+        return false;
+    }
+    let literal = Some(*value).filter(|v| compared && sc_literal(*v, src));
+    let mut holes = vec![(first.start_byte(), last.end_byte(), "@")];
+    holes.extend(literal.map(|l| (l.start_byte(), l.end_byte(), "#")));
+    records.add(Comparison {
+        line: first.start_position().row + 1,
+        skeleton: spliced(stmt, &mut holes, src),
+        operator,
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    true
+}
+
+/// Scala: an `assert(..)` condition's comparisons, and a MUnit / JUnit assertion of
+/// [`JAVA_POLAR`] and [`JAVA_EQUALITY`] called without a receiver: the method masked,
+/// the literal of an equality masked, and the comparisons of an `assertTrue` /
+/// `assertFalse` condition, `assertFalse` read as a failure condition.
+fn sc_assert(records: &mut Records<Comparison>, stmt: Node, src: &str) -> bool {
+    let Some(name) = stmt
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "identifier")
+    else {
+        return false;
+    };
+    let method = text(name, src);
+    let args = sc_args(stmt);
+    if method == "assert" {
+        if let Some(cond) = args.first() {
+            c_operands(records, stmt, *cond, src, false, &|n| sc_literal(n, src));
+        }
+        return true;
+    }
+    let equality = JAVA_EQUALITY.contains(&method);
+    if !equality && !JAVA_POLAR.contains(&method) {
+        return false;
+    }
+    let literal = if equality {
+        args.iter().take(2).copied().find(|a| sc_literal(*a, src))
+    } else {
+        None
+    };
+    let mut holes = vec![(name, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: method.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    if matches!(method, "assertTrue" | "assertFalse") {
+        if let Some(cond) = args.first() {
+            c_operands(records, stmt, *cond, src, method == "assertFalse", &|n| {
+                sc_literal(n, src)
+            });
+        }
+    }
+    true
+}
+
+/// Scala: comparisons and polarity in `assert(..)` and MUnit / JUnit assertions
+/// ([`sc_assert`]) and ScalaTest infix matchers ([`sc_matcher`]), each read from a
+/// statement of a block.
+pub fn scala(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if !matches!(node.kind(), "block" | "indented_block") {
+            return true;
+        }
+        let mut cursor = node.walk();
+        let statements: Vec<Node> = node.named_children(&mut cursor).collect();
+        for stmt in statements {
+            match stmt.kind() {
+                "call_expression" => {
+                    sc_assert(records, stmt, src);
+                }
+                "infix_expression" => {
+                    sc_matcher(records, stmt, src);
+                }
+                _ => {}
+            }
+        }
+        true
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
@@ -3078,6 +3326,7 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
             None => {
                 return cs_constraint_passing(operator, fails_when_true != not)
                     .or_else(|| rb_passing(operator, fails_when_true != not))
+                    .or_else(|| sc_passing(operator, fails_when_true != not))
             }
         },
     };
@@ -5818,6 +6067,230 @@ mod tests {
             ("XCTAssert(f(rows))", "XCTAssertTrue(f(rows))"),
         ] {
             assert_eq!(sw_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn sc(check: &str) -> Vec<Comparison> {
+        let src = if check.contains("should") {
+            format!(
+                "class RowsSpec extends AnyFlatSpec with Matchers {{\n  \"rows\" should \"count\" in {{\n    val rows = List(1)\n    {check}\n  }}\n}}\n"
+            )
+        } else {
+            format!(
+                "class RowsSuite extends munit.FunSuite {{\n  test(\"counts\") {{\n    val rows = List(1)\n    {check}\n  }}\n}}\n"
+            )
+        };
+        comparisons(
+            &crate::ast::scala::ScalaPack,
+            "src/test/scala/RowsSpec.scala",
+            &src,
+        )
+    }
+
+    fn sc_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&sc(a), &sc(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn sc_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        sc(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    #[test]
+    fn scala_records_scalatest_munit_and_assert_comparisons_with_literals_masked() {
+        assert_eq!(
+            sc_read("f(rows) shouldBe 6"),
+            vec![read("shouldBe", Some("6"), "f(rows) @ #")]
+        );
+        assert_eq!(
+            sc_read("f(rows) should be > -1"),
+            vec![read("should be >", Some("-1"), "f(rows) @ #")]
+        );
+        assert_eq!(
+            sc_read("f(rows) should not equal (\"a\")"),
+            vec![read("should not equal", Some("\"a\""), "f(rows) @ (#)")]
+        );
+        assert_eq!(
+            sc_read("f(rows) should === (6)"),
+            vec![read("should ===", Some("6"), "f(rows) @ (#)")]
+        );
+        assert_eq!(
+            sc_read("f(rows) should contain (\"a\")"),
+            vec![read("should contain", None, "f(rows) @ (\"a\")")]
+        );
+        assert_eq!(
+            sc_read("assert(f(rows) > 6 && g(rows) <= 1.5)"),
+            vec![
+                read(">", Some("6"), "assert(f(rows) @ # && g(rows) <= 1.5)"),
+                read("<=", Some("1.5"), "assert(f(rows) > 6 && g(rows) @ #)"),
+            ]
+        );
+        assert_eq!(
+            sc_read("assert((f(rows) == null) || ok)"),
+            vec![read("==", Some("null"), "assert((f(rows) @ #) || ok)")]
+        );
+        assert_eq!(
+            sc_read("assertEquals(f(rows), 3, \"three rows\")"),
+            vec![read(
+                "assertEquals",
+                Some("3"),
+                "@(f(rows), #, \"three rows\")"
+            )]
+        );
+        assert_eq!(
+            sc_read("assertTrue(f(rows) >= 6)"),
+            vec![
+                read("assertTrue", None, "@(f(rows) >= 6)"),
+                read(">=", Some("6"), "assertTrue(f(rows) @ #)"),
+            ]
+        );
+        // Not read: a matcher outside the lists, a call outside the lists, a comparison
+        // inside a call's arguments or after `!`, an interpolated string as the literal.
+        for check in [
+            "f(rows) should have length 6",
+            "f(rows) should not be > 6",
+            "f(rows) shouldBe empty should be",
+            "assume(f(rows) > 6)",
+            "assert(g(f(rows) > 6))",
+            "assert(!(f(rows) > 6))",
+        ] {
+            assert_eq!(sc_read(check), vec![], "{check}");
+        }
+        assert_eq!(
+            sc_read("f(rows) shouldBe s\"a$x\""),
+            vec![read("shouldBe", None, "f(rows) @ s\"a$x\"")]
+        );
+    }
+
+    #[test]
+    fn scala_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "f(rows) should be > 6",
+                "f(rows) should be >= 6",
+                "should be >",
+                "should be >=",
+            ),
+            (
+                "f(rows) should be < 6",
+                "f(rows) should be <= 7",
+                "should be <",
+                "should be <=",
+            ),
+            (
+                "f(rows) shouldBe 0",
+                "f(rows) should not be 1",
+                "shouldBe",
+                "should not be",
+            ),
+            (
+                "f(rows) shouldBe 0",
+                "f(rows) should be >= 0",
+                "shouldBe",
+                "should be >=",
+            ),
+            (
+                "f(rows) should equal (0)",
+                "f(rows) should not equal (1)",
+                "should equal",
+                "should not equal",
+            ),
+            (
+                "assertEquals(f(rows), 0)",
+                "assertNotEquals(f(rows), 1)",
+                "assertEquals",
+                "assertNotEquals",
+            ),
+            ("assert(f(rows) > 6)", "assert(f(rows) >= 6)", ">", ">="),
+            // A failure condition that now fails less often.
+            (
+                "assertFalse(f(rows) <= 6)",
+                "assertFalse(f(rows) < 6)",
+                "<=",
+                "<",
+            ),
+        ] {
+            assert_eq!(
+                sc_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Negative controls: tightened, kept, moved to an integer that accepts the same
+        // values, `!=` back to `==`, a failure condition tightened, a checked value that
+        // changed, a literal raised under the same operator.
+        for (a, b) in [
+            ("f(rows) should be >= 6", "f(rows) should be > 6"),
+            ("f(rows) shouldBe 6", "f(rows) should be 6"),
+            ("f(rows) should be > 6", "f(rows) should be >= 7"),
+            ("f(rows) should not be 1", "f(rows) shouldBe 2"),
+            ("assertFalse(f(rows) < 6)", "assertFalse(f(rows) <= 6)"),
+            ("f(rows) should be > 6", "g(rows) should be >= 6"),
+            ("f(rows) should be > 6", "f(rows) should be > 7"),
+        ] {
+            assert_eq!(sc_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn scala_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            (
+                "f(rows) shouldBe 3",
+                "f(rows) should not be 3",
+                "shouldBe",
+                "should not be",
+            ),
+            (
+                "f(rows) should contain (\"a\")",
+                "f(rows) should not contain (\"a\")",
+                "should contain",
+                "should not contain",
+            ),
+            (
+                "f(rows) should startWith (\"a\")",
+                "f(rows) shouldNot startWith (\"a\")",
+                "should startWith",
+                "shouldNot startWith",
+            ),
+            (
+                "assertEquals(f(rows), 3)",
+                "assertNotEquals(f(rows), 3)",
+                "assertEquals",
+                "assertNotEquals",
+            ),
+            (
+                "assertTrue(f(rows))",
+                "assertFalse(f(rows))",
+                "assertTrue",
+                "assertFalse",
+            ),
+        ] {
+            assert_eq!(
+                sc_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // A checked value that changed is not paired; two matchers of different families
+        // are not twins; `should not` -> `shouldNot` keeps the polarity.
+        for (a, b) in [
+            ("assertTrue(f(rows))", "assertFalse(g(rows))"),
+            (
+                "f(rows) should contain (\"a\")",
+                "f(rows) should not startWith (\"a\")",
+            ),
+            (
+                "f(rows) should not contain (\"a\")",
+                "f(rows) shouldNot contain (\"a\")",
+            ),
+        ] {
+            assert_eq!(sc_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }
