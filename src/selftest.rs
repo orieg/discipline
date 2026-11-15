@@ -4922,6 +4922,48 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-swift")]
+    (
+        "assertion-reduction: a Swift assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let sw = |check: &str| {
+                format!(
+                    "import XCTest\n\nfinal class STests: XCTestCase {{\n    func testT() {{\n        {check}\n    }}\n}}\n"
+                )
+            };
+            let mut ok = true;
+            for (base, head) in [
+                (
+                    "XCTAssertGreaterThan(f(6), 6)",
+                    "XCTAssertGreaterThanOrEqual(f(6), 6)",
+                ),
+                ("XCTAssertTrue(f(6))", "XCTAssertFalse(f(6))"),
+                ("XCTAssert(f(6) > 6)", "XCTAssert(f(6) >= 6)"),
+                ("XCTAssertEqual(f(0), 0)", "XCTAssertNotEqual(f(0), 1)"),
+                ("XCTAssertNotNil(f(6))", "XCTAssertNil(f(6))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("Tests/STests.swift", &sw(base), &sw(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: STests.testT the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "Tests/STests.swift",
+                    &sw("XCTAssertGreaterThanOrEqual(f(6), 6)"),
+                    &sw("XCTAssertGreaterThan(f(6), 6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

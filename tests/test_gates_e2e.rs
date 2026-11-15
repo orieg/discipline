@@ -2133,6 +2133,116 @@ fn a_ruby_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     }
 }
 
+/// Swift assertions (#1070) weakened or inverted are reported as the same finding: an
+/// XCTest ordering moved the loose way, `XCTAssertTrue` -> `XCTAssertFalse`, a
+/// condition's comparison widened, `XCTAssertEqual` -> `XCTAssertNotEqual` read as `==`
+/// -> `!=`, and a Swift Testing `#expect` condition widened.
+#[test]
+fn a_swift_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let xctest = |check: &str| {
+        format!(
+            "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {{\n    func testCounts() {{\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let testing = |check: &str| {
+        format!(
+            "import Testing\n@testable import Rows\n\n@Test func counts() {{\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    {check}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "Sources/Rows/Rows.swift",
+            "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        );
+        let (path, wrap): (&str, &dyn Fn(&str) -> String) = if base.contains('#') {
+            ("Tests/RowsTests/CountTests.swift", &testing)
+        } else {
+            ("Tests/RowsTests/RowsTests.swift", &xctest)
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (test, base, head, ops) in [
+        (
+            "RowsTests.testCounts",
+            "XCTAssertGreaterThan(countRows(rows), 6, \"seven rows\")",
+            "XCTAssertGreaterThanOrEqual(countRows(rows), 6, \"seven rows\")",
+            "`XCTAssertGreaterThan` to `XCTAssertGreaterThanOrEqual`",
+        ),
+        (
+            "RowsTests.testCounts",
+            "XCTAssertTrue(countRows(rows) == 7)",
+            "XCTAssertFalse(countRows(rows) == 7)",
+            "`XCTAssertTrue` to `XCTAssertFalse`",
+        ),
+        (
+            "RowsTests.testCounts",
+            "XCTAssert(countRows(rows) > 6)",
+            "XCTAssert(countRows(rows) >= 6)",
+            "`>` to `>=`",
+        ),
+        (
+            "RowsTests.testCounts",
+            "XCTAssertEqual(countRows([]), 0)",
+            "XCTAssertNotEqual(countRows([]), 1)",
+            "`XCTAssertEqual` to `XCTAssertNotEqual`",
+        ),
+        (
+            "RowsTests.testCounts",
+            "XCTAssertNotNil(countRows(rows))",
+            "XCTAssertNil(countRows(rows))",
+            "`XCTAssertNotNil` to `XCTAssertNil`",
+        ),
+        (
+            "counts",
+            "#expect(countRows(rows) >= 7)",
+            "#expect(countRows(rows) != 0)",
+            "`>=` to `!=`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("countRows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "XCTAssertGreaterThanOrEqual(countRows(rows), 6)",
+            "XCTAssertGreaterThan(countRows(rows), 6)",
+        ),
+        (
+            "XCTAssertFalse(countRows(rows) < 6)",
+            "XCTAssertFalse(countRows(rows) <= 6)",
+        ),
+        (
+            "#expect(countRows(rows) > 6)",
+            "#expect(countRows(rows) > 7)",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
