@@ -4797,6 +4797,17 @@ const CASES: &[Case] = &[
                 "",
             )?
             .is_empty();
+            // Control: a Unity `GREATER_OR_EQUAL` tightened is an ordering both sides, not an
+            // equality assertion dropped.
+            ok &= helper_change(
+                &[(
+                    "tests/TTest.cpp",
+                    &cc("TEST_ASSERT_GREATER_OR_EQUAL(6, F(6))"),
+                    &cc("TEST_ASSERT_GREATER_THAN(6, F(6))"),
+                )],
+                "",
+            )?
+            .is_empty();
             Ok(ok)
         },
     ),
@@ -4941,6 +4952,8 @@ const CASES: &[Case] = &[
                 ("XCTAssert(f(6) > 6)", "XCTAssert(f(6) >= 6)"),
                 ("XCTAssertEqual(f(0), 0)", "XCTAssertNotEqual(f(0), 1)"),
                 ("XCTAssertNotNil(f(6))", "XCTAssertNil(f(6))"),
+                // `>=` is a custom infix operator to the grammar, and still a comparison.
+                ("#expect(f(6) > 6)", "#expect(f(6) >= 6)"),
             ] {
                 let change = |head: &str, body: &str| {
                     helper_change(&[("Tests/STests.swift", &sw(base), &sw(head))], body)

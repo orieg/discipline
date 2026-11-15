@@ -1248,10 +1248,14 @@ impl<'a> CCppExtractor<'a> {
         test_fn: &mut TestFn,
     ) {
         test_fn.total_asserts += 1;
-        let is_strong = fn_name.contains("EQUAL")
-            || fn_name.contains("_EQ")
-            || fn_name.contains("_NE")
-            || fn_name.contains("MATCH");
+        // Unity's `GREATER_OR_EQUAL` / `LESS_OR_EQUAL` hold "EQUAL" but are orderings,
+        // counted like `GREATER_THAN` / `LESS_THAN`.
+        let ordering = fn_name.contains("GREATER_") || fn_name.contains("LESS_");
+        let is_strong = !ordering
+            && (fn_name.contains("EQUAL")
+                || fn_name.contains("_EQ")
+                || fn_name.contains("_NE")
+                || fn_name.contains("MATCH"));
         if is_strong {
             test_fn.strong_asserts += 1;
             if args.len() >= 2 {
@@ -2014,5 +2018,19 @@ int main() {
                 .skipped_error_nodes_count,
             0
         );
+    }
+
+    #[test]
+    fn unity_ordering_macros_are_not_equality_assertions() {
+        // `TEST_ASSERT_GREATER_OR_EQUAL` holds "EQUAL" in its name but is an ordering.
+        let src = "#include \"unity.h\"\nvoid test_counts(void) {\n    TEST_ASSERT_GREATER_OR_EQUAL(6, n);\n    TEST_ASSERT_LESS_OR_EQUAL_INT(6, n);\n    TEST_ASSERT_GREATER_THAN(6, n);\n    TEST_ASSERT_EQUAL_INT(6, n);\n    TEST_ASSERT_NOT_EQUAL(6, n);\n    TEST_ASSERT_EQUAL_INT(n, n);\n}\n";
+        let facts = CPack
+            .extract("test/test_counts.c", src, &AssertVocabulary::default())
+            .expect("extract succeeds");
+        let t = &facts.tests[0];
+        assert_eq!(t.total_asserts, 6);
+        // EQUAL_INT twice and NOT_EQUAL; the ordering forms are not counted.
+        assert_eq!(t.strong_asserts, 3, "{t:?}");
+        assert_eq!(t.tautologies, 1, "EQUAL_INT(n, n): {t:?}");
     }
 }
