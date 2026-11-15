@@ -488,10 +488,13 @@ Some checks need the public names a change adds, removes or modifies: a companio
 | **Kotlin** | every declaration that is not `private` or `internal` (public is the default), `protected` members included; the members of a `companion object` named on its class; enum entries | `private` and `internal` declarations, and everything inside them; the `val` / `var` parameters of a primary constructor, which are not read |
 | **Scala** | every definition that is not `private` (public is the default), `protected` members included; members of `object`, `class`, `trait` and `enum`; enum cases | `private` and `private[x]` definitions, and everything inside them; class parameters, which are not read |
 | **C#** | `public`, `protected` and `protected internal` types and members (methods, constructors, operators, fields, properties, events); members of an interface unless `private`; enum members; delegates. Namespaces do not qualify names | no modifier (`internal` for a type, `private` for a member), `internal`, `private` and `private protected` |
+| **Swift** | `public` and `open` declarations; members of a public protocol; the cases of a public enum; `init` as `Type.init`; the `public` members of an `extension`, named on the type it extends, and every member of a `public extension` not marked otherwise | no modifier (`internal`), `internal`, `fileprivate` and `private` |
+| **PHP** | every class, interface, trait, enum, function and constant of a file (namespaces do not qualify names); members (methods, constants, properties as `Class.prop` without `$`, enum cases) not marked `private` | `private` members |
+| **Ruby** | classes, modules and constants, qualified with `::` (`Store::LIMIT`); instance methods as `Class#method`, class methods as `Class.method`; `attr_reader` / `attr_writer` / `attr_accessor` names; `protected` methods | instance methods after a bare `private`, under `private def`, or named by `private :name`; constants named by `private_constant`; class methods named by `private_class_method`; a top-level `def` (a private method of `Object`) |
 
-The other packs (Swift, Objective-C, C / C++, PHP, Ruby) do not read public names yet. A changed file in their languages is "could not check".
+The C, C++ and Objective-C packs do not read public names yet: they parse after masking the repository's `[languages.c]` macros, which this reading does not see. A changed file in their languages is "could not check".
 
-Measured on `tests/fixtures/public_names_corpus.json` by `tests/test_public_names_corpus.rs`: precision and recall per language, both 1.0 for Rust, Python, Go, JavaScript / TypeScript, Java, Kotlin, Scala and C# (RUN). The corpus was written with the extraction and shows that it follows the table. It is not a measurement on real repositories.
+Measured on `tests/fixtures/public_names_corpus.json` by `tests/test_public_names_corpus.rs`: precision and recall per language, both 1.0 for every pack in the table (RUN). The corpus was written with the extraction and shows that it follows the table. It is not a measurement on real repositories.
 
 ---
 

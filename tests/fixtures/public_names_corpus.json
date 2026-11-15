@@ -209,6 +209,73 @@
         "Store.Store",
         "Store.Wide"
       ]
+    },
+    {
+      "language": "swift",
+      "path": "Sources/Store/Store.swift",
+      "source": "import Foundation\n\npublic struct Store {\n    public let limit: Int = 3\n    var hits = 0\n    public init() {}\n    public func get() -> Int { 1 }\n    func internalThing() {}\n    private func h() {}\n    fileprivate func f() {}\n    open class Inner {}\n}\n\nclass Hidden {\n    public func x() {}\n}\n\npublic protocol Api {\n    func call()\n    var name: String { get }\n}\n\nextension Store {\n    public func extra() {}\n    func quiet() {}\n}\n\npublic extension Store {\n    func loud() {}\n    private func shh() {}\n    internal func mid() {}\n}\n\npublic enum Mode {\n    case a, b\n}\n\npublic typealias Id = String\n\npublic func top() {}\nfunc local() {}\n\nopen class Base {\n    open func run() {}\n    internal func inside() {}\n}\n",
+      "public": [
+        "Api",
+        "Api.call",
+        "Api.name",
+        "Base",
+        "Base.run",
+        "Id",
+        "Mode",
+        "Mode.a",
+        "Mode.b",
+        "Store",
+        "Store.Inner",
+        "Store.extra",
+        "Store.get",
+        "Store.init",
+        "Store.limit",
+        "Store.loud",
+        "top"
+      ]
+    },
+    {
+      "language": "php",
+      "path": "src/Store.php",
+      "source": "<?php\nnamespace App;\n\nconst LIMIT = 3;\n\nfunction helper() {}\n\nclass Store {\n    public const VERSION = 1;\n    private const SECRET = 2;\n    public int $hits = 0;\n    protected $misses;\n    private $items;\n\n    public function get($k) {}\n    function implicit() {}\n    protected function hook() {}\n    private function h() {}\n    public static function create() {}\n}\n\ninterface Api {\n    public function call();\n}\n\ntrait Loggable {\n    public function log() {}\n    private function format() {}\n}\n\nenum Mode {\n    case A;\n    case B;\n}\n",
+      "public": [
+        "Api",
+        "Api.call",
+        "LIMIT",
+        "Loggable",
+        "Loggable.log",
+        "Mode",
+        "Mode.A",
+        "Mode.B",
+        "Store",
+        "Store.VERSION",
+        "Store.create",
+        "Store.get",
+        "Store.hits",
+        "Store.hook",
+        "Store.implicit",
+        "Store.misses",
+        "helper"
+      ]
+    },
+    {
+      "language": "ruby",
+      "path": "lib/store.rb",
+      "source": "module Store\n  LIMIT = 3\n  SECRET = 4\n  private_constant :SECRET\n\n  class Cache\n    VERSION = 1\n    attr_reader :size\n\n    def get(k); end\n    def self.create; end\n\n    protected\n\n    def hook; end\n\n    private\n\n    def h; end\n    attr_reader :hidden_attr\n  end\n\n  class Other\n    def a; end\n    private def b; end\n    def c; end\n    private :c\n    def self.build; end\n    def self.internal; end\n    private_class_method :internal\n  end\n\n  def self.helper; end\nend\n\ndef top; end\n",
+      "public": [
+        "Store",
+        "Store.helper",
+        "Store::Cache",
+        "Store::Cache#get",
+        "Store::Cache#hook",
+        "Store::Cache#size",
+        "Store::Cache.create",
+        "Store::Cache::VERSION",
+        "Store::LIMIT",
+        "Store::Other",
+        "Store::Other#a",
+        "Store::Other.build"
+      ]
     }
   ]
 }
