@@ -320,6 +320,77 @@ fn an_agent_cannot_silence_its_own_hook() {
     );
 }
 
+/// `check` lifts a finding a commit message waives and the hook does not (#170); the
+/// hook's report says why, in words that carry no directive syntax, and the person-facing
+/// lines of a stop let through and of observe mode say so too (#1102).
+#[test]
+fn the_hook_says_it_reads_no_waiver_where_check_applies_one() {
+    let repo = Repo::new();
+    weakened(&repo);
+    repo.git(&["add", "-A"]);
+    repo.git(&[
+        "-c",
+        "user.email=t@example.invalid",
+        "-c",
+        "user.name=t",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "test: simplify",
+        "-m",
+        "allow-assertion-drop: adds the second check moved elsewhere",
+    ]);
+    let check = repo.check(&[]);
+    assert_eq!(
+        check.code, 0,
+        "check applies the commit's waiver: {}",
+        check.stdout
+    );
+
+    let run = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(run.code, 2, "{}", run.stderr);
+    for said in [
+        "as an agent's hook runs it: it judges the change against `",
+        "reads no directive, so a finding in a commit already made is reported here until the branch merges",
+        "CI judges the reviewed pull request, and its verdict can differ.",
+    ] {
+        assert!(run.stderr.contains(said), "missing {said:?}: {}", run.stderr);
+    }
+    assert!(!run.stderr.contains("CI runs it again"), "{}", run.stderr);
+    assert!(!run.stderr.contains("allow-"), "{}", run.stderr);
+    assert!(
+        !run.stderr.contains("applies no waiver"),
+        "the person's line reached the model: {}",
+        run.stderr
+    );
+
+    let let_through = hook(
+        &repo,
+        &["hook", "run", "--agent", "claude-code"],
+        r#"{"hook_event_name":"Stop","stop_hook_active":true}"#,
+    );
+    assert_eq!(let_through.code, 0, "{}", let_through.stderr);
+    assert!(
+        let_through.stderr.contains("the hook applies no waiver: a finding that a commit message or the pull request body waives is still reported here until the branch merges, and CI decides it."),
+        "{}",
+        let_through.stderr
+    );
+
+    let observe = hook(
+        &repo,
+        &["hook", "run", "--agent", "claude-code", "--observe"],
+        r#"{"hook_event_name":"Stop"}"#,
+    );
+    assert_eq!(observe.code, 0, "{}", observe.stderr);
+    assert!(
+        observe.stderr.contains("the hook applies no waiver"),
+        "{}",
+        observe.stderr
+    );
+}
+
 #[test]
 fn the_shared_hook_file_is_not_scratch_state() {
     let repo = Repo::new();
