@@ -5003,6 +5003,48 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-objc")]
+    (
+        "assertion-reduction: an Objective-C assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let oc = |check: &str| {
+                format!(
+                    "@interface STests : XCTestCase\n@end\n\n@implementation STests\n- (void)testT {{\n    {check};\n}}\n@end\n"
+                )
+            };
+            let mut ok = true;
+            for (base, head) in [
+                (
+                    "XCTAssertGreaterThan(F(6), 6)",
+                    "XCTAssertGreaterThanOrEqual(F(6), 6)",
+                ),
+                ("XCTAssertTrue(F(6))", "XCTAssertFalse(F(6))"),
+                ("XCTAssert(F(6) > 6)", "XCTAssert(F(6) >= 6)"),
+                ("XCTAssertEqual(F(0), 0)", "XCTAssertNotEqual(F(0), 1)"),
+                ("NSAssert(F(6) > 6, @\"m\")", "NSAssert(F(6) >= 6, @\"m\")"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("Tests/STests.m", &oc(base), &oc(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: STests.testT the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "Tests/STests.m",
+                    &oc("XCTAssertGreaterThanOrEqual(F(6), 6)"),
+                    &oc("XCTAssertGreaterThan(F(6), 6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

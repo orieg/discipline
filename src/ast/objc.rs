@@ -123,6 +123,7 @@ impl LanguagePack for ObjcPack {
         extractor.resolve_same_file_helpers();
         OBJC_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::objc(root, src, &mut extractor.facts.tests);
+        super::comparisons::objc(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string_literal"]);
         Ok(extractor.facts)
     }

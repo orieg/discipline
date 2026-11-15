@@ -2352,6 +2352,104 @@ fn a_scala_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     }
 }
 
+/// Objective-C assertions (#1070) weakened or inverted are reported as the same finding:
+/// an XCTest ordering moved the loose way, `XCTAssertTrue` -> `XCTAssertFalse`, a
+/// condition's comparison widened, `XCTAssertEqualObjects` -> `XCTAssertNotEqualObjects`
+/// read as `==` -> `!=`, and an `NSAssert` condition widened.
+#[test]
+fn an_objc_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let xctest = |check: &str| {
+        format!(
+            "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {{\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    {check}\n}}\n\n@end\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "Sources/Rows.h",
+            "#import <Foundation/Foundation.h>\n\nNSInteger CountRows(NSArray *rows);\n",
+        );
+        repo.write(
+            "Sources/Rows.m",
+            "#import \"Rows.h\"\n\nNSInteger CountRows(NSArray *rows) {\n    return rows.count;\n}\n",
+        );
+        repo.commit_base("Tests/RowsTests.m", &xctest(base), "test: counts");
+        repo.write("Tests/RowsTests.m", &xctest(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "XCTAssertGreaterThan(CountRows(rows), 6, @\"seven rows\");",
+            "XCTAssertGreaterThanOrEqual(CountRows(rows), 6, @\"seven rows\");",
+            "`XCTAssertGreaterThan` to `XCTAssertGreaterThanOrEqual`",
+        ),
+        (
+            "XCTAssertTrue(CountRows(rows) == 7);",
+            "XCTAssertFalse(CountRows(rows) == 7);",
+            "`XCTAssertTrue` to `XCTAssertFalse`",
+        ),
+        (
+            "XCTAssert(CountRows(rows) > 6);",
+            "XCTAssert(CountRows(rows) >= 6);",
+            "`>` to `>=`",
+        ),
+        (
+            "XCTAssertEqualObjects([rows componentsJoinedByString:@\",\"], @\"1,2,3,4,5,6,7\");",
+            "XCTAssertNotEqualObjects([rows componentsJoinedByString:@\",\"], @\"\");",
+            "`XCTAssertEqualObjects` to `XCTAssertNotEqualObjects`",
+        ),
+        (
+            "XCTAssertEqual(CountRows(@[]), 0);",
+            "XCTAssertNotEqual(CountRows(@[]), 1);",
+            "`XCTAssertEqual` to `XCTAssertNotEqual`",
+        ),
+        (
+            "NSAssert(CountRows(rows) > 6, @\"seven rows\");",
+            "NSAssert(CountRows(rows) >= 6, @\"seven rows\");",
+            "`>` to `>=`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("CountRows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: RowsTests.testCounts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "XCTAssertGreaterThanOrEqual(CountRows(rows), 6);",
+            "XCTAssertGreaterThan(CountRows(rows), 6);",
+        ),
+        (
+            "XCTAssertFalse(CountRows(rows) < 6);",
+            "XCTAssertFalse(CountRows(rows) <= 6);",
+        ),
+        (
+            "XCTAssertGreaterThan(CountRows(rows), 6);",
+            "XCTAssertGreaterThan(CountRows(rows), 7);",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
