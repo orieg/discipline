@@ -4885,6 +4885,43 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-ruby")]
+    (
+        "assertion-reduction: a Ruby assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let rb = |check: &str| {
+                format!("class STest < Minitest::Test\n  def test_t\n    {check}\n  end\nend\n")
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("assert f(6) > 6", "assert f(6) >= 6"),
+                ("assert f(6)", "refute f(6)"),
+                ("assert_equal 0, f(0)", "refute_equal 1, f(0)"),
+                ("assert_operator f(6), :>, 6", "assert_operator f(6), :>=, 6"),
+                ("expect(f(6)).to be > 6", "expect(f(6)).to be >= 6"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("test/s_test.rb", &rb(base), &rb(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: test_t the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "test/s_test.rb",
+                    &rb("assert f(6) >= 6"),
+                    &rb("assert f(6) > 6"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

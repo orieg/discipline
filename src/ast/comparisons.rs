@@ -12,7 +12,8 @@
 //!
 //! Read for Python `assert` statements, Go `if` conditions whose block fails the test,
 //! Rust `assert!` / `debug_assert!` / `prop_assert!` conditions, JS/TS `expect(..)`
-//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP and Kotlin assertions (#1070).
+//! matchers and `assert(..)` calls, and Java, C#, C/C++, PHP, Kotlin and Ruby assertions
+//! (#1070).
 //!
 //! The polarity of a Python assertion is recorded the same way (#1049): the method of a
 //! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
@@ -49,6 +50,10 @@
 //! and Kotest matchers, infix (`x shouldBe 6`) or called: a comparison matcher
 //! (`shouldBeGreaterThan`) as its operator and a matcher with a negated twin
 //! (`shouldContain` / `shouldNotContain`) as a polarity.
+//! Ruby reads Minitest `assert_*` / `refute_*` twins as a polarity (`assert_equal` /
+//! `refute_equal` as `==` / `!=`, `assert_operator` as its symbol) and the comparisons of
+//! an `assert` / `refute` condition, and RSpec expectations by their runner and matcher
+//! (`to eq`, `not_to be >`, `to be_truthy`).
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -204,6 +209,7 @@ fn polarity(operator: &str) -> Option<(&'static str, bool)> {
                 .or_else(|| c_check(operator).and_then(|c| c.polar))
                 .or_else(|| php_polarity(operator))
                 .or_else(|| kotest_polarity(operator))
+                .or_else(|| rb_polarity(operator))
         }
     })
 }
@@ -984,7 +990,21 @@ fn java_literal(n: Node, src: &str) -> bool {
     }
 }
 
-/// Java, C#, C/C++, PHP and Kotlin: each comparison that is a whole operand of a
+/// An expression without its parentheses, a Ruby `(..)` holding one statement included.
+fn c_bare(mut n: Node) -> Node {
+    loop {
+        n = unparenthesized(n);
+        if n.kind() != "parenthesized_statements" || n.named_child_count() != 1 {
+            return n;
+        }
+        match n.named_child(0) {
+            Some(inner) => n = inner,
+            None => return n,
+        }
+    }
+}
+
+/// Java, C#, C/C++, PHP, Kotlin and Ruby: each comparison that is a whole operand of a
 /// condition, through `&&`, `||` (`and`, `or`) and parentheses. One inside a call's
 /// arguments or after `!` is not read.
 fn c_operands(
@@ -995,14 +1015,14 @@ fn c_operands(
     fails_when_true: bool,
     is_literal: &dyn Fn(Node) -> bool,
 ) {
-    let cond = unparenthesized(cond);
-    if cond.kind() != "binary_expression" {
+    let cond = c_bare(cond);
+    if !matches!(cond.kind(), "binary_expression" | "binary") {
         return;
     }
     let (Some(l), Some(op), Some(r)) = (
-        cond.child_by_field_name("left").map(unparenthesized),
+        cond.child_by_field_name("left").map(c_bare),
         cond.child_by_field_name("operator"),
-        cond.child_by_field_name("right").map(unparenthesized),
+        cond.child_by_field_name("right").map(c_bare),
     ) else {
         return;
     };
@@ -2466,6 +2486,307 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
+/// Ruby Minitest assertions with a negated twin, as (assertion, twin): the method masked.
+const RB_TWINS: &[(&str, &str)] = &[
+    ("assert", "refute"),
+    ("assert_equal", "refute_equal"),
+    ("assert_nil", "refute_nil"),
+    ("assert_empty", "refute_empty"),
+    ("assert_includes", "refute_includes"),
+    ("assert_match", "refute_match"),
+    ("assert_same", "refute_same"),
+    ("assert_kind_of", "refute_kind_of"),
+    ("assert_instance_of", "refute_instance_of"),
+    ("assert_predicate", "refute_predicate"),
+    ("assert_respond_to", "refute_respond_to"),
+    ("assert_in_delta", "refute_in_delta"),
+    ("assert_in_epsilon", "refute_in_epsilon"),
+    ("assert_operator", "refute_operator"),
+    ("assert_path_exists", "refute_path_exists"),
+];
+
+/// RSpec matchers read as `==`, the literal they are given masked.
+const RSPEC_EQUALITY: &[&str] = &["eq", "eql", "equal", "be"];
+
+/// RSpec matchers whose `not_to` / `to_not` form is read as the polarity inverted, and
+/// the twins `be_truthy` / `be_falsey`.
+const RSPEC_POLAR: &[&str] = &[
+    "be_truthy",
+    "be_falsey",
+    "be_falsy",
+    "be_nil",
+    "be_empty",
+    "be_a",
+    "be_an",
+    "be_kind_of",
+    "be_instance_of",
+    "be_an_instance_of",
+    "include",
+    "match",
+    "match_array",
+    "contain_exactly",
+    "start_with",
+    "end_with",
+    "have_key",
+    "raise_error",
+    "change",
+    "exist",
+    "satisfy",
+    "respond_to",
+];
+
+/// RSpec: a runner (`to`, `not_to`, `to_not`) and the matcher after it, as recorded: `to
+/// eq`, `not_to be >`.
+fn rspec_operator(operator: &str) -> Option<(bool, &str)> {
+    let (runner, matcher) = operator.split_once(' ')?;
+    let not = match runner {
+        "to" => false,
+        "not_to" | "to_not" => true,
+        _ => return None,
+    };
+    Some((not, matcher))
+}
+
+/// Ruby: the polarity of a Minitest assertion of [`RB_TWINS`] or an RSpec matcher of
+/// [`RSPEC_POLAR`] after its runner.
+fn rb_polarity(operator: &str) -> Option<(&'static str, bool)> {
+    if let Some((not, matcher)) = rspec_operator(operator) {
+        let (family, negated) = match matcher {
+            "be_falsey" | "be_falsy" => ("be_truthy", true),
+            _ => (*RSPEC_POLAR.iter().find(|m| **m == matcher)?, false),
+        };
+        return Some((family, negated != not));
+    }
+    RB_TWINS.iter().find_map(|(m, twin)| {
+        if *m == operator {
+            Some((*m, false))
+        } else if *twin == operator {
+            Some((*m, true))
+        } else {
+            None
+        }
+    })
+}
+
+/// Ruby: the operator an RSpec comparison (`to eq`, `not_to be >`) or a Minitest
+/// `assert_operator` symbol (`:>`) must satisfy, a negation applied.
+fn rb_passing(operator: &str, negate: bool) -> Option<&'static str> {
+    let (not, op) = match rspec_operator(operator) {
+        Some((not, m)) => (not, m.strip_prefix("be ").unwrap_or(m)),
+        None => (false, operator.strip_prefix(':')?),
+    };
+    let op = if RSPEC_EQUALITY.contains(&op) {
+        "=="
+    } else {
+        op
+    };
+    if !matches!(op, "==" | "!=" | "<" | "<=" | ">" | ">=") {
+        return None;
+    }
+    passing(op, negate != not)
+}
+
+fn rb_literal(n: Node, src: &str) -> bool {
+    let num = |n: Node| matches!(n.kind(), "integer" | "float");
+    match n.kind() {
+        "true" | "false" | "nil" | "simple_symbol" => true,
+        // A string without interpolation.
+        "string" => {
+            let mut c = n.walk();
+            let plain = n
+                .named_children(&mut c)
+                .all(|k| matches!(k.kind(), "string_content" | "escape_sequence"));
+            plain
+        }
+        "unary" => {
+            n.child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "-")
+                && n.child_by_field_name("operand").is_some_and(num)
+        }
+        _ => num(n),
+    }
+}
+
+/// The expressions of a Ruby call's arguments, a keyword argument left out.
+fn rb_args(call: Node) -> Vec<Node> {
+    let Some(list) = call.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut c = list.walk();
+    list.named_children(&mut c)
+        .filter(|a| !a.is_extra() && a.kind() != "pair")
+        .map(unparenthesized)
+        .collect()
+}
+
+/// Ruby: a Minitest assertion of [`RB_TWINS`] called without a receiver: the method
+/// masked, the literal of an `assert_equal` / `refute_equal` masked (read as `==` /
+/// `!=`), an `assert_operator` read as its operator symbol with the literal masked, and
+/// the comparisons of an `assert` / `refute` condition, `refute` read as a failure
+/// condition.
+fn rb_minitest(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    if call.child_by_field_name("receiver").is_some() {
+        return false;
+    }
+    let Some(name) = call.child_by_field_name("method") else {
+        return false;
+    };
+    let method = text(name, src);
+    if rb_polarity(method).is_none() {
+        return false;
+    }
+    let args = rb_args(call);
+    if matches!(method, "assert_operator" | "refute_operator") {
+        let (Some(op), Some(value)) = (args.get(1), args.get(2)) else {
+            return true;
+        };
+        if op.kind() != "simple_symbol" || rb_passing(text(*op, src), false).is_none() {
+            return true;
+        }
+        let literal = Some(*value).filter(|v| rb_literal(*v, src));
+        let mut holes = vec![(*op, '@')];
+        holes.extend(literal.map(|l| (l, '#')));
+        records.add(Comparison {
+            line: op.start_position().row + 1,
+            skeleton: skeleton(stmt, &mut holes, src),
+            operator: text(*op, src).to_string(),
+            literal: literal.map(|l| text(l, src).to_string()),
+            fails_when_true: method == "refute_operator",
+        });
+        return true;
+    }
+    let equality = matches!(method, "assert_equal" | "refute_equal");
+    let literal = if equality {
+        args.iter().take(2).copied().find(|a| rb_literal(*a, src))
+    } else {
+        None
+    };
+    let mut holes = vec![(name, '@')];
+    holes.extend(literal.map(|l| (l, '#')));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: skeleton(stmt, &mut holes, src),
+        operator: method.to_string(),
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    if matches!(method, "assert" | "refute") {
+        if let Some(cond) = args.first() {
+            c_operands(records, stmt, *cond, src, method == "refute", &|n| {
+                rb_literal(n, src)
+            });
+        }
+    }
+    true
+}
+
+/// Ruby: an RSpec `expect(..)` (or `is_expected`) expectation: its runner (`to`,
+/// `not_to`, `to_not`) and matcher masked, the matcher read as `==` ([`RSPEC_EQUALITY`]),
+/// as the operator of `be > 6`, or as a polarity ([`RSPEC_POLAR`]), and the literal of
+/// a comparison masked.
+fn rb_rspec(records: &mut Records<Comparison>, stmt: Node, call: Node, src: &str) -> bool {
+    let (Some(runner), Some(receiver)) = (
+        call.child_by_field_name("method"),
+        call.child_by_field_name("receiver"),
+    ) else {
+        return false;
+    };
+    let expects = match receiver.kind() {
+        "identifier" => text(receiver, src) == "is_expected",
+        "call" => {
+            receiver.child_by_field_name("receiver").is_none()
+                && receiver
+                    .child_by_field_name("method")
+                    .is_some_and(|m| text(m, src) == "expect")
+        }
+        _ => false,
+    };
+    if !expects || !matches!(text(runner, src), "to" | "not_to" | "to_not") {
+        return false;
+    }
+    let args = rb_args(call);
+    let [matcher] = args.as_slice() else {
+        return true;
+    };
+    // The matcher's start: `be` of `be > 6`, masked with its operator.
+    let mut from = matcher.start_byte();
+    let (name, literal) = match matcher.kind() {
+        // `be > 6`
+        "binary" => {
+            let (Some(l), Some(op), Some(r)) = (
+                matcher.child_by_field_name("left"),
+                matcher.child_by_field_name("operator"),
+                matcher.child_by_field_name("right").map(unparenthesized),
+            ) else {
+                return true;
+            };
+            if text(l, src) != "be" {
+                return true;
+            }
+            (op, Some(r))
+        }
+        "call" if matcher.child_by_field_name("receiver").is_none() => {
+            let Some(m) = matcher.child_by_field_name("method") else {
+                return true;
+            };
+            from = m.start_byte();
+            (m, rb_args(*matcher).first().copied())
+        }
+        "identifier" => (*matcher, None),
+        _ => return true,
+    };
+    let written = if matcher.kind() == "binary" {
+        format!("be {}", text(name, src))
+    } else {
+        text(name, src).to_string()
+    };
+    let operator = format!("{} {written}", text(runner, src));
+    let compared = rb_passing(&operator, false).is_some();
+    if !compared && rb_polarity(&operator).is_none() {
+        return true;
+    }
+    let literal = literal.filter(|l| compared && rb_literal(*l, src));
+    let mut holes = vec![
+        (runner.start_byte(), runner.end_byte(), "@"),
+        (from, name.end_byte(), "@"),
+    ];
+    holes.extend(literal.map(|l| (l.start_byte(), l.end_byte(), "#")));
+    records.add(Comparison {
+        line: name.start_position().row + 1,
+        skeleton: spliced(stmt, &mut holes, src),
+        operator,
+        literal: literal.map(|l| text(l, src).to_string()),
+        fails_when_true: false,
+    });
+    true
+}
+
+/// Ruby: comparisons and polarity in Minitest assertions ([`rb_minitest`]) and RSpec
+/// expectations ([`rb_rspec`]), each read from a statement that is the call.
+pub fn ruby(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let records = &mut Records::new(tests, src);
+    walk(root, &mut |node| {
+        if !matches!(
+            node.kind(),
+            "body_statement" | "block_body" | "then" | "else" | "begin" | "program"
+        ) {
+            return true;
+        }
+        let mut cursor = node.walk();
+        let statements: Vec<Node> = node
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() == "call")
+            .collect();
+        for stmt in statements {
+            let _ = rb_rspec(records, stmt, stmt, src) || rb_minitest(records, stmt, stmt, src);
+        }
+        true
+    });
+}
+
 /// The operator a comparison must satisfy for the test to pass: the operator itself in
 /// an assertion, its negation in a failure condition.
 fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
@@ -2505,6 +2826,8 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         "assertGreaterThanOrEqual" => (">=", "<"),
         "assertLessThan" => ("<", ">="),
         "assertLessThanOrEqual" => ("<=", ">"),
+        "assert_equal" => ("==", "!="),
+        "refute_equal" => ("!=", "=="),
         "shouldBe" => ("==", "!="),
         "shouldNotBe" => ("!=", "=="),
         "shouldBeGreaterThan" => (">", "<="),
@@ -2523,7 +2846,10 @@ fn passing(operator: &str, fails_when_true: bool) -> Option<&'static str> {
         "LessOrEqual" | "BeLessThanOrEqualTo" | "BeLessOrEqualTo" => ("<=", ">"),
         _ => match c_check(operator).and_then(|c| c.compare) {
             Some(op) => return passing(op, fails_when_true != not),
-            None => return cs_constraint_passing(operator, fails_when_true != not),
+            None => {
+                return cs_constraint_passing(operator, fails_when_true != not)
+                    .or_else(|| rb_passing(operator, fails_when_true != not))
+            }
         },
     };
     Some(if fails_when_true != not { negated } else { op })
@@ -4732,6 +5058,272 @@ mod tests {
             ("assertNull(f(rows))", "assertFalse(f(rows))"),
         ] {
             assert_eq!(kt_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    fn rb(check: &str) -> Vec<Comparison> {
+        let src = if check.contains("expect") {
+            format!("RSpec.describe Rows do\n  it \"counts\" do\n    rows = [1]\n    {check}\n  end\nend\n")
+        } else {
+            format!(
+                "class RowsTest < Minitest::Test\n  def test_counts\n    rows = [1]\n    {check}\n  end\nend\n"
+            )
+        };
+        let path = if check.contains("expect") {
+            "spec/rows_spec.rb"
+        } else {
+            "test/rows_test.rb"
+        };
+        comparisons(&crate::ast::ruby::RubyPack, path, &src)
+    }
+
+    fn rb_weakened(a: &str, b: &str) -> Vec<(String, String, bool)> {
+        weakened(&rb(a), &rb(b))
+            .into_iter()
+            .map(|w| (w.from, w.to, w.inverted))
+            .collect()
+    }
+
+    fn rb_read(check: &str) -> Vec<(String, Option<String>, String)> {
+        rb(check)
+            .into_iter()
+            .map(|c| (c.operator, c.literal, c.skeleton))
+            .collect()
+    }
+
+    #[test]
+    fn ruby_records_minitest_and_rspec_comparisons_with_literals_masked() {
+        assert_eq!(
+            rb_read("assert_equal 3, f(rows), \"three rows\""),
+            vec![read(
+                "assert_equal",
+                Some("3"),
+                "@ #, f(rows), \"three rows\""
+            )]
+        );
+        assert_eq!(
+            rb_read("refute_equal(f(rows), -1.5)"),
+            vec![read("refute_equal", Some("-1.5"), "@(f(rows), #)")]
+        );
+        assert_eq!(
+            rb_read("assert f(rows) > 6 && g(rows) <= -1"),
+            vec![
+                read("assert", None, "@ f(rows) > 6 && g(rows) <= -1"),
+                read(">", Some("6"), "assert f(rows) @ # && g(rows) <= -1"),
+                read("<=", Some("-1"), "assert f(rows) > 6 && g(rows) @ #"),
+            ]
+        );
+        assert_eq!(
+            rb_read("refute((f(rows) == nil) or ok)"),
+            vec![
+                read("refute", None, "@((f(rows) == nil) or ok)"),
+                read("==", Some("nil"), "refute((f(rows) @ #) or ok)"),
+            ]
+        );
+        assert_eq!(
+            rb_read("assert_operator f(rows), :>, 6"),
+            vec![read(":>", Some("6"), "assert_operator f(rows), @, #")]
+        );
+        assert_eq!(
+            rb_read("assert_nil f(rows)"),
+            vec![read("assert_nil", None, "@ f(rows)")]
+        );
+        assert_eq!(
+            rb_read("expect(f(rows)).to eq(6)"),
+            vec![read("to eq", Some("6"), "expect(f(rows)).@ @(#)")]
+        );
+        assert_eq!(
+            rb_read("expect(f(rows)).not_to be >= :a"),
+            vec![read("not_to be >=", Some(":a"), "expect(f(rows)).@ @ #")]
+        );
+        assert_eq!(
+            rb_read("is_expected.to eq(:a) # expect"),
+            vec![read("to eq", Some(":a"), "is_expected.@ @(#)")]
+        );
+        assert_eq!(
+            rb_read("expect(f(rows)).to be_truthy"),
+            vec![read("to be_truthy", None, "expect(f(rows)).@ @")]
+        );
+        assert_eq!(
+            rb_read("expect { f(rows) }.to raise_error(ArgumentError)"),
+            vec![read(
+                "to raise_error",
+                None,
+                "expect { f(rows) }.@ @(ArgumentError)"
+            )]
+        );
+        // Not read: a method outside the lists, a call on a receiver, a matcher outside
+        // the lists or chained, an operator symbol outside the comparisons, a comparison
+        // inside a call's arguments, an expectation not rooted at `expect`.
+        for check in [
+            "assert_equal_ish 6, f(rows)",
+            "other.assert f(rows) > 6",
+            "expect(f(rows)).to be_within(1).of(6)",
+            "expect(f(rows)).to have_attributes(size: 6)",
+            "assert_operator f(rows), :eql?, 6",
+            "want(f(rows)).to eq(6)",
+        ] {
+            assert_eq!(rb_read(check), vec![], "{check}");
+        }
+        assert_eq!(
+            rb_read("assert g(f(rows) > 6)"),
+            vec![read("assert", None, "@ g(f(rows) > 6)")]
+        );
+        assert_eq!(
+            rb_read("expect(f(rows)).to eq(\"a#{x}\")"),
+            vec![read("to eq", None, "expect(f(rows)).@ @(\"a#{x}\")")]
+        );
+    }
+
+    #[test]
+    fn ruby_comparisons_report_an_operator_that_accepts_more() {
+        for (a, b, from, to) in [
+            (
+                "expect(f(rows)).to be > 6",
+                "expect(f(rows)).to be >= 6",
+                "to be >",
+                "to be >=",
+            ),
+            (
+                "expect(f(rows)).to be < 6",
+                "expect(f(rows)).to be <= 7",
+                "to be <",
+                "to be <=",
+            ),
+            (
+                "expect(f(rows)).to eq(0)",
+                "expect(f(rows)).not_to eq(1)",
+                "to eq",
+                "not_to eq",
+            ),
+            (
+                "expect(f(rows)).to eq 0",
+                "expect(f(rows)).to be >= 0",
+                "to eq",
+                "to be >=",
+            ),
+            // `not_to` reads the negation: `> 6` -> `>= 6`.
+            (
+                "expect(f(rows)).not_to be <= 6",
+                "expect(f(rows)).to_not be < 6",
+                "not_to be <=",
+                "to_not be <",
+            ),
+            (
+                "assert_equal 0, f(rows)",
+                "refute_equal 1, f(rows)",
+                "assert_equal",
+                "refute_equal",
+            ),
+            ("assert f(rows) > 6", "assert f(rows) >= 6", ">", ">="),
+            // A failure condition that now fails less often.
+            ("refute f(rows) <= 6", "refute f(rows) < 6", "<=", "<"),
+            (
+                "assert_operator f(rows), :>, 6",
+                "assert_operator f(rows), :>=, 6",
+                ":>",
+                ":>=",
+            ),
+            (
+                "refute_operator f(rows), :<=, 6",
+                "refute_operator f(rows), :<, 6",
+                ":<=",
+                ":<",
+            ),
+        ] {
+            assert_eq!(
+                rb_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), false)],
+                "{a} -> {b}"
+            );
+        }
+        // Negative controls: tightened, kept, moved to an integer that accepts the same
+        // values, `!=` back to `==`, a failure condition tightened, a checked value that
+        // changed, a literal raised under the same operator.
+        for (a, b) in [
+            ("expect(f(rows)).to be >= 6", "expect(f(rows)).to be > 6"),
+            (
+                "expect(f(rows)).not_to be <= 6",
+                "expect(f(rows)).to_not be <= 6",
+            ),
+            ("expect(f(rows)).to be > 6", "expect(f(rows)).to be >= 7"),
+            ("expect(f(rows)).not_to eq(1)", "expect(f(rows)).to eq(2)"),
+            ("refute f(rows) < 6", "refute f(rows) <= 6"),
+            ("expect(f(rows)).to be > 6", "expect(g(rows)).to be >= 6"),
+            (
+                "assert_operator f(rows), :>, 6",
+                "assert_operator f(rows), :>, 7",
+            ),
+        ] {
+            assert_eq!(rb_weakened(a, b), vec![], "{a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn ruby_polarity_inversions_are_reported() {
+        for (a, b, from, to) in [
+            ("assert f(rows)", "refute f(rows)", "assert", "refute"),
+            (
+                "assert_equal 3, f(rows)",
+                "refute_equal 3, f(rows)",
+                "assert_equal",
+                "refute_equal",
+            ),
+            (
+                "refute_nil f(rows)",
+                "assert_nil f(rows)",
+                "refute_nil",
+                "assert_nil",
+            ),
+            (
+                "assert_includes f(rows), :a",
+                "refute_includes f(rows), :a",
+                "assert_includes",
+                "refute_includes",
+            ),
+            (
+                "expect(f(rows)).to be_truthy",
+                "expect(f(rows)).to be_falsey",
+                "to be_truthy",
+                "to be_falsey",
+            ),
+            (
+                "expect(f(rows)).to include(\"a\")",
+                "expect(f(rows)).not_to include(\"a\")",
+                "to include",
+                "not_to include",
+            ),
+            (
+                "expect(f(rows)).not_to be_nil",
+                "expect(f(rows)).to be_nil",
+                "not_to be_nil",
+                "to be_nil",
+            ),
+            (
+                "expect { f(rows) }.to raise_error(ArgumentError)",
+                "expect { f(rows) }.not_to raise_error(ArgumentError)",
+                "to raise_error",
+                "not_to raise_error",
+            ),
+        ] {
+            assert_eq!(
+                rb_weakened(a, b),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{a} -> {b}"
+            );
+        }
+        // A checked value that changed is not paired; two matchers of different families
+        // are not twins; `not_to` -> `to_not` keeps the polarity.
+        for (a, b) in [
+            ("assert f(rows)", "refute g(rows)"),
+            ("assert_nil f(rows)", "refute_empty f(rows)"),
+            ("expect(f(rows)).to be_truthy", "expect(f(rows)).to be_nil"),
+            (
+                "expect(f(rows)).not_to be_nil",
+                "expect(f(rows)).to_not be_nil",
+            ),
+        ] {
+            assert_eq!(rb_weakened(a, b), vec![], "{a} -> {b}");
         }
     }
 }

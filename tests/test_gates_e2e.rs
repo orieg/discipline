@@ -2027,6 +2027,112 @@ fn a_kotlin_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     }
 }
 
+/// Ruby assertions (#1070) weakened or inverted are reported as the same finding: an
+/// RSpec bound moved the loose way, `to eq` -> `not_to eq`, a matcher negated, Minitest
+/// `assert` -> `refute`, a condition's comparison widened, and `assert_operator` widened.
+#[test]
+fn a_ruby_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let minitest = |check: &str| {
+        format!(
+            "require \"minitest/autorun\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    {check}\n  end\nend\n"
+        )
+    };
+    let rspec = |check: &str| {
+        format!(
+            "RSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    {check}\n  end\nend\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write("lib/rows.rb", "def count_rows(rows)\n  rows.size\nend\n");
+        let (path, wrap): (&str, &dyn Fn(&str) -> String) = if base.contains("expect") {
+            ("spec/rows_spec.rb", &rspec)
+        } else {
+            ("test/rows_test.rb", &minitest)
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (test, base, head, ops) in [
+        (
+            "counts",
+            "expect(count_rows(rows)).to be > 6",
+            "expect(count_rows(rows)).to be >= 6",
+            "`to be >` to `to be >=`",
+        ),
+        (
+            "counts",
+            "expect(count_rows([])).to eq(0)",
+            "expect(count_rows([])).not_to eq(1)",
+            "`to eq` to `not_to eq`",
+        ),
+        (
+            "counts",
+            "expect(count_rows(rows)).to include(7)",
+            "expect(count_rows(rows)).not_to include(7)",
+            "`to include` to `not_to include`",
+        ),
+        (
+            "test_counts",
+            "assert count_rows(rows) == 7",
+            "refute count_rows(rows) == 7",
+            "`assert` to `refute`",
+        ),
+        (
+            "test_counts",
+            "assert count_rows(rows) > 6, \"seven rows\"",
+            "assert count_rows(rows) >= 6, \"seven rows\"",
+            "`>` to `>=`",
+        ),
+        (
+            "test_counts",
+            "assert_operator count_rows(rows), :>, 6",
+            "assert_operator count_rows(rows), :>=, 6",
+            "`:>` to `:>=`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("count_rows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "expect(count_rows(rows)).to be >= 6",
+            "expect(count_rows(rows)).to be > 6",
+        ),
+        (
+            "refute count_rows(rows) < 6",
+            "refute count_rows(rows) <= 6",
+        ),
+        (
+            "expect(count_rows(rows)).to be > 6",
+            "expect(count_rows(rows)).to be > 7",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.

@@ -4129,6 +4129,78 @@
       },
       "gate": "assertion-reduction",
       "verdict": "clean"
+    },
+    {
+      "name": "ruby-rspec-bound-widened",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to be > 6\n  end\nend\n"
+      },
+      "head": {
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to be >= 6\n  end\nend\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ruby-minitest-assert-inverted",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "test/rows_test.rb": "require \"minitest/autorun\"\nrequire_relative \"../lib/rows\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    assert count_rows(rows) == 7\n  end\nend\n"
+      },
+      "head": {
+        "test/rows_test.rb": "require \"minitest/autorun\"\nrequire_relative \"../lib/rows\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    refute count_rows(rows) == 7\n  end\nend\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ruby-minitest-condition-widened",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "test/rows_test.rb": "require \"minitest/autorun\"\nrequire_relative \"../lib/rows\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    assert count_rows(rows) > 6\n  end\nend\n"
+      },
+      "head": {
+        "test/rows_test.rb": "require \"minitest/autorun\"\nrequire_relative \"../lib/rows\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    assert count_rows(rows) >= 6\n  end\nend\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ruby-rspec-matcher-negated",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to eq(7)\n  end\nend\n"
+      },
+      "head": {
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).not_to eq(8)\n  end\nend\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ruby-rspec-bound-tightened",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to be >= 6\n  end\nend\n"
+      },
+      "head": {
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to be > 6\n  end\nend\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }
