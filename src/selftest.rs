@@ -11845,6 +11845,60 @@ proptest! {
                 && verbose == "FULL")
         },
     ),
+    (
+        "hook: an agent-facing report names its base and says it reads no directive; a stop let through or observed tells the person no waiver applies (#1102)",
+        || {
+            let mut outcome = crate::guards::GateOutcome::new("assertion-reduction");
+            outcome.violations.push(crate::guards::Violation {
+                gate: "assertion-reduction",
+                code: "assertion-reduction/assertions-reduced".to_string(),
+                fingerprint: String::new(),
+                anchor: None,
+                legacy_title: None,
+                severity: crate::guards::Severity::Error,
+                title: "Assertion Count Decreased In Existing Test".into(),
+                file: Some("tests/a.rs".into()),
+                line: Some(2),
+                message: "Test `adds`: effective assertions dropped from 2 to 0.".into(),
+                remediation: None,
+            });
+            let summary = crate::guards::CheckSummary {
+                schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+                could_not_check: None,
+                base: "origin/main (merge base 1a2b3c4)".into(),
+                errors: 1,
+                warnings: 0,
+                notes: 0,
+                overrides: 0,
+                baselined: 0,
+                outcomes: vec![outcome],
+                planned_gates: vec![],
+                policy_failures: Vec::new(),
+                refused_hidden_directives: Vec::new(),
+                deprecations: Vec::new(),
+                directive_notes: Vec::new(),
+                stale_baseline_entries: 0,
+                unused_directives: Vec::new(),
+                review_routing: None,
+            };
+            let hook = crate::report::format_agent_prompt_for(
+                &summary,
+                false,
+                Some("origin/main (merge base 1a2b3c4)"),
+            );
+            let ci = crate::report::format_agent_prompt_for(&summary, false, None);
+            let through = crate::hook::let_through(
+                crate::hook::Agent::ClaudeCode,
+                crate::hook::Event::Stop,
+                1,
+            );
+            Ok(hook.contains("against `origin/main (merge base 1a2b3c4)` by the base branch's configuration and reads no directive")
+                && !hook.contains("CI runs it again")
+                && !hook.contains(crate::hook::NO_WAIVER_NOTE)
+                && ci.contains("and CI runs it again.")
+                && through.stderr.ends_with(crate::hook::NO_WAIVER_NOTE))
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

@@ -961,6 +961,7 @@ const REVIEWED_DYNAMIC_READS: &[(&str, &str, &str)] = &[
         NAMED_CONSTANT,
     ),
     ("src/hook_log.rs", "crate::hook::HOOK_RUN_ENV", NAMED_CONSTANT),
+    ("src/report/mod.rs", "crate::hook::HOOK_RUN_ENV", NAMED_CONSTANT),
     ("src/guards/mod.rs", "REPLAY_CASE_ENV", NAMED_CONSTANT),
     ("src/cli.rs", "HOSTNAME_DENYLIST_ENV", NAMED_CONSTANT),
     ("src/cli.rs", "TERM_DENYLIST_ENV", NAMED_CONSTANT),
