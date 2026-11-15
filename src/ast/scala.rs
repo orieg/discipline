@@ -95,6 +95,7 @@ impl LanguagePack for ScalaPack {
         extractor.resolve_same_file_helpers();
         SCALA_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::scala(root, &anc, src, &mut extractor.facts.tests);
+        super::comparisons::scala(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,

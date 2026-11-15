@@ -2243,6 +2243,115 @@ fn a_swift_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     }
 }
 
+/// Scala assertions (#1070) weakened or inverted are reported as the same finding: a
+/// ScalaTest bound moved the loose way, `shouldBe` -> `should not be`, a matcher negated,
+/// an `assert(..)` condition widened, and MUnit `assertEquals` -> `assertNotEquals` read
+/// as `==` -> `!=`.
+#[test]
+fn a_scala_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let scalatest = |check: &str| {
+        format!(
+            "class RowsSpec extends AnyFunSuite with Matchers {{\n  test(\"counts\") {{\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    {check}\n  }}\n}}\n"
+        )
+    };
+    let munit = |check: &str| {
+        format!(
+            "class RowsSuite extends munit.FunSuite {{\n  test(\"counts\") {{\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    {check}\n  }}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "src/main/scala/Rows.scala",
+            "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        );
+        let (path, wrap): (&str, &dyn Fn(&str) -> String) = if base.contains("should") {
+            ("src/test/scala/RowsSpec.scala", &scalatest)
+        } else {
+            ("src/test/scala/RowsSuite.scala", &munit)
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "Rows.countRows(rows) should be > 6",
+            "Rows.countRows(rows) should be >= 6",
+            "`should be >` to `should be >=`",
+        ),
+        (
+            "Rows.countRows(List()) shouldBe 0",
+            "Rows.countRows(List()) should not be 1",
+            "`shouldBe` to `should not be`",
+        ),
+        (
+            "Rows.countRows(rows) should contain (7)",
+            "Rows.countRows(rows) should not contain (7)",
+            "`should contain` to `should not contain`",
+        ),
+        (
+            "assert(Rows.countRows(rows) > 6, \"seven rows\")",
+            "assert(Rows.countRows(rows) >= 6, \"seven rows\")",
+            "`>` to `>=`",
+        ),
+        (
+            "assertEquals(Rows.countRows(List()), 0)",
+            "assertNotEquals(Rows.countRows(List()), 1)",
+            "`assertEquals` to `assertNotEquals`",
+        ),
+        (
+            "assertTrue(Rows.countRows(rows) == 7)",
+            "assertFalse(Rows.countRows(rows) == 7)",
+            "`assertTrue` to `assertFalse`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("countRows("), "{message}");
+        let test = if base.contains("should") {
+            "RowsSpec.counts"
+        } else {
+            "RowsSuite.counts"
+        };
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "Rows.countRows(rows) should be >= 6",
+            "Rows.countRows(rows) should be > 6",
+        ),
+        (
+            "assertFalse(Rows.countRows(rows) < 6)",
+            "assertFalse(Rows.countRows(rows) <= 6)",
+        ),
+        (
+            "Rows.countRows(rows) should be > 6",
+            "Rows.countRows(rows) should be > 7",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.

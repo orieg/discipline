@@ -4273,6 +4273,78 @@
           "assertion-reduction/weakened-bound"
         ]
       }
+    },
+    {
+      "name": "scala-scalatest-bound-widened",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should be > 6\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should be >= 6\n  }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-scalatest-equal-negated",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) shouldBe 7\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should not be 8\n  }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-munit-assert-widened",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSuite.scala": "class RowsSuite extends munit.FunSuite {\n  test(\"counts\") {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    assert(Rows.countRows(rows) > 6)\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSuite.scala": "class RowsSuite extends munit.FunSuite {\n  test(\"counts\") {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    assert(Rows.countRows(rows) >= 6)\n  }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-munit-equals-negated",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSuite.scala": "class RowsSuite extends munit.FunSuite {\n  test(\"counts\") {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    assertEquals(Rows.countRows(rows), 7)\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSuite.scala": "class RowsSuite extends munit.FunSuite {\n  test(\"counts\") {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    assertNotEquals(Rows.countRows(rows), 8)\n  }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-scalatest-bound-tightened",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should be >= 6\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should be > 6\n  }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }
