@@ -113,6 +113,7 @@ impl LanguagePack for KotlinPack {
             ],
         );
         super::expected_exceptions::kotlin(root, &anc, src, &mut extractor.facts.tests);
+        super::comparisons::kotlin(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }
