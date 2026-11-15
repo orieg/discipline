@@ -143,8 +143,14 @@ pub trait LanguagePack: Send + Sync {
 
     /// The names `src` exposes outside its package (`Fact::PublicNames`), by the
     /// language's row of the "Public names" table in `docs/GATES.md`. Empty for a pack
-    /// that does not supply the fact; an error for a file that does not parse.
-    fn public_names(&self, _path: &str, _src: &str) -> Result<Vec<public_names::PublicName>> {
+    /// that does not supply the fact; an error for a file that does not parse. `vocab`
+    /// carries the repository's `[languages.c]` macros, which the C family masks first.
+    fn public_names(
+        &self,
+        _path: &str,
+        _src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<public_names::PublicName>> {
         Ok(Vec::new())
     }
 }
@@ -217,8 +223,13 @@ impl LanguagePack for Counted {
     fn capability_sinks(&self, path: &str, src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
         self.0.capability_sinks(path, src)
     }
-    fn public_names(&self, path: &str, src: &str) -> Result<Vec<public_names::PublicName>> {
-        self.0.public_names(path, src)
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<Vec<public_names::PublicName>> {
+        self.0.public_names(path, src, vocab)
     }
 }
 

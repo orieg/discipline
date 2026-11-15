@@ -43,7 +43,12 @@ impl LanguagePack for RubyPack {
         functions::is_test_file(path, Some(is_ruby_test_path))
     }
 
-    fn public_names(&self, path: &str, src: &str) -> Result<Vec<super::public_names::PublicName>> {
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
         super::public_names::names_of(
             &tree_sitter_ruby::LANGUAGE.into(),
             "the Ruby",

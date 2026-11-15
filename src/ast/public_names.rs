@@ -1238,6 +1238,377 @@ pub fn ruby(root: Node, src: &str) -> Vec<PublicName> {
     out
 }
 
+// ---------------------------------------------------------------------------------------
+// C, C++, Objective-C: linkage for functions and variables, headers for everything else.
+
+/// Whether `path` is a header (`.h`, `.hpp`, `.hh`, `.hxx`).
+pub fn is_header(path: &str) -> bool {
+    matches!(
+        super::extension(path),
+        Some("h" | "hpp" | "hh" | "hxx" | "H")
+    )
+}
+
+/// The name a declarator declares, and whether it declares a function.
+fn declarator_name(node: Node, src: &str) -> Option<(String, bool)> {
+    let mut node = node;
+    let mut function = false;
+    loop {
+        match node.kind() {
+            "identifier"
+            | "field_identifier"
+            | "type_identifier"
+            | "qualified_identifier"
+            | "destructor_name"
+            | "operator_name" => {
+                return Some((text(node, src).to_string(), function));
+            }
+            "function_declarator" => function = true,
+            _ => {}
+        }
+        node = node
+            .child_by_field_name("declarator")
+            .or_else(|| named_children(node).into_iter().next())?;
+    }
+}
+
+fn has_storage(node: Node, src: &str, word: &str) -> bool {
+    named_children(node)
+        .into_iter()
+        .any(|c| c.kind() == "storage_class_specifier" && text(c, src) == word)
+}
+
+fn declarators(node: Node) -> Vec<Node> {
+    let mut cursor = node.walk();
+    node.children_by_field_name("declarator", &mut cursor)
+        .collect()
+}
+
+/// How a C-family file is read: whether it is a header, and whether its types have
+/// members of their own (C++), which C structs do not.
+#[derive(Clone, Copy)]
+struct CRead {
+    header: bool,
+    members: bool,
+}
+
+/// A struct, union, enum or class definition (a specifier with a body), its members by
+/// their access (C++ only), and an enum's enumerators.
+fn c_type(spec: Node, src: &str, how: CRead, prefix: &mut Vec<String>, out: &mut Vec<PublicName>) {
+    let Some(body) = spec.child_by_field_name("body") else {
+        return;
+    };
+    let name = name_of(spec, src, "name");
+    if spec.kind() == "enum_specifier" {
+        if let Some(n) = &name {
+            push(out, qualify(prefix, n, "::"), NameKind::Type, spec, src);
+        }
+        // `enum class Mode { A }` names `Mode::A`; a plain enum's enumerators are in the
+        // enclosing scope.
+        let scoped = fold(text(spec, src)).starts_with("enum class")
+            || fold(text(spec, src)).starts_with("enum struct");
+        for e in named_children(body) {
+            if let Some(en) = (e.kind() == "enumerator")
+                .then(|| name_of(e, src, "name"))
+                .flatten()
+            {
+                let q = match (&name, scoped) {
+                    (Some(n), true) => qualify(prefix, &format!("{n}::{en}"), "::"),
+                    _ => qualify(prefix, &en, "::"),
+                };
+                push(out, q, NameKind::Const, e, src);
+            }
+        }
+        return;
+    }
+    let Some(name) = name else {
+        return;
+    };
+    push(out, qualify(prefix, &name, "::"), NameKind::Type, spec, src);
+    if !how.members {
+        return;
+    }
+    let mut public = spec.kind() != "class_specifier";
+    prefix.push(name);
+    for member in named_children(body) {
+        match member.kind() {
+            "access_specifier" => {
+                public = matches!(text(member, src).trim(), "public" | "protected");
+            }
+            _ if !public => {}
+            "field_declaration" | "declaration" | "function_definition" => {
+                for d in declarators(member) {
+                    if let Some((n, function)) = declarator_name(d, src) {
+                        let kind = if function {
+                            NameKind::Method
+                        } else {
+                            NameKind::Const
+                        };
+                        push(out, qualify(prefix, &n, "::"), kind, member, src);
+                    }
+                }
+                // A nested type written as a member's type.
+                if let Some(t) = member.child_by_field_name("type") {
+                    if t.child_by_field_name("body").is_some() {
+                        c_type(t, src, how, prefix, out);
+                    }
+                }
+            }
+            "struct_specifier" | "union_specifier" | "enum_specifier" | "class_specifier" => {
+                c_type(member, src, how, prefix, out)
+            }
+            "alias_declaration" | "type_definition" => c_items_one(member, src, how, prefix, out),
+            "template_declaration" => {
+                for inner in named_children(member) {
+                    match inner.kind() {
+                        "declaration" | "field_declaration" | "function_definition" => {
+                            for d in declarators(inner) {
+                                if let Some((n, _)) = declarator_name(d, src) {
+                                    push(
+                                        out,
+                                        qualify(prefix, &n, "::"),
+                                        NameKind::Method,
+                                        inner,
+                                        src,
+                                    );
+                                }
+                            }
+                        }
+                        "class_specifier" | "struct_specifier" => {
+                            c_type(inner, src, how, prefix, out)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    prefix.pop();
+}
+
+/// One top-level (or namespace-level) item of a C or C++ file.
+fn c_items_one(
+    item: Node,
+    src: &str,
+    how: CRead,
+    prefix: &mut Vec<String>,
+    out: &mut Vec<PublicName>,
+) {
+    let header = how.header;
+    match item.kind() {
+        // Conditional blocks and `extern "C" { }`: their items are the file's.
+        "preproc_ifdef" | "preproc_if" | "preproc_else" | "preproc_elif" | "preproc_elifdef" => {
+            c_items(item, src, how, prefix, out)
+        }
+        "linkage_specification" => match item.child_by_field_name("body") {
+            Some(body) if body.kind() == "declaration_list" => c_items(body, src, how, prefix, out),
+            Some(one) => c_items_one(one, src, how, prefix, out),
+            None => {}
+        },
+        "template_declaration" => c_items(item, src, how, prefix, out),
+        "namespace_definition" => {
+            // An anonymous namespace has internal linkage.
+            let (Some(name), Some(body)) =
+                (name_of(item, src, "name"), item.child_by_field_name("body"))
+            else {
+                return;
+            };
+            let depth = prefix.len();
+            prefix.extend(name.split("::").map(str::to_string));
+            c_items(body, src, how, prefix, out);
+            prefix.truncate(depth);
+        }
+        // A macro with a value; `#define GUARD_H` alone is an include guard or a flag.
+        "preproc_def" if header && item.child_by_field_name("value").is_some() => {
+            if let Some(n) = name_of(item, src, "name") {
+                push(out, n, NameKind::Macro, item, src);
+            }
+        }
+        "preproc_function_def" if header => {
+            if let Some(n) = name_of(item, src, "name") {
+                push(out, n, NameKind::Macro, item, src);
+            }
+        }
+        "function_definition" if !has_storage(item, src, "static") => {
+            if let Some((n, _)) = item
+                .child_by_field_name("declarator")
+                .and_then(|d| declarator_name(d, src))
+            {
+                // `int Cache::get() {}` defines a member declared elsewhere.
+                let kind = if n.contains("::") {
+                    NameKind::Method
+                } else {
+                    NameKind::Function
+                };
+                push(out, qualify(prefix, &n, "::"), kind, item, src);
+            }
+        }
+        "declaration" if !has_storage(item, src, "static") => {
+            for d in declarators(item) {
+                let Some((n, function)) = declarator_name(d, src) else {
+                    continue;
+                };
+                // A prototype names its definition, read where it is defined; one in a
+                // header is the declaration callers see.
+                if function && !header {
+                    continue;
+                }
+                let kind = if function {
+                    NameKind::Function
+                } else {
+                    NameKind::Const
+                };
+                push(out, qualify(prefix, &n, "::"), kind, item, src);
+            }
+            if header {
+                if let Some(t) = item.child_by_field_name("type") {
+                    c_type(t, src, how, prefix, out);
+                }
+            }
+        }
+        "type_definition" | "alias_declaration" if header => {
+            if let Some(t) = item.child_by_field_name("type") {
+                c_type(t, src, how, prefix, out);
+            }
+            if item.kind() == "alias_declaration" {
+                if let Some(n) = name_of(item, src, "name") {
+                    push(out, qualify(prefix, &n, "::"), NameKind::Type, item, src);
+                }
+            }
+            for d in declarators(item) {
+                if let Some((n, _)) = declarator_name(d, src) {
+                    push(out, qualify(prefix, &n, "::"), NameKind::Type, item, src);
+                }
+            }
+        }
+        "struct_specifier" | "union_specifier" | "enum_specifier" | "class_specifier" if header => {
+            c_type(item, src, how, prefix, out)
+        }
+        _ => {}
+    }
+}
+
+fn c_items(node: Node, src: &str, how: CRead, prefix: &mut Vec<String>, out: &mut Vec<PublicName>) {
+    for item in named_children(node) {
+        c_items_one(item, src, how, prefix, out);
+    }
+}
+
+/// C and C++: functions and variables not `static` and not in an anonymous namespace, in
+/// any file (external linkage; a prototype counts in a header only); in a header, also
+/// struct, union, enum and class definitions with their enumerators and, in C++, their
+/// `public` and `protected` members (a `struct` is public until an access specifier says
+/// otherwise), typedefs, `using` aliases and macros that have a value. Names in a
+/// namespace are qualified with `::`; a member defined outside its class
+/// (`int Cache::get() {}`) is named `Cache::get` wherever it is defined.
+pub fn c_family(path: &str, root: Node, src: &str, cpp: bool) -> Vec<PublicName> {
+    let mut out = Vec::new();
+    let how = CRead {
+        header: is_header(path),
+        members: cpp,
+    };
+    c_items(root, src, how, &mut Vec::new(), &mut out);
+    out
+}
+
+/// An Objective-C method's selector: `get:`, `storeWithName:size:`, `extra`.
+#[cfg(feature = "lang-objc")]
+fn objc_selector(method: Node, src: &str) -> String {
+    let mut sel = String::new();
+    let parts = named_children(method);
+    for (i, part) in parts.iter().enumerate() {
+        if part.kind() != "identifier" {
+            continue;
+        }
+        sel.push_str(text(*part, src));
+        if parts
+            .get(i + 1)
+            .is_some_and(|n| n.kind() == "method_parameter")
+        {
+            sel.push(':');
+        }
+    }
+    sel
+}
+
+/// Objective-C: in a header, each `@interface` and `@protocol`, their methods
+/// (`-[Store get:]`, `+[Store storeWithName:size:]`, a category's named on its class) and
+/// properties (`Store.limit`); in any file, the C names [`c_family`] reads. An
+/// `@implementation` adds no name: what it defines is public where a header declares it.
+#[cfg(feature = "lang-objc")]
+pub fn objc(path: &str, root: Node, src: &str) -> Vec<PublicName> {
+    let header = is_header(path);
+    let mut out = Vec::new();
+    for item in named_children(root) {
+        match item.kind() {
+            "class_interface" | "protocol_declaration" if header => {
+                let Some(name) = named_children(item)
+                    .into_iter()
+                    .find(|c| c.kind() == "identifier")
+                    .map(|c| text(c, src).to_string())
+                else {
+                    continue;
+                };
+                // A category (`@interface Store (Extras)`) adds to `Store`, declared
+                // elsewhere.
+                if item.child_by_field_name("category").is_none() {
+                    push(&mut out, name.clone(), NameKind::Type, item, src);
+                }
+                for member in named_children(item) {
+                    match member.kind() {
+                        "method_declaration" => {
+                            let sign = if text(member, src).trim_start().starts_with('+') {
+                                '+'
+                            } else {
+                                '-'
+                            };
+                            let sel = objc_selector(member, src);
+                            push(
+                                &mut out,
+                                format!("{sign}[{name} {sel}]"),
+                                NameKind::Method,
+                                member,
+                                src,
+                            );
+                        }
+                        "property_declaration" => {
+                            for decl in named_children(member) {
+                                for d in named_children(decl) {
+                                    if d.kind() == "struct_declarator" {
+                                        if let Some((n, _)) = declarator_name(d, src) {
+                                            push(
+                                                &mut out,
+                                                format!("{name}.{n}"),
+                                                NameKind::Const,
+                                                member,
+                                                src,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "class_interface" | "protocol_declaration" | "class_implementation" => {}
+            _ => c_items_one(
+                item,
+                src,
+                CRead {
+                    header,
+                    members: false,
+                },
+                &mut Vec::new(),
+                &mut out,
+            ),
+        }
+    }
+    out
+}
+
 /// Parses `src` with `language` and reads its public names with `read`. A file that does
 /// not parse, or parses with errors, is an error: a name inside the broken part could be
 /// missed, so the caller names the file as not checked.
@@ -1335,6 +1706,7 @@ pub struct FileChange<'a> {
 /// removed.
 pub fn changed_public_names(
     registry: &super::LanguageRegistry,
+    vocab: &super::AssertVocabulary,
     files: &[FileChange],
 ) -> ChangedNames {
     let mut out = ChangedNames::default();
@@ -1362,7 +1734,7 @@ pub fn changed_public_names(
         let side = |p: &str, text: Option<&str>| -> Result<Vec<PublicName>, String> {
             match text {
                 None => Ok(Vec::new()),
-                Some(t) => pack.public_names(p, t).map_err(|e| format!("{e:#}")),
+                Some(t) => pack.public_names(p, t, vocab).map_err(|e| format!("{e:#}")),
             }
         };
         match (side(f.base_path, f.base), side(f.head_path, f.head)) {
@@ -1381,7 +1753,8 @@ pub fn changed_public_names(
     feature = "lang-rust",
     feature = "lang-python",
     feature = "lang-javascript",
-    feature = "lang-go"
+    feature = "lang-go",
+    feature = "lang-c"
 ))]
 mod tests {
     use super::*;
@@ -1392,7 +1765,7 @@ mod tests {
         let pack = reg.find_pack(path).expect("a pack");
         assert!(pack.supplies(crate::ast::Fact::PublicNames), "{path}");
         let mut got: Vec<(String, &'static str)> = pack
-            .public_names(path, src)
+            .public_names(path, src, &crate::ast::AssertVocabulary::default())
             .expect("parses")
             .into_iter()
             .map(|n| (n.name, n.kind.as_str()))
@@ -1573,6 +1946,28 @@ interface Local {}
     }
 
     #[test]
+    fn a_c_header_is_read_after_the_repositorys_macros_are_masked() {
+        let reg = default_registry();
+        let pack = reg.find_pack("include/api.h").expect("the C pack");
+        let src = "API_EXPORT int api_open(void);\nAPI_EXPORT int api_close(void);\n";
+        let plain = crate::ast::AssertVocabulary::default();
+        // Without the macro the header does not parse as C, C++ or Objective-C.
+        assert!(pack.public_names("include/api.h", src, &plain).is_err());
+        let vocab = crate::ast::AssertVocabulary {
+            c_macros: vec!["API_EXPORT".into()],
+            ..Default::default()
+        };
+        let mut got: Vec<String> = pack
+            .public_names("include/api.h", src, &vocab)
+            .expect("parses once the macro is masked")
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+        got.sort();
+        assert_eq!(got, ["api_close", "api_open"]);
+    }
+
+    #[test]
     fn a_change_is_read_as_added_removed_and_modified_names() {
         let reg = default_registry();
         let base =
@@ -1580,6 +1975,7 @@ interface Local {}
         let head = "pub fn keep() {}\npub fn edit() -> u8 { 2 }\npub fn fresh() {}\nfn private() { let _ = 1; }\n";
         let got = changed_public_names(
             &reg,
+            &crate::ast::AssertVocabulary::default(),
             &[
                 FileChange {
                     base_path: "src/lib.rs",
@@ -1619,6 +2015,7 @@ interface Local {}
         // A rename moves the names with the file: nothing added or removed.
         let moved = changed_public_names(
             &reg,
+            &crate::ast::AssertVocabulary::default(),
             &[FileChange {
                 base_path: "src/a.rs",
                 head_path: "src/b.rs",

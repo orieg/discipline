@@ -121,7 +121,12 @@ impl LanguagePack for SwiftPack {
         functions::is_test_file(path, Some(is_swift_test_path))
     }
 
-    fn public_names(&self, path: &str, src: &str) -> Result<Vec<super::public_names::PublicName>> {
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
         let text = swift_tree::line_ended(src);
         let tree = swift_tree::parse(&text)
             .map_err(|why| anyhow::anyhow!("could not parse `{path}`: {why}"))?;

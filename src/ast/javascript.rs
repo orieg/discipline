@@ -65,7 +65,12 @@ impl LanguagePack for JavaScriptPack {
         )
     }
 
-    fn public_names(&self, path: &str, src: &str) -> Result<Vec<super::public_names::PublicName>> {
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
         let lang = match super::extension(path).unwrap_or("js") {
             "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             "tsx" | "jsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
