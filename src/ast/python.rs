@@ -63,7 +63,12 @@ impl LanguagePack for PythonPack {
         )
     }
 
-    fn public_names(&self, path: &str, src: &str) -> Result<Vec<super::public_names::PublicName>> {
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
         super::public_names::names_of(
             &tree_sitter_python::LANGUAGE.into(),
             "the Python",

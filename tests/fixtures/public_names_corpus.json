@@ -276,6 +276,88 @@
         "Store::Other#a",
         "Store::Other.build"
       ]
+    },
+    {
+      "language": "c",
+      "path": "include/store.h",
+      "source": "#ifndef STORE_H\n#define STORE_H\n\n#define STORE_LIMIT 3\n#define STORE_MAX(a, b) ((a) > (b) ? (a) : (b))\n\ntypedef struct store store_t;\n\nstruct store {\n    int n;\n};\n\nenum mode { MODE_A, MODE_B };\n\ntypedef enum { FLAG_X } flag_t;\n\nextern int store_count;\n\nint store_get(store_t *s, int k);\n\nstatic inline int store_helper(void) { return 0; }\n\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\nvoid store_free(store_t *s);\n\n#ifdef __cplusplus\n}\n#endif\n\n#endif\n",
+      "public": [
+        "FLAG_X",
+        "MODE_A",
+        "MODE_B",
+        "STORE_LIMIT",
+        "STORE_MAX",
+        "flag_t",
+        "mode",
+        "store",
+        "store_count",
+        "store_free",
+        "store_get",
+        "store_t"
+      ]
+    },
+    {
+      "language": "c",
+      "path": "src/store.c",
+      "source": "#include \"store.h\"\n\n#define LOCAL 1\n\nstatic int hidden(void) { return 0; }\n\nint store_get(store_t *s, int k) { return k; }\n\nint store_count = 0;\nstatic int cache;\n\nstruct local { int x; };\n\nint helper_proto(void);\n",
+      "public": [
+        "store_count",
+        "store_get"
+      ]
+    },
+    {
+      "language": "cpp",
+      "path": "include/cache.hpp",
+      "source": "#pragma once\n\nnamespace store {\n\nclass Cache {\npublic:\n    Cache();\n    int get(int k) const;\n    static constexpr int kLimit = 3;\nprotected:\n    void hook();\nprivate:\n    void evict();\n    int n_;\n};\n\nstruct Point {\n    int x;\n    void move();\nprivate:\n    int secret;\n};\n\ntemplate <typename T> T clamp(T v);\n\nnamespace detail {\nvoid helper();\n}\n\nnamespace {\nvoid hidden();\n}\n\nenum class Mode { A, B };\n\nusing Id = int;\n\n}\n",
+      "public": [
+        "store::Cache",
+        "store::Cache::Cache",
+        "store::Cache::get",
+        "store::Cache::hook",
+        "store::Cache::kLimit",
+        "store::Id",
+        "store::Mode",
+        "store::Mode::A",
+        "store::Mode::B",
+        "store::Point",
+        "store::Point::move",
+        "store::Point::x",
+        "store::clamp",
+        "store::detail::helper"
+      ]
+    },
+    {
+      "language": "cpp",
+      "path": "src/cache.cpp",
+      "source": "#include \"cache.hpp\"\n\nnamespace store {\n\nint Cache::get(int k) const { return k; }\n\nstatic void local() {}\n\nvoid free_fn() {}\n\nclass Internal { public: void x(); };\n\n}\n\nnamespace {\nint hidden_fn() { return 0; }\n}\n",
+      "public": [
+        "store::Cache::get",
+        "store::free_fn"
+      ]
+    },
+    {
+      "language": "c",
+      "path": "include/Store.h",
+      "source": "#import <Foundation/Foundation.h>\n\n#define STORE_VERSION 2\n\n@interface Store : NSObject\n@property (nonatomic) NSInteger limit;\n- (NSInteger)get:(NSInteger)k;\n+ (instancetype)storeWithName:(NSString *)name size:(int)size;\n@end\n\n@interface Store (Extras)\n- (void)extra;\n@end\n\n@protocol Api\n- (void)call;\n@end\n\nvoid StoreFree(Store *s);\n",
+      "public": [
+        "+[Store storeWithName:size:]",
+        "-[Api call]",
+        "-[Store extra]",
+        "-[Store get:]",
+        "Api",
+        "STORE_VERSION",
+        "Store",
+        "Store.limit",
+        "StoreFree"
+      ]
+    },
+    {
+      "language": "objc",
+      "path": "src/Store.m",
+      "source": "#import \"Store.h\"\n\n@interface Store ()\n- (void)privateHelper;\n@end\n\n@implementation Store\n- (NSInteger)get:(NSInteger)k { return k; }\n- (void)privateThing {}\n@end\n\nvoid StoreFree(Store *s) {}\n\nstatic void hidden(void) {}\n",
+      "public": [
+        "StoreFree"
+      ]
     }
   ]
 }

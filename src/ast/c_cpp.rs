@@ -34,7 +34,12 @@ impl LanguagePack for CPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -52,6 +57,37 @@ impl LanguagePack for CPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         functions::is_test_file(path, Some(is_c_cpp_test_path))
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        let masked = mask_macros(src, vocab);
+        let text = masked.as_deref().unwrap_or(src);
+        let guarded = super::c_macros::mask_cplusplus_guards(text);
+        let text = guarded.as_deref().unwrap_or(text);
+        let as_c = super::public_names::names_of(
+            &tree_sitter_c::LANGUAGE.into(),
+            "the C",
+            path,
+            text,
+            |root, s| super::public_names::c_family(path, root, s, false),
+        );
+        // A `.h` header may be C++ or Objective-C, as for `extract`: the first reading
+        // that parses without errors is kept.
+        if as_c.is_err() && super::extension(path) == Some("h") {
+            if let Ok(names) = CppPack.public_names(path, src, vocab) {
+                return Ok(names);
+            }
+            #[cfg(feature = "lang-objc")]
+            if let Ok(names) = super::objc::ObjcPack.public_names(path, src, vocab) {
+                return Ok(names);
+            }
+        }
+        as_c
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -134,7 +170,12 @@ impl LanguagePack for CppPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -155,6 +196,23 @@ impl LanguagePack for CppPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         functions::is_test_file(path, Some(is_c_cpp_test_path))
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        let masked = mask_macros(src, vocab);
+        let text = masked.as_deref().unwrap_or(src);
+        super::public_names::names_of(
+            &tree_sitter_cpp::LANGUAGE.into(),
+            "the C++",
+            path,
+            text,
+            |root, s| super::public_names::c_family(path, root, s, true),
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {

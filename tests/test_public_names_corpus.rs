@@ -33,6 +33,7 @@ fn public_names_have_full_precision_and_recall_on_the_corpus() {
         .join("tests/fixtures/public_names_corpus.json");
     let corpus: Corpus = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let registry = default_registry();
+    let vocab = discipline::ast::AssertVocabulary::default();
     let mut tallies: BTreeMap<String, Tally> = BTreeMap::new();
     for case in &corpus.cases {
         let pack = registry
@@ -46,7 +47,7 @@ fn public_names_have_full_precision_and_recall_on_the_corpus() {
             pack.id()
         );
         let got: BTreeSet<String> = pack
-            .public_names(&case.path, &case.source)
+            .public_names(&case.path, &case.source, &vocab)
             .unwrap_or_else(|e| panic!("{}: {e:#}", case.path))
             .into_iter()
             .map(|n| n.name)
