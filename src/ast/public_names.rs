@@ -563,6 +563,366 @@ pub fn javascript(root: Node, src: &str) -> Vec<PublicName> {
     out
 }
 
+// ---------------------------------------------------------------------------------------
+// Java, Kotlin, Scala, C#: types holding members, visibility written as modifiers.
+
+/// What a modifier list says about a declaration's visibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Vis {
+    Public,
+    Hidden,
+    /// No visibility modifier: the language's default for where it sits.
+    Default,
+}
+
+/// What a declaration is to the walker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decl {
+    /// A type with a member body; `true` when its members are public by default (an
+    /// interface).
+    Type(bool),
+    /// A member or top-level name of this kind.
+    Member(NameKind),
+    /// Always public where its type is (an enum constant).
+    AlwaysPublic(NameKind),
+    /// A namespace, package block or companion object: walked as if its members were
+    /// written where it is.
+    Transparent,
+}
+
+/// One language's rules for [`oo_walk`].
+struct OoLang {
+    decl: fn(Node, &str) -> Option<Decl>,
+    vis: fn(Node, &str) -> Vis,
+    /// Whether a declaration with no visibility modifier is public at the top level, and
+    /// as a member of a type that is not an interface.
+    top_default: bool,
+    member_default: bool,
+    /// The declared names (a field may declare several).
+    names: fn(Node, &str) -> Vec<String>,
+}
+
+/// The node holding a declaration's members: its `body` field, or a child that is a body.
+fn body_of(node: Node) -> Option<Node> {
+    node.child_by_field_name("body").or_else(|| {
+        named_children(node)
+            .into_iter()
+            .find(|c| c.kind().ends_with("_body") || c.kind() == "declaration_list")
+    })
+}
+
+fn oo_walk(
+    node: Node,
+    src: &str,
+    lang: &OoLang,
+    prefix: &mut Vec<String>,
+    in_interface: bool,
+    out: &mut Vec<PublicName>,
+) {
+    for child in named_children(node) {
+        let Some(decl) = (lang.decl)(child, src) else {
+            continue;
+        };
+        let default = if prefix.is_empty() {
+            lang.top_default
+        } else {
+            in_interface || lang.member_default
+        };
+        let public = match decl {
+            Decl::AlwaysPublic(_) => true,
+            Decl::Transparent => (lang.vis)(child, src) != Vis::Hidden,
+            _ => match (lang.vis)(child, src) {
+                Vis::Public => true,
+                Vis::Hidden => false,
+                Vis::Default => default,
+            },
+        };
+        if !public {
+            continue;
+        }
+        match decl {
+            // Its members are in its body, or are its own children (Java's
+            // `enum_body_declarations`, Scala's `enum_case_definitions`).
+            Decl::Transparent => {
+                let body = body_of(child).unwrap_or(child);
+                oo_walk(body, src, lang, prefix, in_interface, out);
+            }
+            Decl::Type(interface) => {
+                let Some(name) = (lang.names)(child, src).into_iter().next() else {
+                    continue;
+                };
+                push(out, qualify(prefix, &name, "."), NameKind::Type, child, src);
+                if let Some(body) = body_of(child) {
+                    prefix.push(name);
+                    oo_walk(body, src, lang, prefix, interface, out);
+                    prefix.pop();
+                }
+            }
+            Decl::Member(kind) | Decl::AlwaysPublic(kind) => {
+                let kind = if kind == NameKind::Function && !prefix.is_empty() {
+                    NameKind::Method
+                } else {
+                    kind
+                };
+                for name in (lang.names)(child, src) {
+                    push(out, qualify(prefix, &name, "."), kind, child, src);
+                }
+            }
+        }
+    }
+}
+
+/// The words of a node's modifier children (`modifiers`, `modifier`), lower-cased.
+fn modifier_words(node: Node, src: &str) -> Vec<String> {
+    named_children(node)
+        .into_iter()
+        .filter(|c| matches!(c.kind(), "modifiers" | "modifier"))
+        .flat_map(|c| {
+            text(c, src)
+                .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+                .filter(|w| !w.is_empty())
+                .map(str::to_ascii_lowercase)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Java and C#: `private` (C# `private protected` too) hides; `public` or `protected`
+/// shows; nothing is the default (package-private, `internal`).
+fn java_like_vis(node: Node, src: &str) -> Vis {
+    let words = modifier_words(node, src);
+    let has = |w: &str| words.iter().any(|x| x == w);
+    if has("private") {
+        Vis::Hidden
+    } else if has("public") || has("protected") {
+        Vis::Public
+    } else {
+        Vis::Default
+    }
+}
+
+/// Kotlin and Scala: `private` and `internal` (Scala `private[x]`) hide; anything else,
+/// nothing included, shows.
+fn public_by_default_vis(node: Node, src: &str) -> Vis {
+    let words = modifier_words(node, src);
+    if words.iter().any(|w| w == "private" || w == "internal") {
+        Vis::Hidden
+    } else {
+        Vis::Default
+    }
+}
+
+fn name_field(node: Node, src: &str) -> Vec<String> {
+    name_of(node, src, "name").into_iter().collect()
+}
+
+#[cfg(feature = "lang-java")]
+fn java_decl(node: Node, _src: &str) -> Option<Decl> {
+    Some(match node.kind() {
+        "class_declaration" | "enum_declaration" | "record_declaration" => Decl::Type(false),
+        "interface_declaration" | "annotation_type_declaration" => Decl::Type(true),
+        "method_declaration" | "constructor_declaration" => Decl::Member(NameKind::Method),
+        "field_declaration" | "constant_declaration" => Decl::Member(NameKind::Const),
+        "enum_constant" => Decl::AlwaysPublic(NameKind::Const),
+        "enum_body_declarations" => Decl::Transparent,
+        _ => return None,
+    })
+}
+
+#[cfg(feature = "lang-java")]
+fn java_names(node: Node, src: &str) -> Vec<String> {
+    if matches!(node.kind(), "field_declaration" | "constant_declaration") {
+        let mut cursor = node.walk();
+        return node
+            .children_by_field_name("declarator", &mut cursor)
+            .filter_map(|d| name_of(d, src, "name"))
+            .collect();
+    }
+    name_field(node, src)
+}
+
+/// Java: `public` or `protected`; members of an interface unless `private`; enum
+/// constants of a public enum. A top-level type with no modifier is package-private.
+#[cfg(feature = "lang-java")]
+pub fn java(root: Node, src: &str) -> Vec<PublicName> {
+    let mut out = Vec::new();
+    let lang = OoLang {
+        decl: java_decl,
+        vis: |n, s| {
+            // `enum_body_declarations` has no modifiers: walk it.
+            if n.kind() == "enum_body_declarations" {
+                Vis::Public
+            } else {
+                java_like_vis(n, s)
+            }
+        },
+        top_default: false,
+        member_default: false,
+        names: java_names,
+    };
+    oo_walk(root, src, &lang, &mut Vec::new(), false, &mut out);
+    out
+}
+
+#[cfg(feature = "lang-csharp")]
+fn csharp_decl(node: Node, _src: &str) -> Option<Decl> {
+    Some(match node.kind() {
+        "class_declaration" | "struct_declaration" | "record_declaration" | "enum_declaration" => {
+            Decl::Type(false)
+        }
+        "interface_declaration" => Decl::Type(true),
+        "delegate_declaration" => Decl::Member(NameKind::Type),
+        "method_declaration" | "constructor_declaration" | "operator_declaration" => {
+            Decl::Member(NameKind::Method)
+        }
+        "field_declaration"
+        | "property_declaration"
+        | "event_field_declaration"
+        | "event_declaration" => Decl::Member(NameKind::Const),
+        "enum_member_declaration" => Decl::AlwaysPublic(NameKind::Const),
+        "namespace_declaration" => Decl::Transparent,
+        _ => return None,
+    })
+}
+
+#[cfg(feature = "lang-csharp")]
+fn csharp_names(node: Node, src: &str) -> Vec<String> {
+    if matches!(node.kind(), "field_declaration" | "event_field_declaration") {
+        return named_children(node)
+            .into_iter()
+            .filter(|c| c.kind() == "variable_declaration")
+            .flat_map(named_children)
+            .filter(|d| d.kind() == "variable_declarator")
+            .filter_map(|d| name_of(d, src, "name"))
+            .collect();
+    }
+    if node.kind() == "operator_declaration" {
+        return node
+            .child_by_field_name("operator")
+            .map(|o| format!("operator {}", text(o, src)))
+            .into_iter()
+            .collect();
+    }
+    name_field(node, src)
+}
+
+/// C#: `public`, `protected`, `protected internal`; members of an interface unless
+/// `private`; members of a public enum. No modifier is `internal` (a type) or `private`
+/// (a member).
+#[cfg(feature = "lang-csharp")]
+pub fn csharp(root: Node, src: &str) -> Vec<PublicName> {
+    let mut out = Vec::new();
+    let lang = OoLang {
+        decl: csharp_decl,
+        vis: java_like_vis,
+        top_default: false,
+        member_default: false,
+        names: csharp_names,
+    };
+    oo_walk(root, src, &lang, &mut Vec::new(), false, &mut out);
+    out
+}
+
+#[cfg(feature = "lang-kotlin")]
+fn kotlin_decl(node: Node, _src: &str) -> Option<Decl> {
+    Some(match node.kind() {
+        "class_declaration" | "object_declaration" => Decl::Type(false),
+        "function_declaration" => Decl::Member(NameKind::Function),
+        "property_declaration" => Decl::Member(NameKind::Const),
+        "type_alias" => Decl::Member(NameKind::Type),
+        "enum_entry" => Decl::AlwaysPublic(NameKind::Const),
+        "companion_object" => Decl::Transparent,
+        _ => return None,
+    })
+}
+
+#[cfg(feature = "lang-kotlin")]
+fn kotlin_names(node: Node, src: &str) -> Vec<String> {
+    match node.kind() {
+        "property_declaration" => named_children(node)
+            .into_iter()
+            .filter(|c| c.kind() == "variable_declaration")
+            .filter_map(|v| {
+                named_children(v)
+                    .into_iter()
+                    .find(|c| c.kind() == "identifier")
+                    .map(|i| text(i, src).to_string())
+            })
+            .collect(),
+        "enum_entry" | "type_alias" => name_of(node, src, "type")
+            .or_else(|| {
+                named_children(node)
+                    .into_iter()
+                    .find(|c| c.kind() == "identifier")
+                    .map(|i| text(i, src).to_string())
+            })
+            .into_iter()
+            .collect(),
+        _ => name_field(node, src),
+    }
+}
+
+/// Kotlin: everything not `private` or `internal` (public is the default). The members
+/// of a `companion object` are named on its class.
+#[cfg(feature = "lang-kotlin")]
+pub fn kotlin(root: Node, src: &str) -> Vec<PublicName> {
+    let mut out = Vec::new();
+    let lang = OoLang {
+        decl: kotlin_decl,
+        vis: public_by_default_vis,
+        top_default: true,
+        member_default: true,
+        names: kotlin_names,
+    };
+    oo_walk(root, src, &lang, &mut Vec::new(), false, &mut out);
+    out
+}
+
+#[cfg(feature = "lang-scala")]
+fn scala_decl(node: Node, _src: &str) -> Option<Decl> {
+    Some(match node.kind() {
+        "class_definition" | "object_definition" | "trait_definition" | "enum_definition" => {
+            Decl::Type(false)
+        }
+        "function_definition" | "function_declaration" => Decl::Member(NameKind::Function),
+        "val_definition" | "var_definition" | "val_declaration" | "var_declaration" => {
+            Decl::Member(NameKind::Const)
+        }
+        "type_definition" => Decl::Member(NameKind::Type),
+        "simple_enum_case" | "full_enum_case" => Decl::AlwaysPublic(NameKind::Const),
+        "enum_case_definitions" | "package_clause" => Decl::Transparent,
+        _ => return None,
+    })
+}
+
+#[cfg(feature = "lang-scala")]
+fn scala_names(node: Node, src: &str) -> Vec<String> {
+    match node.kind() {
+        "val_definition" | "var_definition" => node
+            .child_by_field_name("pattern")
+            .filter(|p| p.kind() == "identifier")
+            .map(|p| text(p, src).to_string())
+            .into_iter()
+            .collect(),
+        _ => name_field(node, src),
+    }
+}
+
+/// Scala: everything not `private` (`private[x]` included); public is the default.
+#[cfg(feature = "lang-scala")]
+pub fn scala(root: Node, src: &str) -> Vec<PublicName> {
+    let mut out = Vec::new();
+    let lang = OoLang {
+        decl: scala_decl,
+        vis: public_by_default_vis,
+        top_default: true,
+        member_default: true,
+        names: scala_names,
+    };
+    oo_walk(root, src, &lang, &mut Vec::new(), false, &mut out);
+    out
+}
+
 /// Parses `src` with `language` and reads its public names with `read`. A file that does
 /// not parse, or parses with errors, is an error: a name inside the broken part could be
 /// missed, so the caller names the file as not checked.

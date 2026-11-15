@@ -23,7 +23,12 @@ impl LanguagePack for JavaPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -37,6 +42,16 @@ impl LanguagePack for JavaPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         super::functions::is_test_file(path, Some(is_java_test_path))
+    }
+
+    fn public_names(&self, path: &str, src: &str) -> Result<Vec<super::public_names::PublicName>> {
+        super::public_names::names_of(
+            &tree_sitter_java::LANGUAGE.into(),
+            "the Java",
+            path,
+            src,
+            super::public_names::java,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
