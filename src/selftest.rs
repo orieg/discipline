@@ -4800,6 +4800,51 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-php")]
+    (
+        "assertion-reduction: a PHP assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let php = |check: &str| {
+                format!(
+                    "<?php\nclass STest extends TestCase {{\n    public function testT(): void {{\n        {check};\n    }}\n}}\n"
+                )
+            };
+            let mut ok = true;
+            for (base, head) in [
+                (
+                    "$this->assertGreaterThan(6, f(6))",
+                    "$this->assertGreaterThanOrEqual(6, f(6))",
+                ),
+                ("$this->assertTrue(f(6))", "$this->assertFalse(f(6))"),
+                ("self::assertTrue(f(6) > 6)", "self::assertTrue(f(6) >= 6)"),
+                ("$this->assertSame(0, f(0))", "$this->assertNotSame(1, f(0))"),
+                (
+                    "expect(f(6))->toBeGreaterThan(6)",
+                    "expect(f(6))->toBeGreaterThanOrEqual(6)",
+                ),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("tests/STest.php", &php(base), &php(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: testT the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "tests/STest.php",
+                    &php("$this->assertGreaterThanOrEqual(6, f(6))"),
+                    &php("$this->assertGreaterThan(6, f(6))"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

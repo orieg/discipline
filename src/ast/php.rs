@@ -86,6 +86,7 @@ impl LanguagePack for PhpPack {
         PHP_PACK.facts_to_method_checks(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::php_declared(root, src, &mut extractor.facts.tests);
         PHP_PACK.facts_from_helper_loops(root, &anc, src, vocab, &mut extractor.facts);
+        super::comparisons::php(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,

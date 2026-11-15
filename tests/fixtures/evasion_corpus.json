@@ -3985,6 +3985,78 @@
           "companion-edit/companion-not-specific"
         ]
       }
+    },
+    {
+      "name": "php-phpunit-bound-widened",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertGreaterThan(6, count_rows($rows));\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertGreaterThanOrEqual(6, count_rows($rows));\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "php-phpunit-assert-inverted",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertTrue(count_rows($rows) === 7);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertFalse(count_rows($rows) === 7);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "php-phpunit-condition-widened",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        self::assertTrue(count_rows($rows) > 6);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        self::assertTrue(count_rows($rows) >= 6);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "php-pest-matcher-widened",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\ntest('rows are counted', function () {\n    $rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count_rows($rows))->toBeGreaterThan(6);\n});\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\ntest('rows are counted', function () {\n    $rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count_rows($rows))->toBeGreaterThanOrEqual(6);\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "php-phpunit-bound-tightened",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertGreaterThanOrEqual(6, count_rows($rows));\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertGreaterThan(6, count_rows($rows));\n    }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }
