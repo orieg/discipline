@@ -588,6 +588,9 @@ enum Decl {
     /// A namespace, package block or companion object: walked as if its members were
     /// written where it is.
     Transparent,
+    /// A Swift `extension`: its members are named on the type it extends, which it does
+    /// not declare.
+    Extension,
 }
 
 /// One language's rules for [`oo_walk`].
@@ -630,7 +633,7 @@ fn oo_walk(
         };
         let public = match decl {
             Decl::AlwaysPublic(_) => true,
-            Decl::Transparent => (lang.vis)(child, src) != Vis::Hidden,
+            Decl::Transparent | Decl::Extension => (lang.vis)(child, src) != Vis::Hidden,
             _ => match (lang.vis)(child, src) {
                 Vis::Public => true,
                 Vis::Hidden => false,
@@ -646,6 +649,20 @@ fn oo_walk(
             Decl::Transparent => {
                 let body = body_of(child).unwrap_or(child);
                 oo_walk(body, src, lang, prefix, in_interface, out);
+            }
+            // `public extension T { func f() }` makes `f` public; without `public`, each
+            // member says so itself.
+            Decl::Extension => {
+                let Some(name) = (lang.names)(child, src).into_iter().next() else {
+                    continue;
+                };
+                if let Some(body) = body_of(child) {
+                    let marked = (lang.vis)(child, src) == Vis::Public;
+                    let depth = prefix.len();
+                    prefix.extend(name.split('.').map(str::to_string));
+                    oo_walk(body, src, lang, prefix, marked, out);
+                    prefix.truncate(depth);
+                }
             }
             Decl::Type(interface) => {
                 let Some(name) = (lang.names)(child, src).into_iter().next() else {
@@ -676,7 +693,7 @@ fn oo_walk(
 fn modifier_words(node: Node, src: &str) -> Vec<String> {
     named_children(node)
         .into_iter()
-        .filter(|c| matches!(c.kind(), "modifiers" | "modifier"))
+        .filter(|c| matches!(c.kind(), "modifiers" | "modifier" | "visibility_modifier"))
         .flat_map(|c| {
             text(c, src)
                 .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
@@ -923,6 +940,304 @@ pub fn scala(root: Node, src: &str) -> Vec<PublicName> {
     out
 }
 
+#[cfg(feature = "lang-swift")]
+fn swift_decl(node: Node, src: &str) -> Option<Decl> {
+    Some(match node.kind() {
+        "class_declaration"
+            if node
+                .child_by_field_name("declaration_kind")
+                .is_some_and(|k| text(k, src) == "extension") =>
+        {
+            Decl::Extension
+        }
+        "class_declaration" => Decl::Type(false),
+        "protocol_declaration" => Decl::Type(true),
+        "function_declaration" | "protocol_function_declaration" => {
+            Decl::Member(NameKind::Function)
+        }
+        "init_declaration" => Decl::Member(NameKind::Method),
+        "property_declaration" | "protocol_property_declaration" => Decl::Member(NameKind::Const),
+        "typealias_declaration" => Decl::Member(NameKind::Type),
+        "enum_entry" => Decl::AlwaysPublic(NameKind::Const),
+        _ => return None,
+    })
+}
+
+#[cfg(feature = "lang-swift")]
+fn swift_names(node: Node, src: &str) -> Vec<String> {
+    match node.kind() {
+        "init_declaration" => vec!["init".to_string()],
+        "enum_entry" => {
+            let mut cursor = node.walk();
+            node.children_by_field_name("name", &mut cursor)
+                .map(|n| text(n, src).to_string())
+                .collect()
+        }
+        // `let limit`, `var name { get }`: the bound identifier, never a tuple pattern.
+        "property_declaration" | "protocol_property_declaration" => node
+            .child_by_field_name("name")
+            .map(|p| {
+                p.child_by_field_name("bound_identifier")
+                    .map(|b| text(b, src))
+                    .unwrap_or_else(|| text(p, src).split_whitespace().last().unwrap_or(""))
+                    .to_string()
+            })
+            .filter(|p| !p.is_empty() && !p.contains(['(', ',']))
+            .into_iter()
+            .collect(),
+        _ => node
+            .child_by_field_name("name")
+            .map(|n| {
+                let t = text(n, src);
+                t.split('<').next().unwrap_or(t).trim().to_string()
+            })
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// Swift: `public` and `open` declarations; members of a public protocol; the cases of a
+/// public enum; the `public` members of an `extension`, named on the type it extends
+/// (every member of a `public extension` not marked otherwise). No modifier is
+/// `internal`.
+#[cfg(feature = "lang-swift")]
+pub fn swift(root: Node, src: &str) -> Vec<PublicName> {
+    let mut out = Vec::new();
+    let lang = OoLang {
+        decl: swift_decl,
+        vis: |n, s| {
+            let words = modifier_words(n, s);
+            let has = |w: &str| words.iter().any(|x| x == w);
+            if has("private") || has("fileprivate") || has("internal") {
+                Vis::Hidden
+            } else if has("public") || has("open") {
+                Vis::Public
+            } else {
+                Vis::Default
+            }
+        },
+        top_default: false,
+        member_default: false,
+        names: swift_names,
+    };
+    oo_walk(root, src, &lang, &mut Vec::new(), false, &mut out);
+    out
+}
+
+#[cfg(feature = "lang-php")]
+fn php_decl(node: Node, _src: &str) -> Option<Decl> {
+    Some(match node.kind() {
+        "class_declaration" | "trait_declaration" | "enum_declaration" => Decl::Type(false),
+        "interface_declaration" => Decl::Type(true),
+        "function_definition" => Decl::Member(NameKind::Function),
+        "method_declaration" => Decl::Member(NameKind::Method),
+        "const_declaration" | "property_declaration" => Decl::Member(NameKind::Const),
+        "enum_case" => Decl::AlwaysPublic(NameKind::Const),
+        "namespace_definition" => Decl::Transparent,
+        _ => return None,
+    })
+}
+
+#[cfg(feature = "lang-php")]
+fn php_names(node: Node, src: &str) -> Vec<String> {
+    match node.kind() {
+        "const_declaration" => named_children(node)
+            .into_iter()
+            .filter(|c| c.kind() == "const_element")
+            .filter_map(|c| {
+                named_children(c)
+                    .into_iter()
+                    .find(|n| n.kind() == "name")
+                    .map(|n| text(n, src).to_string())
+            })
+            .collect(),
+        "property_declaration" => named_children(node)
+            .into_iter()
+            .filter(|c| c.kind() == "property_element")
+            .filter_map(|c| c.child_by_field_name("name"))
+            .map(|v| text(v, src).trim_start_matches('$').to_string())
+            .collect(),
+        _ => name_field(node, src),
+    }
+}
+
+/// PHP: every class, interface, trait, enum, function and constant of a file (public is
+/// the default, and namespaces do not qualify names); members unless `private`.
+#[cfg(feature = "lang-php")]
+pub fn php(root: Node, src: &str) -> Vec<PublicName> {
+    let mut out = Vec::new();
+    let lang = OoLang {
+        decl: php_decl,
+        vis: java_like_vis,
+        top_default: true,
+        member_default: true,
+        names: php_names,
+    };
+    oo_walk(root, src, &lang, &mut Vec::new(), false, &mut out);
+    out
+}
+
+// ---------------------------------------------------------------------------------------
+// Ruby: visibility is a running state of the class or module body.
+
+#[cfg(feature = "lang-ruby")]
+fn ruby_symbols(args: Node, src: &str) -> Vec<String> {
+    named_children(args)
+        .into_iter()
+        .filter(|a| matches!(a.kind(), "simple_symbol" | "string"))
+        .map(|a| {
+            text(a, src)
+                .trim_start_matches(':')
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_string()
+        })
+        .collect()
+}
+
+#[cfg(feature = "lang-ruby")]
+fn ruby_body(
+    body: Node,
+    src: &str,
+    prefix: &mut Vec<String>,
+    top: bool,
+    out: &mut Vec<PublicName>,
+) {
+    let owner = prefix.join("::");
+    let mut public = true;
+    let mut hidden: BTreeSet<String> = BTreeSet::new();
+    let mut found: Vec<PublicName> = Vec::new();
+    for stmt in named_children(body) {
+        match stmt.kind() {
+            "class" | "module" => {
+                let Some(name) = name_of(stmt, src, "name") else {
+                    continue;
+                };
+                let kind = if stmt.kind() == "class" {
+                    NameKind::Type
+                } else {
+                    NameKind::Module
+                };
+                push(&mut found, qualify(prefix, &name, "::"), kind, stmt, src);
+                if let Some(b) = stmt.child_by_field_name("body") {
+                    prefix.push(name);
+                    ruby_body(b, src, prefix, false, out);
+                    prefix.pop();
+                }
+            }
+            "assignment" => {
+                if let Some(left) = stmt
+                    .child_by_field_name("left")
+                    .filter(|l| l.kind() == "constant")
+                {
+                    push(
+                        &mut found,
+                        qualify(prefix, text(left, src), "::"),
+                        NameKind::Const,
+                        stmt,
+                        src,
+                    );
+                }
+            }
+            // A `def` at the top level is a private method of `Object`.
+            "method" if !top && public => {
+                if let Some(m) = name_of(stmt, src, "name") {
+                    push(
+                        &mut found,
+                        format!("{owner}#{m}"),
+                        NameKind::Method,
+                        stmt,
+                        src,
+                    );
+                }
+            }
+            "singleton_method" if !top => {
+                if let Some(m) = name_of(stmt, src, "name") {
+                    push(
+                        &mut found,
+                        format!("{owner}.{m}"),
+                        NameKind::Method,
+                        stmt,
+                        src,
+                    );
+                }
+            }
+            // `private` / `protected` / `public` alone switch what follows.
+            "identifier" => match text(stmt, src) {
+                "private" => public = false,
+                "public" | "protected" => public = true,
+                _ => {}
+            },
+            "call" => {
+                let Some(method) = stmt.child_by_field_name("method") else {
+                    continue;
+                };
+                let args = stmt.child_by_field_name("arguments");
+                match (text(method, src), args) {
+                    ("private" | "private_constant" | "private_class_method", Some(args)) => {
+                        // `private def x`, `private :x, :y`, `private_constant :X`.
+                        for a in named_children(args) {
+                            if matches!(a.kind(), "method" | "singleton_method") {
+                                if let Some(m) = name_of(a, src, "name") {
+                                    hidden.insert(m);
+                                }
+                            }
+                        }
+                        hidden.extend(ruby_symbols(args, src));
+                    }
+                    ("protected" | "public", Some(args)) if !top => {
+                        for a in named_children(args) {
+                            if a.kind() == "method" {
+                                if let Some(m) = name_of(a, src, "name") {
+                                    push(
+                                        &mut found,
+                                        format!("{owner}#{m}"),
+                                        NameKind::Method,
+                                        a,
+                                        src,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    ("attr_reader" | "attr_writer" | "attr_accessor", Some(args))
+                        if !top && public =>
+                    {
+                        for sym in ruby_symbols(args, src) {
+                            push(
+                                &mut found,
+                                format!("{owner}#{sym}"),
+                                NameKind::Method,
+                                stmt,
+                                src,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    // A name `private :x` (or `private_constant :X`) hid after it was defined.
+    let last = |n: &str| -> String { n.rsplit(['#', '.', ':']).next().unwrap_or(n).to_string() };
+    out.extend(
+        found
+            .into_iter()
+            .filter(|n| !hidden.contains(&last(&n.name))),
+    );
+}
+
+/// Ruby: classes, modules and constants (`Store::LIMIT`); instance methods (`Cache#get`)
+/// not made `private`, by the `private` keyword alone, `private def`, or `private :name`;
+/// `attr_reader` / `attr_writer` / `attr_accessor` names; class methods
+/// (`Cache.create`) unless `private_class_method`. A top-level `def` is private.
+#[cfg(feature = "lang-ruby")]
+pub fn ruby(root: Node, src: &str) -> Vec<PublicName> {
+    let mut out = Vec::new();
+    ruby_body(root, src, &mut Vec::new(), true, &mut out);
+    out
+}
+
 /// Parses `src` with `language` and reads its public names with `read`. A file that does
 /// not parse, or parses with errors, is an error: a name inside the broken part could be
 /// missed, so the caller names the file as not checked.
@@ -934,7 +1249,17 @@ pub fn names_of(
     read: impl FnOnce(Node, &str) -> Vec<PublicName>,
 ) -> anyhow::Result<Vec<PublicName>> {
     let tree = super::source_text::parse_file_as(language, grammar, path, src)?;
-    let root = tree.root_node();
+    names_in(tree.root_node(), grammar, path, src, read)
+}
+
+/// [`names_of`] for a tree the pack parsed itself.
+pub fn names_in(
+    root: Node,
+    grammar: &str,
+    path: &str,
+    src: &str,
+    read: impl FnOnce(Node, &str) -> Vec<PublicName>,
+) -> anyhow::Result<Vec<PublicName>> {
     if root.has_error() {
         anyhow::bail!("`{path}` parses with errors as {grammar}");
     }

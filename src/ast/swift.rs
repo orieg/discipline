@@ -100,7 +100,12 @@ impl LanguagePack for SwiftPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -114,6 +119,19 @@ impl LanguagePack for SwiftPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         functions::is_test_file(path, Some(is_swift_test_path))
+    }
+
+    fn public_names(&self, path: &str, src: &str) -> Result<Vec<super::public_names::PublicName>> {
+        let text = swift_tree::line_ended(src);
+        let tree = swift_tree::parse(&text)
+            .map_err(|why| anyhow::anyhow!("could not parse `{path}`: {why}"))?;
+        super::public_names::names_in(
+            tree.root_node(),
+            "the Swift",
+            path,
+            text.as_str(),
+            super::public_names::swift,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
