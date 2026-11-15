@@ -336,6 +336,7 @@ gates.companion-edit.rules
 gates.companion-edit.rules[].reason
 gates.companion-edit.rules[].require_all
 gates.companion-edit.rules[].require_edits_to
+gates.companion-edit.rules[].require_mention
 gates.companion-edit.rules[].trigger_paths
 gates.companion-edit.severity
 gates.config-integrity

@@ -425,6 +425,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `claim-labels/label-placeholder` | Verification Label Placeholder |
 | `claim-labels/read-label-unresolvable` | Unresolvable Read Label |
 | `companion-edit/companion-not-edited` | Companion Path Not Edited |
+| `companion-edit/companion-not-specific` | Companion Edit Names Nothing That Changed |
 | `changed-line-coverage/uncovered-lines` | Changed Lines Not Covered |
 | `visual-evidence/visual-evidence-missing` | After Image Missing |
 | `visual-evidence/visual-evidence-incomplete` | Before Image Missing |
@@ -2250,7 +2251,7 @@ One rule holds for the count and one for the finding, and neither changes the ot
 
 #### `companion-edit`
 - **Rule:** Each `[[gates.companion-edit.rules]]` entry is one covenant: a change that touches a path matching any of its `trigger_paths` globs must also edit a path matching one of its `require_edits_to` globs, or every one of them with `require_all = true`. Rules are independent: a change that fires two rules must meet both, and meeting one never excuses the other. Typical uses: a change to a mechanism (`argo/**`) must update its specification (`docs/security-threat-model.md`); a mirror set of agent-instruction files must move together.
-- **Languages:** Any (paths only; file contents are not read).
+- **Languages:** Any for the path rule, which reads no file contents. `require_mention` reads the public names of the triggering files ([Public Names](#public-names)), in the languages whose packs supply them.
 - **What counts as a change:**
   - A rule fires on either side of the change: an added, modified or deleted path, and both the old and the new path of a rename. Deleting a mechanism file changes it.
   - A requirement is met only by a path the head still has: added, modified, or the new side of a rename. Deleting the companion is not editing it.
@@ -2259,6 +2260,11 @@ One rule holds for the count and one for the finding, and neither changes the ot
   - `exempt_paths` drops a path from the change before any rule reads it: it neither fires a rule nor meets one.
 - **What it catches:**
   - A fired rule with no changed companion (`companion-not-edited`). The finding names the paths that fired the rule, the rule's position, its `trigger_paths`, the `require_edits_to` entries missing (all of them, or with `require_all` the ones no changed path matched) and the rule's `reason`.
+  - With `require_mention = true` on a rule, a met rule whose companion edit names none of the public names the triggering paths added, removed or modified (`companion-not-specific`). This is a separate finding code, so a repository can set its severity or baseline it without suppressing the path rule.
+    - The names come from the shared public-name reading ([Public Names](#public-names)), over the changed files matching `trigger_paths` (companion paths left out). Nothing is computed inside this gate.
+    - A name counts as named on a line the change adds to a companion path, read as prose: fenced code, indented code and HTML comments are not read, and neither are changelog files (`CHANGELOG*`, `CHANGES*`, `HISTORY*`, `NEWS*`). Code spans and table cells count.
+    - A name is named by its qualified form (`Store::get`) or its last segment (`get`), as a whole word: neither neighbour is a letter, digit or `_`.
+    - When the triggering change adds, removes or modifies no public name (an internal refactor), the gate writes a note and reports nothing: a doc edit for a refactor costs no override. When no public name could be read (no pack supplies them, or a file does not parse), the note says so and nothing is reported.
   - A configuration that could never fire or never be met, which stops the run (exit 2): no `rules` while the gate is enabled, an empty `trigger_paths` or `require_edits_to`, a blank entry in either, or a glob that does not compile (named by its key, `gates.companion-edit.rules[<n>].<field>`).
 - **Failing diff example (rejected):** with `trigger_paths = ["argo/**"]` and `require_edits_to = ["docs/security-threat-model.md"]`, a change that edits `argo/workflow-templates/build.yaml` and nothing under `docs/`.
 - **Passing PR description (accepted):**
@@ -2266,16 +2272,18 @@ One rule holds for the count and one for the finding, and neither changes the ot
   allow-companion-edit: docs/security-threat-model.md the template change only renames a parameter
   ```
 - **What it does NOT catch:**
-  - A companion edit that says nothing about the trigger change: any edit to the required path meets the rule, a whitespace fix included. The gate checks that both sides moved, not that the specification describes the mechanism.
+  - Without `require_mention`, a companion edit that says nothing about the trigger change: any edit to the required path meets the rule, a whitespace fix included. The gate checks that both sides moved, not that the specification describes the mechanism.
+  - With `require_mention`, a doc that names the changed identifier and nothing more: a one-line mention appended to it (``Updated for `close`.``) meets the rule. The gate checks a mention, not a description (#1089).
+  - With `require_mention`, a doc that names the identifier but describes it wrongly; one that describes the behaviour without the name (a synonym, "now retries twice"), which is reported, a false block; a mention on a removed line; and a short name that also occurs elsewhere in the added prose (`get`), which counts.
   - A pure rename of a required path into a matching location: the new side of a rename counts as edited.
   - A rule whose globs do not match what the repository calls its mechanism or specification: a path outside `trigger_paths` never fires it.
   - A whole-tree run (`baseline --whole-tree`): there is no change to judge, so the gate is not evaluated there. An agent's edit hook leaves it to the end of the turn, since the companion is often written after the mechanism.
 - **No change:** when the change touches no path outside `exempt_paths`, or no changed path matches any rule, the gate passes with a note and `examined` is 0. `examined` counts the rules a changed path fired.
-- **Weakening the rules:** removing or editing a rule is a weakening [`config-integrity`](#config-integrity) reports (`allow-gate-weakening:`); a rule has no identity across base and head, so any edit is a lost entry. Adding a rule is not reported.
-- **Lifting directive:** `allow-companion-edit: <first require_edits_to entry> <reason>` in PR description or commit message lifts the rules whose first `require_edits_to` entry the subject names, and counts against `max_overrides`.
+- **Weakening the rules:** removing or editing a rule is a weakening [`config-integrity`](#config-integrity) reports (`allow-gate-weakening:`). A rule is identified across base and head by its `trigger_paths` and `require_edits_to`: setting `require_mention = true` on it tightens it and is not reported, and removing it is a weakening; any other edit is a lost entry. Adding a rule is not reported.
+- **Lifting directive:** `allow-companion-edit: <first require_edits_to entry> <reason>` in PR description or commit message lifts the rules whose first `require_edits_to` entry the subject names (`companion-not-edited` and `companion-not-specific` alike), and counts against `max_overrides`.
 - **Baseline:** the finding has no line and is located at the rule's first `require_edits_to` entry. The first rule with that entry is identified by its code and that path; a later rule with the same first entry is anchored on a hash of its globs (`rule:<sha256>` over `trigger_paths`, `require_edits_to` and `require_all`).
 - **Default:** off, severity `error`.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `rules` (`trigger_paths`, `require_edits_to`, `require_all`, `reason`).
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `rules` (`trigger_paths`, `require_edits_to`, `require_all`, `require_mention`, `reason`).
 
 #### `changed-line-coverage`
 - **Rule:** A line the change adds to a source file must not be one the project's coverage report lists as executable and never run (zero hits). There is no threshold: the report's own fact for each changed line is the rule. A changed line that a listed file does not list is not executable to the tool, and is not reported.

@@ -644,6 +644,10 @@
                 "$ref": "#/$defs/StringList",
                 "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside"
               },
+              "require_mention": {
+                "description": "Whether the companion's added lines must name a public name the triggering change added, removed or modified (prose and table cells; not fenced code, HTML comments or changelog files)",
+                "type": "boolean"
+              },
               "trigger_paths": {
                 "$ref": "#/$defs/StringList",
                 "description": "Globs; a changed path matching any of them fires the rule"

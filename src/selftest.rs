@@ -5863,6 +5863,17 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "companion-edit: require_mention counts a changed public name as a whole word, in its qualified or short form (#1089)",
+        || {
+            use crate::guards::companion_edit::{mention_forms, names};
+            let forms = mention_forms("Store::get");
+            Ok(forms == ["Store::get", "get"]
+                && names("Call `get()` now.", "get")
+                && !names("Call getter() now.", "get")
+                && names("Adds Store::get.", "Store::get"))
+        },
+    ),
+    (
         "command: base-tests overlays no test inside a source file, and names a changed source that holds one",
         || {
             use crate::guards::command::{base_test_files, inline_test_sources};
@@ -10220,6 +10231,7 @@ smoke_cost::set_contains
                         trigger_paths: trigger.iter().map(|p| p.to_string()).collect(),
                         require_edits_to: required.iter().map(|p| p.to_string()).collect(),
                         require_all,
+                        require_mention: false,
                         reason: None,
                     },
                     0,
