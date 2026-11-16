@@ -15122,6 +15122,91 @@ fn changed_ranges_is_given_the_added_lines_and_a_change_with_none_is_not_run() {
     assert_eq!(given(), None);
 }
 
+/// `changed_ranges_paths` limits `{changed_ranges}` to the files it keeps (#1068): a
+/// changed document, a file a `!` glob leaves out and a path the list could not carry are
+/// not listed. A change that adds lines only outside the kept files does not run the
+/// command, and the note names the filter.
+#[cfg(unix)]
+#[test]
+fn changed_ranges_paths_lists_only_the_kept_files() {
+    let logs = tempfile::tempdir().unwrap();
+    let log = logs.path().join("ranges.log");
+    let setup = || {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                (
+                    "discipline.toml",
+                    &format!(
+                        "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommand = \"sh -c 'printf %s \\\"$1\\\" > {}' sh --mutate={{changed_ranges}}\"\nchanged_ranges_paths = [\"src/**/*.rs\", \"!src/skip.rs\"]\n",
+                        log.display()
+                    ),
+                ),
+                ("src/skip.rs", "pub fn s() {}\n"),
+            ],
+            "ci: configure a scoped command",
+        );
+        repo
+    };
+    let given = || std::fs::read_to_string(&log).ok();
+
+    let repo = setup();
+    let lib_lines = GOOD_LIB.lines().count();
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}// one\n"));
+    repo.write("src/skip.rs", "pub fn s() {}\npub fn t() {}\n");
+    repo.write("README.md", "# readme\n");
+    repo.write("-x.md", "a path the list could not carry\n");
+    repo.commit("feat: add lines");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+    assert_eq!(
+        given().as_deref(),
+        Some(format!("--mutate=src/lib.rs:{}-{}", lib_lines + 1, lib_lines + 1).as_str())
+    );
+    std::fs::remove_file(&log).unwrap();
+
+    // Lines added only outside the kept files: the command is not run.
+    let repo = setup();
+    repo.write("src/skip.rs", "pub fn s() {}\npub fn t() {}\n");
+    repo.write("README.md", "# readme\n");
+    repo.commit("docs: readme");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("command");
+    assert_eq!(outcome["examined"], 0);
+    assert!(
+        outcome["notes"].as_array().unwrap().iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .contains("adds no line in a file `changed_ranges_paths` keeps")),
+        "{outcome}"
+    );
+    assert_eq!(given(), None);
+
+    // A filter on a command that never names `{changed_ranges}` is a configuration error.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[(
+            "discipline.toml",
+            &format!(
+                "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommand = \"true\"\nchanged_ranges_paths = [\"src/**\"]\n"
+            ),
+        )],
+        "ci: configure",
+    );
+    repo.write("src/a.rs", "pub fn a() {}\n");
+    repo.commit("feat: a");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        format!("{}{}", run.stdout, run.stderr).contains("so nothing reads it"),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+}
+
 const COVERAGE_BASE_LIB: &str = "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n";
 /// Lines 4-7 are added: a blank line, then `halve` on 5-7.
 const COVERAGE_HEAD_LIB: &str =

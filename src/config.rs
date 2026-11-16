@@ -1882,6 +1882,9 @@ pub struct CommandGate {
     /// Name of the `<!-- generated:<name> -->` region of `example` that is the example, in
     /// place of the whole file.
     pub example_marker: Option<String>,
+    /// Globs naming the changed files `{changed_ranges}` lists; a glob starting with `!`
+    /// leaves out what it matches. Empty: every changed file.
+    pub changed_ranges_paths: Vec<String>,
     /// Multi-command suite support.
     pub commands: Vec<CommandEntry>,
 }
@@ -1907,6 +1910,7 @@ impl Default for CommandGate {
             snapshot_ignore: Vec::new(),
             example: None,
             example_marker: None,
+            changed_ranges_paths: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -1939,6 +1943,9 @@ pub struct CommandEntry {
     /// Name of the `<!-- generated:<name> -->` region of `example` that is the example, in
     /// place of the whole file.
     pub example_marker: Option<String>,
+    /// Globs naming the changed files `{changed_ranges}` lists; a glob starting with `!`
+    /// leaves out what it matches. Empty: every changed file.
+    pub changed_ranges_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

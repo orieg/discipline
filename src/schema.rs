@@ -485,6 +485,7 @@ pub fn generate_schema() -> Value {
                 "snapshot_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`" },
                 "example": { "type": "string", "description": "Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}`" },
                 "example_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`" },
+                "changed_ranges_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs naming the changed files `{changed_ranges}` lists, where a glob starting with `!` leaves out what it matches; a change with no added line in a kept file does not run the command. Needs `{changed_ranges}` in the command or the canary" },
                 "commands": {
                     "type": "array",
                     "items": { "$ref": "#/$defs/CommandEntry" },
@@ -511,7 +512,8 @@ pub fn generate_schema() -> Value {
                     "snapshot_ignore": { "$ref": "#/$defs/StringList", "description": "Regexes for lines left out of the snapshot comparison, on both sides" },
                     "snapshot_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`" },
                     "example": { "type": "string", "description": "Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}`" },
-                    "example_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`" }
+                    "example_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`" },
+                    "changed_ranges_paths": { "$ref": "#/$defs/StringList", "description": "Globs naming the changed files `{changed_ranges}` lists, where a glob starting with `!` leaves out what it matches; a change with no added line in a kept file does not run the command. Needs `{changed_ranges}` in the command or the canary" }
                 }
             },
             "DependencyDeltaGate": gate_table(json!({
