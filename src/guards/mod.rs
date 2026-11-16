@@ -28,6 +28,7 @@ pub mod harness_tampering;
 pub mod hygiene;
 pub mod instruction_smuggling;
 pub mod integrity;
+pub mod invented_names;
 pub mod issue_link;
 pub mod lockfile;
 pub mod manifest_sync;
@@ -55,6 +56,7 @@ pub mod token_formats;
 pub mod toolchain_config;
 pub mod unsafe_budget;
 pub mod version_lockstep;
+pub mod visual_evidence;
 
 use crate::cli::SuiteChoice;
 pub use crate::config::Severity;
@@ -1171,6 +1173,8 @@ pub fn run_checks(
             "claim-labels" => claim_labels::evaluate_claim_labels(ctx),
             "companion-edit" => companion_edit::evaluate_companion_edit(ctx),
             "changed-line-coverage" => changed_line_coverage::evaluate_changed_line_coverage(ctx),
+            "visual-evidence" => visual_evidence::evaluate_visual_evidence(ctx),
+            "invented-names" => invented_names::evaluate_invented_names(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -1357,6 +1361,8 @@ impl PathFilter {
 /// (an entry of `rules`, the `scratch` table) or under `[tests]`.
 const GLOB_LIST_KEYS: &[&str] = &[
     "exempt_paths",
+    "removed_link_exempt_paths",
+    "config_docs",
     "paths",
     "include",
     "workflows",
@@ -2228,6 +2234,7 @@ mod tests {
             "test-floor",
             "unsafe-budget",
             "version-lockstep",
+            "visual-evidence",
         ];
         left_out.sort_unstable();
         expected.sort_unstable();
@@ -2290,6 +2297,7 @@ mod tests {
             "bench-regression",
             "companion-edit",
             "changed-line-coverage",
+            "visual-evidence",
         ];
         let mut found = delta_only.clone();
         expected.sort_unstable();
@@ -2337,6 +2345,7 @@ mod tests {
     const NOT_GLOB_LISTS: &[&str] = &[
         // Names: functions, macros, jobs, packages, logins, repositories, trailers, units.
         "agent_logins",
+        "config_files",
         "allow_dependencies",
         "allowed_override_actors",
         "allowed_users",
@@ -2499,6 +2508,7 @@ mod tests {
         "constant_file",
         "deny_file",
         "documented_job_count_path",
+        "example",
         "head_file",
         "head_report",
         "manifest",
@@ -2507,6 +2517,7 @@ mod tests {
         "report",
         "snapshot",
         "superseded_registry",
+        "surface",
         "test_report",
         "workflow",
         // Command lines.
@@ -2527,6 +2538,8 @@ mod tests {
         // Text compared or printed as written.
         "description",
         "marker",
+        "snapshot_marker",
+        "example_marker",
         "pinned_version",
         "provenance",
         "reason",
@@ -2536,7 +2549,7 @@ mod tests {
     /// How many string lists hold neither globs nor patterns (`NOT_GLOB_LISTS` without
     /// the pattern keys). A list added there changes this count, which is where its
     /// author says whether its entries are regular expressions.
-    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 36;
+    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 37;
 
     /// Every string and string-list property of the configuration schema:
     /// `(name, is a list, description)`.

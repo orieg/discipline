@@ -33,7 +33,12 @@ impl LanguagePack for KotlinPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -47,6 +52,21 @@ impl LanguagePack for KotlinPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         functions::is_test_file(path, Some(is_kotlin_test_path))
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        super::public_names::names_of(
+            &tree_sitter_kotlin_ng::LANGUAGE.into(),
+            "the Kotlin",
+            path,
+            src,
+            super::public_names::kotlin,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -93,6 +113,7 @@ impl LanguagePack for KotlinPack {
             ],
         );
         super::expected_exceptions::kotlin(root, &anc, src, &mut extractor.facts.tests);
+        super::comparisons::kotlin(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }

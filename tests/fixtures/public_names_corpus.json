@@ -1,0 +1,363 @@
+{
+  "description": "Files with their known public names, per language pack (#1086). tests/test_public_names_corpus.rs reads each with the pack's public-name extraction and reports precision and recall per language; both must be 1.0. A row of the \"Public names\" table in docs/GATES.md that changes changes these expectations.",
+  "cases": [
+    {
+      "language": "rust",
+      "path": "src/store.rs",
+      "source": "//! A store.\nuse std::collections::HashMap;\n\n/// Keys and values.\npub struct Store<K, V> {\n    items: HashMap<K, V>,\n    pub(crate) hits: u64,\n}\n\nimpl<K: std::hash::Hash + Eq, V> Store<K, V> {\n    pub fn new() -> Self { Self { items: HashMap::new(), hits: 0 } }\n    pub fn get(&mut self, k: &K) -> Option<&V> { self.hits += 1; self.items.get(k) }\n    pub(crate) fn clear(&mut self) { self.items.clear() }\n    fn evict(&mut self) {}\n}\n\nimpl<K, V> Drop for Store<K, V> { fn drop(&mut self) {} }\n\npub trait Backend {\n    fn load(&self) -> Vec<u8>;\n    fn name(&self) -> &str { \"backend\" }\n}\n\npub type Shared = std::sync::Arc<Store<String, String>>;\npub const DEFAULT_CAPACITY: usize = 64;\nstatic COUNTER: u8 = 0;\npub(super) fn reset() {}\n\npub mod wire {\n    pub fn encode() {}\n    pub(crate) fn decode() {}\n    pub mod v2 { pub struct Frame; }\n}\n\nmod detail {\n    pub fn helper() {}\n}\n\n#[macro_export]\nmacro_rules! store { () => {} }\n",
+      "public": [
+        "Backend",
+        "Backend::load",
+        "Backend::name",
+        "DEFAULT_CAPACITY",
+        "Shared",
+        "Store",
+        "Store::get",
+        "Store::new",
+        "store",
+        "wire",
+        "wire::encode",
+        "wire::v2",
+        "wire::v2::Frame"
+      ]
+    },
+    {
+      "language": "rust",
+      "path": "src/error.rs",
+      "source": "#[derive(Debug)]\npub enum Error { Io, Parse(String) }\npub(crate) enum Internal { A }\nimpl std::fmt::Display for Error {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"e\") }\n}\nimpl Error {\n    pub fn is_io(&self) -> bool { matches!(self, Error::Io) }\n}\npub static VERSION: &str = \"1\";\npub union Bits { a: u32, b: f32 }\n",
+      "public": [
+        "Bits",
+        "Error",
+        "Error::is_io",
+        "VERSION"
+      ]
+    },
+    {
+      "language": "python",
+      "path": "pkg/client.py",
+      "source": "\"\"\"HTTP client.\"\"\"\nimport json\nfrom typing import Any\n\nTIMEOUT = 30\n_session = None\nDEFAULTS: dict = {}\n\nclass Client:\n    retries = 3\n\n    def __init__(self, base):\n        self.base = base\n\n    def get(self, path):\n        return self._send(\"GET\", path)\n\n    async def stream(self, path):\n        pass\n\n    @property\n    def url(self):\n        return self.base\n\n    def _send(self, method, path):\n        pass\n\nclass _Pool:\n    def acquire(self):\n        pass\n\ndef connect(base: str) -> Client:\n    return Client(base)\n\nasync def fetch(url):\n    pass\n\ndef _retry():\n    pass\n\nif TIMEOUT:\n    LATE = 1\n",
+      "public": [
+        "Client",
+        "Client.get",
+        "Client.stream",
+        "Client.url",
+        "DEFAULTS",
+        "TIMEOUT",
+        "connect",
+        "fetch"
+      ]
+    },
+    {
+      "language": "python",
+      "path": "pkg/models.py",
+      "source": "__all__ = (\"User\", \"load_user\")\n\nclass User:\n    def save(self):\n        pass\n\nclass Admin(User):\n    pass\n\ndef load_user(uid):\n    pass\n\ndef helper():\n    pass\n",
+      "public": [
+        "User",
+        "User.save",
+        "load_user"
+      ]
+    },
+    {
+      "language": "go",
+      "path": "pkg/cache/cache.go",
+      "source": "package cache\n\nimport \"sync\"\n\n// Cache holds values.\ntype Cache[K comparable, V any] struct {\n\tmu    sync.Mutex\n\titems map[K]V\n}\n\ntype entry struct{ v any }\n\ntype (\n\tOption func(*Cache[string, any])\n\tpolicy int\n)\n\nfunc New[K comparable, V any]() *Cache[K, V] { return &Cache[K, V]{} }\n\nfunc (c *Cache[K, V]) Get(k K) (V, bool) { var v V; return v, false }\nfunc (c *Cache[K, V]) evict() {}\nfunc (e entry) String() string { return \"\" }\n\nconst MaxSize = 1024\n\nvar (\n\tErrMissing = errorString(\"missing\")\n\tdebug      = false\n)\n\ntype errorString string\n\nfunc (e errorString) Error() string { return string(e) }\n",
+      "public": [
+        "Cache",
+        "Cache.Get",
+        "ErrMissing",
+        "MaxSize",
+        "New",
+        "Option"
+      ]
+    },
+    {
+      "language": "go",
+      "path": "pkg/internal/codec/codec.go",
+      "source": "package codec\n\nfunc Encode() {}\ntype Frame struct{}\n",
+      "public": []
+    },
+    {
+      "language": "javascript",
+      "path": "src/router.js",
+      "source": "import { match } from './match.js';\n\nexport const VERSION = '2.0';\nconst routes = [];\n\nexport function add(path, handler) { routes.push([path, handler]); }\n\nexport async function dispatch(req) { return match(routes, req); }\n\nexport class Router {\n  constructor() {}\n  use(fn) {}\n  #log() {}\n  static create() { return new Router(); }\n}\n\nfunction internal() {}\nexport { internal as debugInternal };\nexport * from './middleware.js';\nexport default Router;\n",
+      "public": [
+        "Router",
+        "Router.constructor",
+        "Router.create",
+        "Router.use",
+        "VERSION",
+        "add",
+        "debugInternal",
+        "default",
+        "dispatch"
+      ]
+    },
+    {
+      "language": "javascript",
+      "path": "src/types.ts",
+      "source": "export interface Request { url: string }\nexport type Handler = (r: Request) => void;\nexport enum Method { Get, Post }\nexport abstract class Base {\n  abstract run(): void;\n  protected setup(): void {}\n  public teardown(): void {}\n  private state = 0;\n}\nexport namespace Util { export const x = 1; }\ntype Local = string;\nexport { Local as PublicLocal };\n",
+      "public": [
+        "Base",
+        "Base.run",
+        "Base.teardown",
+        "Handler",
+        "Method",
+        "PublicLocal",
+        "Request",
+        "Util"
+      ]
+    },
+    {
+      "language": "java",
+      "path": "src/main/java/p/Store.java",
+      "source": "package p;\n\nimport java.util.Map;\n\npublic class Store<K, V> {\n    public static final int LIMIT = 3;\n    protected int hits, misses;\n    private Map<K, V> items;\n    int pkg;\n\n    public Store() {}\n    public V get(K k) { return items.get(k); }\n    protected void evict() {}\n    private void log() {}\n    void internal() {}\n\n    public static class Builder {\n        public Store<String, String> build() { return new Store<>(); }\n        private void reset() {}\n    }\n    private static class Node {\n        public int value;\n    }\n}\n\nclass Helper {\n    public void help() {}\n}\n",
+      "public": [
+        "Store",
+        "Store.Builder",
+        "Store.Builder.build",
+        "Store.LIMIT",
+        "Store.Store",
+        "Store.evict",
+        "Store.get",
+        "Store.hits",
+        "Store.misses"
+      ]
+    },
+    {
+      "language": "java",
+      "path": "src/main/java/p/Api.java",
+      "source": "package p;\n\npublic interface Api {\n    int VERSION = 2;\n    void call();\n    default void close() {}\n    private void secret() {}\n}\n\npublic enum Mode {\n    FAST, SLOW;\n    public boolean quick() { return this == FAST; }\n}\n\npublic record Point(int x, int y) {\n    public int sum() { return x + y; }\n}\n",
+      "public": [
+        "Api",
+        "Api.VERSION",
+        "Api.call",
+        "Api.close",
+        "Mode",
+        "Mode.FAST",
+        "Mode.SLOW",
+        "Mode.quick",
+        "Point",
+        "Point.sum"
+      ]
+    },
+    {
+      "language": "kotlin",
+      "path": "src/main/kotlin/p/Store.kt",
+      "source": "package p\n\nconst val LIMIT = 3\nprivate val cache = mutableMapOf<String, String>()\ninternal fun reset() {}\n\nfun open(): Store = Store(1)\n\nclass Store(val n: Int) {\n    val size: Int = 0\n    private var hits = 0\n\n    fun get(): Int = n\n    protected fun hook() {}\n    internal fun inner() {}\n    private fun h() {}\n\n    companion object {\n        fun create() = Store(1)\n        private fun secret() {}\n    }\n}\n\nprivate class Hidden {\n    fun x() {}\n}\n\ninterface Api {\n    fun call()\n}\n\nobject Registry {\n    fun lookup() {}\n}\n\nenum class Mode {\n    A,\n    B\n}\n\ntypealias Id = String\n",
+      "public": [
+        "Api",
+        "Api.call",
+        "Id",
+        "LIMIT",
+        "Mode",
+        "Mode.A",
+        "Mode.B",
+        "Registry",
+        "Registry.lookup",
+        "Store",
+        "Store.create",
+        "Store.get",
+        "Store.hook",
+        "Store.size",
+        "open"
+      ]
+    },
+    {
+      "language": "scala",
+      "path": "src/main/scala/p/Store.scala",
+      "source": "package p\n\nclass Store(n: Int) {\n  def get: Int = n\n  val size = 0\n  private def h(): Unit = ()\n  protected def hook(): Unit = ()\n  private[p] def scoped(): Unit = ()\n}\n\nobject Store {\n  def apply(): Store = new Store(1)\n  private val cache = 0\n}\n\nprivate class Hidden {\n  def x(): Unit = ()\n}\n\ntrait Api {\n  def call(): Unit\n}\n\ncase class Point(x: Int)\n\ntype Id = String\n\nenum Mode {\n  case A, B\n}\n\ndef top(): Unit = ()\n",
+      "public": [
+        "Api",
+        "Api.call",
+        "Id",
+        "Mode",
+        "Mode.A",
+        "Mode.B",
+        "Point",
+        "Store",
+        "Store.apply",
+        "Store.get",
+        "Store.hook",
+        "Store.size",
+        "top"
+      ]
+    },
+    {
+      "language": "csharp",
+      "path": "src/Store.cs",
+      "source": "namespace P\n{\n    public class Store\n    {\n        public const int Limit = 3;\n        private int n;\n        protected int Hits, Misses;\n\n        public Store() {}\n        public int Get() => n;\n        protected void Hook() {}\n        internal void Inner() {}\n        private protected void Narrow() {}\n        protected internal void Wide() {}\n        void Implicit() {}\n\n        public int Size { get; set; }\n        public event System.EventHandler Changed;\n\n        public class Nested\n        {\n            public void Run() {}\n        }\n    }\n\n    class Hidden\n    {\n        public void X() {}\n    }\n\n    public interface IApi\n    {\n        void Call();\n    }\n\n    public enum Mode { A, B }\n\n    public struct Point\n    {\n        public int X;\n    }\n\n    public record Rec(int X);\n\n    public delegate void Handler(int x);\n}\n",
+      "public": [
+        "Handler",
+        "IApi",
+        "IApi.Call",
+        "Mode",
+        "Mode.A",
+        "Mode.B",
+        "Point",
+        "Point.X",
+        "Rec",
+        "Store",
+        "Store.Changed",
+        "Store.Get",
+        "Store.Hits",
+        "Store.Hook",
+        "Store.Limit",
+        "Store.Misses",
+        "Store.Nested",
+        "Store.Nested.Run",
+        "Store.Size",
+        "Store.Store",
+        "Store.Wide"
+      ]
+    },
+    {
+      "language": "swift",
+      "path": "Sources/Store/Store.swift",
+      "source": "import Foundation\n\npublic struct Store {\n    public let limit: Int = 3\n    var hits = 0\n    public init() {}\n    public func get() -> Int { 1 }\n    func internalThing() {}\n    private func h() {}\n    fileprivate func f() {}\n    open class Inner {}\n}\n\nclass Hidden {\n    public func x() {}\n}\n\npublic protocol Api {\n    func call()\n    var name: String { get }\n}\n\nextension Store {\n    public func extra() {}\n    func quiet() {}\n}\n\npublic extension Store {\n    func loud() {}\n    private func shh() {}\n    internal func mid() {}\n}\n\npublic enum Mode {\n    case a, b\n}\n\npublic typealias Id = String\n\npublic func top() {}\nfunc local() {}\n\nopen class Base {\n    open func run() {}\n    internal func inside() {}\n}\n",
+      "public": [
+        "Api",
+        "Api.call",
+        "Api.name",
+        "Base",
+        "Base.run",
+        "Id",
+        "Mode",
+        "Mode.a",
+        "Mode.b",
+        "Store",
+        "Store.Inner",
+        "Store.extra",
+        "Store.get",
+        "Store.init",
+        "Store.limit",
+        "Store.loud",
+        "top"
+      ]
+    },
+    {
+      "language": "php",
+      "path": "src/Store.php",
+      "source": "<?php\nnamespace App;\n\nconst LIMIT = 3;\n\nfunction helper() {}\n\nclass Store {\n    public const VERSION = 1;\n    private const SECRET = 2;\n    public int $hits = 0;\n    protected $misses;\n    private $items;\n\n    public function get($k) {}\n    function implicit() {}\n    protected function hook() {}\n    private function h() {}\n    public static function create() {}\n}\n\ninterface Api {\n    public function call();\n}\n\ntrait Loggable {\n    public function log() {}\n    private function format() {}\n}\n\nenum Mode {\n    case A;\n    case B;\n}\n",
+      "public": [
+        "Api",
+        "Api.call",
+        "LIMIT",
+        "Loggable",
+        "Loggable.log",
+        "Mode",
+        "Mode.A",
+        "Mode.B",
+        "Store",
+        "Store.VERSION",
+        "Store.create",
+        "Store.get",
+        "Store.hits",
+        "Store.hook",
+        "Store.implicit",
+        "Store.misses",
+        "helper"
+      ]
+    },
+    {
+      "language": "ruby",
+      "path": "lib/store.rb",
+      "source": "module Store\n  LIMIT = 3\n  SECRET = 4\n  private_constant :SECRET\n\n  class Cache\n    VERSION = 1\n    attr_reader :size\n\n    def get(k); end\n    def self.create; end\n\n    protected\n\n    def hook; end\n\n    private\n\n    def h; end\n    attr_reader :hidden_attr\n  end\n\n  class Other\n    def a; end\n    private def b; end\n    def c; end\n    private :c\n    def self.build; end\n    def self.internal; end\n    private_class_method :internal\n  end\n\n  def self.helper; end\nend\n\ndef top; end\n",
+      "public": [
+        "Store",
+        "Store.helper",
+        "Store::Cache",
+        "Store::Cache#get",
+        "Store::Cache#hook",
+        "Store::Cache#size",
+        "Store::Cache.create",
+        "Store::Cache::VERSION",
+        "Store::LIMIT",
+        "Store::Other",
+        "Store::Other#a",
+        "Store::Other.build"
+      ]
+    },
+    {
+      "language": "c",
+      "path": "include/store.h",
+      "source": "#ifndef STORE_H\n#define STORE_H\n\n#define STORE_LIMIT 3\n#define STORE_MAX(a, b) ((a) > (b) ? (a) : (b))\n\ntypedef struct store store_t;\n\nstruct store {\n    int n;\n};\n\nenum mode { MODE_A, MODE_B };\n\ntypedef enum { FLAG_X } flag_t;\n\nextern int store_count;\n\nint store_get(store_t *s, int k);\n\nstatic inline int store_helper(void) { return 0; }\n\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\nvoid store_free(store_t *s);\n\n#ifdef __cplusplus\n}\n#endif\n\n#endif\n",
+      "public": [
+        "FLAG_X",
+        "MODE_A",
+        "MODE_B",
+        "STORE_LIMIT",
+        "STORE_MAX",
+        "flag_t",
+        "mode",
+        "store",
+        "store_count",
+        "store_free",
+        "store_get",
+        "store_t"
+      ]
+    },
+    {
+      "language": "c",
+      "path": "src/store.c",
+      "source": "#include \"store.h\"\n\n#define LOCAL 1\n\nstatic int hidden(void) { return 0; }\n\nint store_get(store_t *s, int k) { return k; }\n\nint store_count = 0;\nstatic int cache;\n\nstruct local { int x; };\n\nint helper_proto(void);\n",
+      "public": [
+        "store_count",
+        "store_get"
+      ]
+    },
+    {
+      "language": "cpp",
+      "path": "include/cache.hpp",
+      "source": "#pragma once\n\nnamespace store {\n\nclass Cache {\npublic:\n    Cache();\n    int get(int k) const;\n    static constexpr int kLimit = 3;\nprotected:\n    void hook();\nprivate:\n    void evict();\n    int n_;\n};\n\nstruct Point {\n    int x;\n    void move();\nprivate:\n    int secret;\n};\n\ntemplate <typename T> T clamp(T v);\n\nnamespace detail {\nvoid helper();\n}\n\nnamespace {\nvoid hidden();\n}\n\nenum class Mode { A, B };\n\nusing Id = int;\n\n}\n",
+      "public": [
+        "store::Cache",
+        "store::Cache::Cache",
+        "store::Cache::get",
+        "store::Cache::hook",
+        "store::Cache::kLimit",
+        "store::Id",
+        "store::Mode",
+        "store::Mode::A",
+        "store::Mode::B",
+        "store::Point",
+        "store::Point::move",
+        "store::Point::x",
+        "store::clamp",
+        "store::detail::helper"
+      ]
+    },
+    {
+      "language": "cpp",
+      "path": "src/cache.cpp",
+      "source": "#include \"cache.hpp\"\n\nnamespace store {\n\nint Cache::get(int k) const { return k; }\n\nstatic void local() {}\n\nvoid free_fn() {}\n\nclass Internal { public: void x(); };\n\n}\n\nnamespace {\nint hidden_fn() { return 0; }\n}\n",
+      "public": [
+        "store::Cache::get",
+        "store::free_fn"
+      ]
+    },
+    {
+      "language": "c",
+      "path": "include/Store.h",
+      "source": "#import <Foundation/Foundation.h>\n\n#define STORE_VERSION 2\n\n@interface Store : NSObject\n@property (nonatomic) NSInteger limit;\n- (NSInteger)get:(NSInteger)k;\n+ (instancetype)storeWithName:(NSString *)name size:(int)size;\n@end\n\n@interface Store (Extras)\n- (void)extra;\n@end\n\n@protocol Api\n- (void)call;\n@end\n\nvoid StoreFree(Store *s);\n",
+      "public": [
+        "+[Store storeWithName:size:]",
+        "-[Api call]",
+        "-[Store extra]",
+        "-[Store get:]",
+        "Api",
+        "STORE_VERSION",
+        "Store",
+        "Store.limit",
+        "StoreFree"
+      ]
+    },
+    {
+      "language": "objc",
+      "path": "src/Store.m",
+      "source": "#import \"Store.h\"\n\n@interface Store ()\n- (void)privateHelper;\n@end\n\n@implementation Store\n- (NSInteger)get:(NSInteger)k { return k; }\n- (void)privateThing {}\n@end\n\nvoid StoreFree(Store *s) {}\n\nstatic void hidden(void) {}\n",
+      "public": [
+        "StoreFree"
+      ]
+    }
+  ]
+}

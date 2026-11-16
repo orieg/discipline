@@ -27,6 +27,7 @@ impl LanguagePack for JavaScriptPack {
                 | Fact::Prose
                 | Fact::Budgets
                 | Fact::CapabilitySinks
+                | Fact::PublicNames
         )
     }
 
@@ -62,6 +63,20 @@ impl LanguagePack for JavaScriptPack {
             src,
             &super::capability_sinks::JAVASCRIPT,
         )
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        let lang = match super::extension(path).unwrap_or("js") {
+            "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "tsx" | "jsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            _ => tree_sitter_javascript::LANGUAGE.into(),
+        };
+        super::public_names::names_of(&lang, "JS/TS", path, src, super::public_names::javascript)
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -117,6 +132,7 @@ impl LanguagePack for JavaScriptPack {
             &mut extractor.facts.tests,
             &extractor.std_asserts,
         );
+        super::comparisons::javascript(root, src, &mut extractor.facts.tests);
         super::caught_assertions::javascript(
             root,
             &anc,

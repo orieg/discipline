@@ -4660,6 +4660,404 @@ const CASES: &[Case] = &[
             Ok(ok)
         },
     ),
+    #[cfg(feature = "lang-javascript")]
+    (
+        "assertion-reduction: a JS/TS assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let js = |check: &str| format!("it('t', () => {{\n  {check};\n}});\n");
+            let mut ok = true;
+            for (base, head) in [
+                ("expect(f(6)).toBeGreaterThan(6)", "expect(f(6)).toBeGreaterThanOrEqual(6)"),
+                ("expect(f(0)).toBe(0)", "expect(f(0)).not.toBe(1)"),
+                ("expect(rows).toContain(1)", "expect(rows).not.toContain(1)"),
+                ("assert(f(6) > 6)", "assert(f(6) >= 6)"),
+                ("assert(ok(1))", "assert(!ok(1))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("test/t.test.ts", &js(base), &js(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: t the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "test/t.test.ts",
+                    &js("expect(f(6)).toBeGreaterThanOrEqual(6)"),
+                    &js("expect(f(6)).toBeGreaterThan(6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-java")]
+    (
+        "assertion-reduction: a Java assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let java = |check: &str| {
+                format!("class TTest {{\n    @Test\n    void t() {{\n        {check};\n    }}\n}}\n")
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("assertThat(f(6)).isGreaterThan(6)", "assertThat(f(6)).isGreaterThanOrEqualTo(6)"),
+                ("assertThat(rows).contains(1)", "assertThat(rows).doesNotContain(1)"),
+                ("assertTrue(f(6) > 6)", "assertTrue(f(6) >= 6)"),
+                ("assertTrue(ok(1))", "assertFalse(ok(1))"),
+                ("assertEquals(0, f(0))", "assertNotEquals(1, f(0))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("src/test/java/TTest.java", &java(base), &java(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: TTest.t the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "src/test/java/TTest.java",
+                    &java("assertThat(f(6)).isGreaterThanOrEqualTo(6)"),
+                    &java("assertThat(f(6)).isGreaterThan(6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-csharp")]
+    (
+        "assertion-reduction: a C# assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let cs = |check: &str| {
+                format!("public class TTests\n{{\n    [Fact]\n    public void T()\n    {{\n        {check};\n    }}\n}}\n")
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("F(6).Should().BeGreaterThan(6)", "F(6).Should().BeGreaterThanOrEqualTo(6)"),
+                ("Assert.Contains(1, rows)", "Assert.DoesNotContain(1, rows)"),
+                ("Assert.True(F(6) > 6)", "Assert.True(F(6) >= 6)"),
+                ("Assert.That(F(6), Is.GreaterThan(6))", "Assert.That(F(6), Is.GreaterThanOrEqualTo(6))"),
+                ("Assert.Equal(0, F(0))", "Assert.NotEqual(1, F(0))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("tests/TTests.cs", &cs(base), &cs(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: T the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "tests/TTests.cs",
+                    &cs("F(6).Should().BeGreaterThanOrEqualTo(6)"),
+                    &cs("F(6).Should().BeGreaterThan(6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-cpp")]
+    (
+        "assertion-reduction: a C/C++ assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let cc = |check: &str| format!("TEST(S, T) {{\n    {check};\n}}\n");
+            let mut ok = true;
+            for (base, head) in [
+                ("EXPECT_GT(F(6), 6)", "EXPECT_GE(F(6), 6)"),
+                ("EXPECT_TRUE(F(6))", "EXPECT_FALSE(F(6))"),
+                ("REQUIRE(F(6) > 6)", "REQUIRE(F(6) >= 6)"),
+                ("EXPECT_THAT(F(6), Gt(6))", "EXPECT_THAT(F(6), Ge(6))"),
+                ("EXPECT_EQ(0, F(0))", "EXPECT_NE(1, F(0))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("tests/TTest.cpp", &cc(base), &cc(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: T the check is intended")?.is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "tests/TTest.cpp",
+                    &cc("EXPECT_GE(F(6), 6)"),
+                    &cc("EXPECT_GT(F(6), 6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            // Control: a Unity `GREATER_OR_EQUAL` tightened is an ordering both sides, not an
+            // equality assertion dropped.
+            ok &= helper_change(
+                &[(
+                    "tests/TTest.cpp",
+                    &cc("TEST_ASSERT_GREATER_OR_EQUAL(6, F(6))"),
+                    &cc("TEST_ASSERT_GREATER_THAN(6, F(6))"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-php")]
+    (
+        "assertion-reduction: a PHP assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let php = |check: &str| {
+                format!(
+                    "<?php\nclass STest extends TestCase {{\n    public function testT(): void {{\n        {check};\n    }}\n}}\n"
+                )
+            };
+            let mut ok = true;
+            for (base, head) in [
+                (
+                    "$this->assertGreaterThan(6, f(6))",
+                    "$this->assertGreaterThanOrEqual(6, f(6))",
+                ),
+                ("$this->assertTrue(f(6))", "$this->assertFalse(f(6))"),
+                ("self::assertTrue(f(6) > 6)", "self::assertTrue(f(6) >= 6)"),
+                ("$this->assertSame(0, f(0))", "$this->assertNotSame(1, f(0))"),
+                (
+                    "expect(f(6))->toBeGreaterThan(6)",
+                    "expect(f(6))->toBeGreaterThanOrEqual(6)",
+                ),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("tests/STest.php", &php(base), &php(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: testT the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "tests/STest.php",
+                    &php("$this->assertGreaterThanOrEqual(6, f(6))"),
+                    &php("$this->assertGreaterThan(6, f(6))"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-kotlin")]
+    (
+        "assertion-reduction: a Kotlin assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let kt = |check: &str| {
+                format!("class STest {{\n    @Test\n    fun t() {{\n        {check}\n    }}\n}}\n")
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("f(6) shouldBeGreaterThan 6", "f(6) shouldBeGreaterThanOrEqual 6"),
+                ("assertTrue(f(6))", "assertFalse(f(6))"),
+                ("assertTrue(f(6) > 6)", "assertTrue(f(6) >= 6)"),
+                ("assertEquals(0, f(0))", "assertNotEquals(1, f(0))"),
+                (
+                    "assertThat(f(6)).isGreaterThan(6)",
+                    "assertThat(f(6)).isGreaterThanOrEqualTo(6)",
+                ),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("src/test/kotlin/STest.kt", &kt(base), &kt(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: STest.t the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "src/test/kotlin/STest.kt",
+                    &kt("f(6) shouldBeGreaterThanOrEqual 6"),
+                    &kt("f(6) shouldBeGreaterThan 6"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-ruby")]
+    (
+        "assertion-reduction: a Ruby assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let rb = |check: &str| {
+                format!("class STest < Minitest::Test\n  def test_t\n    {check}\n  end\nend\n")
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("assert f(6) > 6", "assert f(6) >= 6"),
+                ("assert f(6)", "refute f(6)"),
+                ("assert_equal 0, f(0)", "refute_equal 1, f(0)"),
+                ("assert_operator f(6), :>, 6", "assert_operator f(6), :>=, 6"),
+                ("expect(f(6)).to be > 6", "expect(f(6)).to be >= 6"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("test/s_test.rb", &rb(base), &rb(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: test_t the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "test/s_test.rb",
+                    &rb("assert f(6) >= 6"),
+                    &rb("assert f(6) > 6"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-swift")]
+    (
+        "assertion-reduction: a Swift assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let sw = |check: &str| {
+                format!(
+                    "import XCTest\n\nfinal class STests: XCTestCase {{\n    func testT() {{\n        {check}\n    }}\n}}\n"
+                )
+            };
+            let mut ok = true;
+            for (base, head) in [
+                (
+                    "XCTAssertGreaterThan(f(6), 6)",
+                    "XCTAssertGreaterThanOrEqual(f(6), 6)",
+                ),
+                ("XCTAssertTrue(f(6))", "XCTAssertFalse(f(6))"),
+                ("XCTAssert(f(6) > 6)", "XCTAssert(f(6) >= 6)"),
+                ("XCTAssertEqual(f(0), 0)", "XCTAssertNotEqual(f(0), 1)"),
+                ("XCTAssertNotNil(f(6))", "XCTAssertNil(f(6))"),
+                // `>=` is a custom infix operator to the grammar, and still a comparison.
+                ("#expect(f(6) > 6)", "#expect(f(6) >= 6)"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("Tests/STests.swift", &sw(base), &sw(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: STests.testT the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "Tests/STests.swift",
+                    &sw("XCTAssertGreaterThanOrEqual(f(6), 6)"),
+                    &sw("XCTAssertGreaterThan(f(6), 6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-scala")]
+    (
+        "assertion-reduction: a Scala assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let sc = |check: &str| {
+                format!(
+                    "class SSuite extends munit.FunSuite {{\n  test(\"t\") {{\n    {check}\n  }}\n}}\n"
+                )
+            };
+            let mut ok = true;
+            for (base, head) in [
+                ("f(6) should be > 6", "f(6) should be >= 6"),
+                ("f(0) shouldBe 0", "f(0) should not be 1"),
+                ("assert(f(6) > 6)", "assert(f(6) >= 6)"),
+                ("assertEquals(f(0), 0)", "assertNotEquals(f(0), 1)"),
+                ("assertTrue(f(6))", "assertFalse(f(6))"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("src/test/scala/SSuite.scala", &sc(base), &sc(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: SSuite.t the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "src/test/scala/SSuite.scala",
+                    &sc("f(6) should be >= 6"),
+                    &sc("f(6) should be > 6"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
+    #[cfg(feature = "lang-objc")]
+    (
+        "assertion-reduction: an Objective-C assertion weakened or inverted is a weakened bound (#1070)",
+        || {
+            let oc = |check: &str| {
+                format!(
+                    "@interface STests : XCTestCase\n@end\n\n@implementation STests\n- (void)testT {{\n    {check};\n}}\n@end\n"
+                )
+            };
+            let mut ok = true;
+            for (base, head) in [
+                (
+                    "XCTAssertGreaterThan(F(6), 6)",
+                    "XCTAssertGreaterThanOrEqual(F(6), 6)",
+                ),
+                ("XCTAssertTrue(F(6))", "XCTAssertFalse(F(6))"),
+                ("XCTAssert(F(6) > 6)", "XCTAssert(F(6) >= 6)"),
+                ("XCTAssertEqual(F(0), 0)", "XCTAssertNotEqual(F(0), 1)"),
+                ("NSAssert(F(6) > 6, @\"m\")", "NSAssert(F(6) >= 6, @\"m\")"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[("Tests/STests.m", &oc(base), &oc(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: STests.testT the check is intended")?
+                    .is_empty();
+                // Control: the assertion kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            // Control: a bound tightened.
+            ok &= helper_change(
+                &[(
+                    "Tests/STests.m",
+                    &oc("XCTAssertGreaterThanOrEqual(F(6), 6)"),
+                    &oc("XCTAssertGreaterThan(F(6), 6)"),
+                )],
+                "",
+            )?
+            .is_empty();
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",
@@ -5424,6 +5822,32 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: `{example_file}` is a placeholder, and `{example_…}` typos are refused",
+        || {
+            use crate::guards::command::{split_command_line, takes_example_file, unknown_placeholder};
+            let named = takes_example_file(&split_command_line("sh {example_file}")?);
+            let typo = unknown_placeholder(&split_command_line("sh {example_fil}")?).as_deref()
+                == Some("{example_fil}");
+            let known = unknown_placeholder(&split_command_line("sh {example_file}")?).is_none();
+            let other = unknown_placeholder(&split_command_line("jq '{examples}'")?).is_none();
+            Ok(named && typo && known && other)
+        },
+    ),
+    (
+        "command: snapshot_marker reads one region's fence body, and a missing region is no text",
+        || {
+            use crate::guards::command::generated_region;
+
+            let doc = "intro\n<!-- generated:cli -->\n```text\nusage: x\n```\n<!-- /generated -->\n";
+            let body = generated_region(doc, "cli")
+                .is_ok_and(|(text, offset)| text == "usage: x" && offset == 3);
+            let missing = generated_region("intro\n", "cli").is_err();
+            let other = generated_region(doc, "cl").is_err();
+            let unclosed = generated_region("<!-- generated:cli -->\nx\n", "cli").is_err();
+            Ok(body && missing && other && unclosed)
+        },
+    ),
+    (
         "ci-integrity: a job, a step and a pin are located by their own key and value, not by text that contains them",
         || {
             use crate::guards::ci_integrity::{
@@ -5548,7 +5972,7 @@ const CASES: &[Case] = &[
         },
     ),
     (
-        "command: a `{diff…}` / `{changed…}` placeholder discipline does not expand is named, and other braces are the tool's",
+        "command: a `{diff…}` / `{changed…}` / `{example…}` placeholder discipline does not expand is named, and other braces are the tool's",
         || {
             use crate::guards::command::{split_command_line, unknown_placeholder, PLACEHOLDERS};
             let read = |cmd: &str| -> Result<Option<String>> { Ok(unknown_placeholder(&split_command_line(cmd)?)) };
@@ -5557,7 +5981,7 @@ const CASES: &[Case] = &[
                 && read("cargo mutants --in-diff {diff_file}")?.is_none()
                 && read("jq '{different: .a}'")?.is_none()
                 && read("npx stryker run --mutate {changed_ranges}")?.is_none()
-                && PLACEHOLDERS == ["{diff_file}", "{changed_ranges}"])
+                && PLACEHOLDERS == ["{diff_file}", "{changed_ranges}", "{example_file}"])
         },
     ),
     (
@@ -5606,6 +6030,60 @@ const CASES: &[Case] = &[
                 && uncovered(&BTreeSet::from([2]), &cob["src/b.py"]) == [(2, 2)]
                 && uncovered(&added, &BTreeMap::from([(5, 1), (6, 1)])).is_empty()
                 && parse_lcov("TN:\n").is_err())
+        },
+    ),
+    (
+        "visual-evidence: images under Before / After headings are read outside fences, and Before is required only for a matched path the base had (#1083)",
+        || {
+            use crate::gitctx::ChangeKind;
+            use crate::guards::visual_evidence::{read_evidence, required, Required};
+            use crate::guards::PathFilter;
+            let e = read_evidence("## Before\n![b](b.png)\n## After\n```\n![a](a.png)\n```\n");
+            let rules = vec![PathFilter::new(&["web/**".to_string()])?];
+            let none = PathFilter::new(&[])?;
+            let added = required(&[(ChangeKind::Added, "web/a.tsx".into(), String::new())], &rules, &none);
+            let edited = required(&[(ChangeKind::Modified, "web/b.tsx".into(), String::new())], &rules, &none);
+            Ok(e.before_shown()
+                && !e.after_shown()
+                && matches!(added, Required::After { .. })
+                && matches!(edited, Required::BeforeAndAfter { .. }))
+        },
+    ),
+    (
+        "invented-names: a tool's flags in a shell fence and its keys in a marked toml block resolve against its surface, and prose is not read (#1090)",
+        || {
+            use crate::config::InventedNamesTool;
+            use crate::guards::invented_names::{doc_names, Surface};
+            let surface = Surface::parse("--base\n-q\ngates.pii.enabled\n").map_err(anyhow::Error::msg)?;
+            let tool = InventedNamesTool {
+                name: "mytool".into(),
+                surface: "s.txt".into(),
+                config_files: vec!["mytool.toml".into()],
+                config_docs: vec![],
+            };
+            let md = "mytool --prose\n```sh\nmytool check --base x --dry-run -q\n```\n```toml mytool.toml\n[gates.pii]\nenabled = true\nstrict = true\n```\n";
+            let names = doc_names(md, &tool, false);
+            let unknown = |items: &[(usize, String)]| {
+                items
+                    .iter()
+                    .filter(|(_, n)| !surface.resolves(n))
+                    .map(|(l, n)| format!("{l}:{n}"))
+                    .collect::<Vec<_>>()
+            };
+            Ok(unknown(&names.flags) == ["3:--dry-run"]
+                && unknown(&names.keys) == ["8:gates.pii.strict"]
+                && Surface::parse("not a name\n").is_err())
+        },
+    ),
+    (
+        "companion-edit: require_mention counts a changed public name as a whole word, in its qualified or short form (#1089)",
+        || {
+            use crate::guards::companion_edit::{mention_forms, names};
+            let forms = mention_forms("Store::get");
+            Ok(forms == ["Store::get", "get"]
+                && names("Call `get()` now.", "get")
+                && !names("Call getter() now.", "get")
+                && names("Adds Store::get.", "Store::get"))
         },
     ),
     (
@@ -9966,6 +10444,7 @@ smoke_cost::set_contains
                         trigger_paths: trigger.iter().map(|p| p.to_string()).collect(),
                         require_edits_to: required.iter().map(|p| p.to_string()).collect(),
                         require_all,
+                        require_mention: false,
                         reason: None,
                     },
                     0,
@@ -11025,6 +11504,37 @@ proptest! {
         },
     ),
     (
+        "citation-anchors: a link or code span naming a path the change deletes or renames is reported with the new path; prose and fenced code are not read",
+        || {
+            use crate::guards::citation_anchors::links::{
+                extract_markdown_references, resolve_code_span, resolve_link_target,
+                LinkResolution, Removal, RemovedPaths,
+            };
+            let doc = "[old](old.md) `src/a.rs:4` prose docs/old.md `cargo test`\n\
+                       ```\n[code](old.md) `src/a.rs`\n```\n";
+            let removed = RemovedPaths::new([
+                ("docs/old.md".to_string(), None),
+                ("src/a.rs".to_string(), Some("src/b.rs".to_string())),
+            ]);
+            let (links, spans) = extract_markdown_references(doc);
+            let found: Vec<Option<Removal>> = links
+                .iter()
+                .map(|l| resolve_link_target("docs/index.md", &l.target))
+                .chain(spans.iter().map(|s| resolve_code_span("docs/index.md", &s.target)))
+                .map(|r| match r {
+                    LinkResolution::Path { path, directory } => removed.find(&path, directory),
+                    _ => None,
+                })
+                .collect();
+            Ok(found
+                == [
+                    Some(Removal::Deleted),
+                    Some(Removal::Renamed("src/b.rs")),
+                    None,
+                ])
+        },
+    ),
+    (
         "gate-command-lint: extracts declared gates from fences and list items",
         || {
             use crate::guards::gate_command_lint::extract_declared_gates;
@@ -11333,6 +11843,60 @@ proptest! {
                 && !second.contains("fn alpha complexity 18")
                 && second.contains("2 unchanged non-blocking warning(s) from earlier in this session elided (complexity/cyclomatic-complexity x2).")
                 && verbose == "FULL")
+        },
+    ),
+    (
+        "hook: an agent-facing report names its base and says it reads no directive; a stop let through or observed tells the person no waiver applies (#1102)",
+        || {
+            let mut outcome = crate::guards::GateOutcome::new("assertion-reduction");
+            outcome.violations.push(crate::guards::Violation {
+                gate: "assertion-reduction",
+                code: "assertion-reduction/assertions-reduced".to_string(),
+                fingerprint: String::new(),
+                anchor: None,
+                legacy_title: None,
+                severity: crate::guards::Severity::Error,
+                title: "Assertion Count Decreased In Existing Test".into(),
+                file: Some("tests/a.rs".into()),
+                line: Some(2),
+                message: "Test `adds`: effective assertions dropped from 2 to 0.".into(),
+                remediation: None,
+            });
+            let summary = crate::guards::CheckSummary {
+                schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+                could_not_check: None,
+                base: "origin/main (merge base 1a2b3c4)".into(),
+                errors: 1,
+                warnings: 0,
+                notes: 0,
+                overrides: 0,
+                baselined: 0,
+                outcomes: vec![outcome],
+                planned_gates: vec![],
+                policy_failures: Vec::new(),
+                refused_hidden_directives: Vec::new(),
+                deprecations: Vec::new(),
+                directive_notes: Vec::new(),
+                stale_baseline_entries: 0,
+                unused_directives: Vec::new(),
+                review_routing: None,
+            };
+            let hook = crate::report::format_agent_prompt_for(
+                &summary,
+                false,
+                Some("origin/main (merge base 1a2b3c4)"),
+            );
+            let ci = crate::report::format_agent_prompt_for(&summary, false, None);
+            let through = crate::hook::let_through(
+                crate::hook::Agent::ClaudeCode,
+                crate::hook::Event::Stop,
+                1,
+            );
+            Ok(hook.contains("against `origin/main (merge base 1a2b3c4)` by the base branch's configuration and reads no directive")
+                && !hook.contains("CI runs it again")
+                && !hook.contains(crate::hook::NO_WAIVER_NOTE)
+                && ci.contains("and CI runs it again.")
+                && through.stderr.ends_with(crate::hook::NO_WAIVER_NOTE))
         },
     ),
 ];

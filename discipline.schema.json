@@ -358,6 +358,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "removed_link_exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Glob patterns of documents not read for link-target-removed: documents that name removed paths on purpose, such as changelogs, migration notes and archives"
+        },
         "require_online": {
           "description": "Whether offline operation fails closed when verifying tracker titles",
           "type": "boolean"
@@ -448,6 +452,14 @@
           "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error",
           "type": "string"
         },
+        "example": {
+          "description": "Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}`",
+          "type": "string"
+        },
+        "example_marker": {
+          "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`",
+          "type": "string"
+        },
         "forbid_output": {
           "$ref": "#/$defs/StringList",
           "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text"
@@ -471,6 +483,10 @@
         "snapshot_ignore": {
           "$ref": "#/$defs/StringList",
           "description": "Regexes for lines left out of the snapshot comparison, on both sides"
+        },
+        "snapshot_marker": {
+          "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`",
+          "type": "string"
         },
         "timeout_seconds": {
           "description": "Execution timeout in seconds",
@@ -520,6 +536,14 @@
           "description": "Whether this gate is active",
           "type": "boolean"
         },
+        "example": {
+          "description": "Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}`",
+          "type": "string"
+        },
+        "example_marker": {
+          "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`",
+          "type": "string"
+        },
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
         },
@@ -545,6 +569,10 @@
         "snapshot_ignore": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Regexes for lines left out of the snapshot comparison, on both sides"
+        },
+        "snapshot_marker": {
+          "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`",
+          "type": "string"
         },
         "timeout_seconds": {
           "description": "Execution timeout in seconds (default: 60s)",
@@ -615,6 +643,10 @@
               "require_edits_to": {
                 "$ref": "#/$defs/StringList",
                 "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside"
+              },
+              "require_mention": {
+                "description": "Whether the companion's added lines must name a public name the triggering change added, removed or modified (prose and table cells; not fenced code, HTML comments or changelog files)",
+                "type": "boolean"
               },
               "trigger_paths": {
                 "$ref": "#/$defs/StringList",
@@ -830,6 +862,56 @@
         },
         "severity": {
           "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
+    "InventedNamesGate": {
+      "additionalProperties": false,
+      "properties": {
+        "diff_only": {
+          "description": "When true (default), reads only the lines the change adds to a Markdown document; false reads every tracked Markdown document",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "tools": {
+          "description": "Tools whose flags and configuration keys documents are checked against a declared list of names",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "config_docs": {
+                "$ref": "#/$defs/StringList",
+                "description": "Globs of documents whose toml blocks naming no other .toml file are all the tool's configuration"
+              },
+              "config_files": {
+                "$ref": "#/$defs/StringList",
+                "description": "File names of the tool's configuration: a toml block whose info string or first comment names one is read for keys"
+              },
+              "name": {
+                "description": "The command name a shell line or code span starts with",
+                "type": "string"
+              },
+              "surface": {
+                "description": "Repository-relative path of the tracked list of accepted names: one flag (--name, -n) or configuration key (section.key) per line; # comments and blank lines skipped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "surface"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -1728,6 +1810,47 @@
         }
       },
       "type": "object"
+    },
+    "VisualEvidenceGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_authors": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Pull request author logins (dependency bots) whose changes need no images"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "rules": {
+          "description": "Path sets whose change needs an After image, and a Before image when a matched path existed on the base side, in the pull request body",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "description": "Why these paths need visual evidence, quoted in the finding",
+                "type": "string"
+              },
+              "trigger_paths": {
+                "$ref": "#/$defs/StringList",
+                "description": "Globs; a changed path matching any of them (either side of a rename, a deletion included) fires the rule"
+              }
+            },
+            "required": [
+              "trigger_paths"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1983,6 +2106,14 @@
           ],
           "description": "no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose"
         },
+        "invented-names": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/InventedNamesGate"
+            }
+          ],
+          "description": "a flag or configuration key a document gives a tool that the tool's declared surface does not list"
+        },
         "issue-link": {
           "allOf": [
             {
@@ -2174,6 +2305,14 @@
             }
           ],
           "description": "version declarations across headers, manifests, and files must remain in lockstep"
+        },
+        "visual-evidence": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/VisualEvidenceGate"
+            }
+          ],
+          "description": "a change to UI paths needs before and after images in the pull request body"
         }
       },
       "type": "object"

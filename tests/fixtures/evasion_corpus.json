@@ -16,6 +16,7 @@
       "harness-tampering",
       "ignored-tests",
       "instruction-smuggling",
+      "invented-names",
       "pr-checklist",
       "sandbox-config",
       "shell-secrets",
@@ -24,7 +25,8 @@
       "test-floor",
       "toolchain-config",
       "unsafe-safety-comment",
-      "vacuous-tests"
+      "vacuous-tests",
+      "visual-evidence"
     ],
     "exempt": {
       "agent-scratch": "Hygiene rule over text and metadata, not over the strength of a test or of the run; no evasion shape filed yet.",
@@ -3297,6 +3299,1157 @@
       "verdict": {
         "known_miss": "#1068"
       }
+    },
+    {
+      "name": "cmd-snapshot-region-markers-deleted",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"cat out.txt\"\nsnapshot = \"docs/cli.md\"\nsnapshot_marker = \"cli\"\n",
+        "out.txt": "usage: x\n  -h\n",
+        "docs/cli.md": "# CLI\n\n<!-- generated:cli -->\n```text\nusage: x\n  -h\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "docs/cli.md": "# CLI\n\n```text\nusage: x\n  -v\n```\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "exit": 2
+      }
+    },
+    {
+      "name": "cmd-snapshot-region-rewritten-with-the-regression",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"cat out.txt\"\nsnapshot = \"docs/cli.md\"\nsnapshot_marker = \"cli\"\n",
+        "out.txt": "usage: x\n  -h\n",
+        "docs/cli.md": "# CLI\n\n<!-- generated:cli -->\n```text\nusage: x\n  -h\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "out.txt": "usage: x\n",
+        "docs/cli.md": "# CLI\n\n<!-- generated:cli -->\n```text\nusage: x\n```\n<!-- /generated -->\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "known_miss": "#1088"
+      }
+    },
+    {
+      "name": "cmd-example-markers-deleted",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"sh {example_file}\"\nexample = \"docs/guide.md\"\nexample_marker = \"step\"\n",
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\ntest -f docs/guide.md\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "docs/guide.md": "# Guide\n\n```sh\nexit 1\n```\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "exit": 2
+      }
+    },
+    {
+      "name": "cmd-example-broken",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"sh {example_file}\"\nexample = \"docs/guide.md\"\nexample_marker = \"step\"\n",
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\ntest -f docs/guide.md\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\ntest -f docs/missing.md\n```\n<!-- /generated -->\n"
+      },
+      "verdict": {
+        "caught": [
+          "command/command-failed"
+        ]
+      }
+    },
+    {
+      "name": "cmd-example-rewritten-to-a-no-op",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommand = \"sh {example_file}\"\nexample = \"docs/guide.md\"\nexample_marker = \"step\"\n",
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\ntest -f docs/guide.md\n```\n<!-- /generated -->\n"
+      },
+      "head": {
+        "docs/guide.md": "# Guide\n\n<!-- generated:step -->\n```sh\nexit 0\n```\n<!-- /generated -->\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "known_miss": "#1088"
+      }
+    },
+    {
+      "name": "md-link-to-deleted-file",
+      "base": {
+        "README.md": "# p\n\nSee [the guide](docs/guide.md).\n",
+        "docs/guide.md": "# guide\n"
+      },
+      "head": {
+        "docs/guide.md": null
+      },
+      "body": "removes: docs/guide.md folded into the README\n",
+      "enable": [
+        "citation-anchors"
+      ],
+      "verdict": {
+        "caught": [
+          "citation-anchors/link-target-removed"
+        ]
+      }
+    },
+    {
+      "name": "md-code-span-to-renamed-file",
+      "base": {
+        "README.md": "# p\n\nEdit `src/old.rs` to add a rule.\n",
+        "src/old.rs": "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n"
+      },
+      "head": {
+        "src/old.rs": null,
+        "src/new.rs": "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n"
+      },
+      "enable": [
+        "citation-anchors"
+      ],
+      "verdict": {
+        "caught": [
+          "citation-anchors/link-target-removed"
+        ]
+      }
+    },
+    {
+      "name": "md-link-follows-a-rename",
+      "base": {
+        "README.md": "# p\n\nEdit [the rules](src/old.rs).\n",
+        "src/old.rs": "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n"
+      },
+      "head": {
+        "src/old.rs": null,
+        "src/new.rs": "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n",
+        "README.md": "# p\n\nEdit [the rules](src/new.rs).\n"
+      },
+      "enable": [
+        "citation-anchors"
+      ],
+      "gate": "citation-anchors",
+      "verdict": "clean"
+    },
+    {
+      "name": "md-stale-link-line-deleted",
+      "base": {
+        "README.md": "# p\n\nSee [the guide](docs/guide.md) for the setup steps.\n",
+        "docs/guide.md": "# guide\n"
+      },
+      "head": {
+        "docs/guide.md": null,
+        "README.md": "# p\n"
+      },
+      "body": "removes: docs/guide.md folded into the README\n",
+      "enable": [
+        "citation-anchors"
+      ],
+      "gate": "citation-anchors",
+      "verdict": {
+        "known_miss": "#1087"
+      }
+    },
+    {
+      "name": "js-matcher-bound-widened",
+      "base": {
+        "src/rows.js": "export function count(x) { return x.length; }\n",
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count(rows)).toBeGreaterThan(6);\n  });\n});\n"
+      },
+      "head": {
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count(rows)).toBeGreaterThanOrEqual(6);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "js-matcher-negated",
+      "base": {
+        "src/rows.js": "export function count(x) { return x.length; }\n",
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(rows).toContain(3);\n  });\n});\n"
+      },
+      "head": {
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(rows).not.toContain(3);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ts-assert-comparison-widened",
+      "base": {
+        "src/rows.js": "export function count(x) { return x.length; }\n",
+        "test/rows.test.ts": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    assert(count(rows) > 6, 'seven rows');\n  });\n});\n"
+      },
+      "head": {
+        "test/rows.test.ts": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    assert(count(rows) >= 6, 'seven rows');\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "js-matcher-bound-tightened",
+      "base": {
+        "src/rows.js": "export function count(x) { return x.length; }\n",
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count(rows)).toBeGreaterThanOrEqual(6);\n  });\n});\n"
+      },
+      "head": {
+        "test/rows.test.js": "import { count } from '../src/rows.js';\n\ndescribe('rows', () => {\n  it('counts', () => {\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count(rows)).toBeGreaterThan(6);\n  });\n});\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "java-assertj-bound-widened",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(Rows.count(rows)).isGreaterThan(6);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(Rows.count(rows)).isGreaterThanOrEqualTo(6);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "java-assertj-negated",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(rows).contains(3);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(rows).doesNotContain(3);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "java-junit-comparison-widened",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertTrue(Rows.count(rows) > 6, \"seven rows\");\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertTrue(Rows.count(rows) >= 6, \"seven rows\");\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "java-junit-assert-inverted",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertTrue(Rows.count(rows) == 7);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertFalse(Rows.count(rows) == 7);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "java-assertj-bound-tightened",
+      "base": {
+        "src/main/java/Rows.java": "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(Rows.count(rows)).isGreaterThanOrEqualTo(6);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/RowsTest.java": "import org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {\n    @Test\n    void counts() {\n        int[] rows = {1, 2, 3, 4, 5, 6, 7};\n        assertThat(Rows.count(rows)).isGreaterThan(6);\n    }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "csharp-fluent-bound-widened",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using FluentAssertions;\nusing Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Rows.Count(rows).Should().BeGreaterThan(6);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using FluentAssertions;\nusing Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Rows.Count(rows).Should().BeGreaterThanOrEqualTo(6);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "csharp-xunit-comparison-widened",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.True(Rows.Count(rows) > 6, \"seven rows\");\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.True(Rows.Count(rows) >= 6, \"seven rows\");\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "csharp-xunit-assert-inverted",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.Contains(3, rows);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.DoesNotContain(3, rows);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "csharp-nunit-constraint-widened",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using NUnit.Framework;\npublic class RowsTests\n{\n    [Test]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.That(Rows.Count(rows), Is.GreaterThan(6));\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using NUnit.Framework;\npublic class RowsTests\n{\n    [Test]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Assert.That(Rows.Count(rows), Is.GreaterThanOrEqualTo(6));\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "csharp-fluent-bound-tightened",
+      "base": {
+        "src/Rows.cs": "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        "tests/RowsTests.cs": "using FluentAssertions;\nusing Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Rows.Count(rows).Should().BeGreaterThanOrEqualTo(6);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTests.cs": "using FluentAssertions;\nusing Xunit;\npublic class RowsTests\n{\n    [Fact]\n    public void Counts()\n    {\n        int[] rows = { 1, 2, 3, 4, 5, 6, 7 };\n        Rows.Count(rows).Should().BeGreaterThan(6);\n    }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "cpp-gtest-bound-widened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_GT(Count(rows, 7), 6);\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_GE(Count(rows, 7), 6);\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "cpp-gtest-assert-inverted",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_TRUE(Count(rows, 7) == 7);\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_FALSE(Count(rows, 7) == 7);\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "cpp-catch2-comparison-widened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/RowsTest.cpp": "#include <catch2/catch_test_macros.hpp>\n#include \"../src/rows.h\"\n\nTEST_CASE(\"rows are counted\") {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    REQUIRE(Count(rows, 7) > 6);\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.cpp": "#include <catch2/catch_test_macros.hpp>\n#include \"../src/rows.h\"\n\nTEST_CASE(\"rows are counted\") {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    REQUIRE(Count(rows, 7) >= 6);\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound",
+          "assertion-reduction/source-parsed-with-errors-preprocessor"
+        ]
+      }
+    },
+    {
+      "name": "c-unity-bound-widened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/test_rows.c": "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));\n}\n"
+      },
+      "head": {
+        "tests/test_rows.c": "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    TEST_ASSERT_GREATER_OR_EQUAL(6, Count(rows, 7));\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "c-unity-or-equal-tightened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/test_rows.c": "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    TEST_ASSERT_GREATER_OR_EQUAL(6, Count(rows, 7));\n}\n"
+      },
+      "head": {
+        "tests/test_rows.c": "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "cpp-gtest-bound-tightened",
+      "base": {
+        "src/rows.h": "int Count(const int *x, int n);\n",
+        "src/rows.c": "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_GE(Count(rows, 7), 6);\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.cpp": "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {\n    int rows[] = {1, 2, 3, 4, 5, 6, 7};\n    EXPECT_GT(Count(rows, 7), 6);\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "ui-edit-without-before-image",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.visual-evidence]\nenabled = true\n\n[[gates.visual-evidence.rules]]\ntrigger_paths = [\"web/**\"]\n",
+        "web/Nav.tsx": "export const Nav = 1;\n"
+      },
+      "head": {
+        "web/Nav.tsx": "export const Nav = 2;\n"
+      },
+      "body": "## After\n![after](https://example.com/after.png)\n",
+      "enable": [
+        "visual-evidence"
+      ],
+      "verdict": {
+        "caught": [
+          "visual-evidence/visual-evidence-incomplete"
+        ]
+      }
+    },
+    {
+      "name": "ui-page-added-without-images",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.visual-evidence]\nenabled = true\n\n[[gates.visual-evidence.rules]]\ntrigger_paths = [\"web/**\"]\n",
+        "web/Nav.tsx": "export const Nav = 1;\n"
+      },
+      "head": {
+        "web/Page.tsx": "export const Page = 1;\n"
+      },
+      "body": "Adds the page.\n",
+      "enable": [
+        "visual-evidence"
+      ],
+      "verdict": {
+        "caught": [
+          "visual-evidence/visual-evidence-missing"
+        ]
+      }
+    },
+    {
+      "name": "ui-edit-with-before-and-after",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.visual-evidence]\nenabled = true\n\n[[gates.visual-evidence.rules]]\ntrigger_paths = [\"web/**\"]\n",
+        "web/Nav.tsx": "export const Nav = 1;\n"
+      },
+      "head": {
+        "web/Nav.tsx": "export const Nav = 2;\n"
+      },
+      "body": "## Before\n![before](https://example.com/before.png)\n\n## After\n![after](https://example.com/after.png)\n",
+      "enable": [
+        "visual-evidence"
+      ],
+      "gate": "visual-evidence",
+      "verdict": "clean"
+    },
+    {
+      "name": "ui-evidence-placeholder-images",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.visual-evidence]\nenabled = true\n\n[[gates.visual-evidence.rules]]\ntrigger_paths = [\"web/**\"]\n",
+        "web/Nav.tsx": "export const Nav = 1;\n"
+      },
+      "head": {
+        "web/Nav.tsx": "export const Nav = 2;\n"
+      },
+      "body": "## Before\n![x](https://example.com/1x1.png)\n\n## After\n![x](https://example.com/1x1.png)\n",
+      "enable": [
+        "visual-evidence"
+      ],
+      "gate": "visual-evidence",
+      "verdict": {
+        "known_miss": "#1083"
+      }
+    },
+    {
+      "name": "doc-invented-flag",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\n```bash\nmytool check --base main --dry-run\n```\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "verdict": {
+        "caught": [
+          "invented-names/unknown-flag"
+        ]
+      }
+    },
+    {
+      "name": "doc-invented-config-key",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\n```toml mytool.toml\n[gates.pii]\nstrict = true\n```\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "verdict": {
+        "caught": [
+          "invented-names/unknown-config-key"
+        ]
+      }
+    },
+    {
+      "name": "doc-declared-flag-and-key",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\nRun `mytool check --base main -q`.\n\n```toml mytool.toml\n[gates.pii]\nenabled = true\n```\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "gate": "invented-names",
+      "verdict": "clean"
+    },
+    {
+      "name": "doc-invented-flag-in-prose",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\nPass --dry-run to mytool to preview the run.\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "gate": "invented-names",
+      "verdict": {
+        "known_miss": "#1090"
+      }
+    },
+    {
+      "name": "doc-invented-flag-added-to-surface",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.invented-names]\nenabled = true\n\n[[gates.invented-names.tools]]\nname = \"mytool\"\nsurface = \"docs/surface.txt\"\nconfig_files = [\"mytool.toml\"]\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n",
+        "docs/usage.md": "# Usage\n"
+      },
+      "head": {
+        "docs/usage.md": "# Usage\n\n```bash\nmytool check --dry-run\n```\n",
+        "docs/surface.txt": "--base\n-q\ngates.pii.enabled\n--dry-run\n"
+      },
+      "enable": [
+        "invented-names"
+      ],
+      "gate": "invented-names",
+      "verdict": {
+        "known_miss": "#1090"
+      }
+    },
+    {
+      "name": "companion-mention-only-in-a-comment",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n\n<!-- TODO: document close -->\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "verdict": {
+        "caught": [
+          "companion-edit/companion-not-specific"
+        ]
+      }
+    },
+    {
+      "name": "companion-whitespace-edit-with-require-mention",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open`  opens.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "verdict": {
+        "caught": [
+          "companion-edit/companion-not-specific"
+        ]
+      }
+    },
+    {
+      "name": "companion-names-the-new-function",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n\n`close` releases the handle `open` took.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "gate": "companion-edit",
+      "verdict": "clean"
+    },
+    {
+      "name": "companion-one-line-mention",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open` opens.\n\nUpdated for `close`.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "gate": "companion-edit",
+      "verdict": {
+        "known_miss": "#1089"
+      }
+    },
+    {
+      "name": "companion-mention-only-on-an-unchanged-line",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/api.md\"]\nrequire_mention = true\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/api.md": "# API\n\n`open` opens. `close` is planned.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/api.md": "# API\n\n`open` opens. `close` is planned.\n\nReworded intro.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "verdict": {
+        "caught": [
+          "companion-edit/companion-not-specific"
+        ]
+      }
+    },
+    {
+      "name": "php-phpunit-bound-widened",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertGreaterThan(6, count_rows($rows));\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertGreaterThanOrEqual(6, count_rows($rows));\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "php-phpunit-assert-inverted",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertTrue(count_rows($rows) === 7);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertFalse(count_rows($rows) === 7);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "php-phpunit-condition-widened",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        self::assertTrue(count_rows($rows) > 6);\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        self::assertTrue(count_rows($rows) >= 6);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "php-pest-matcher-widened",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\ntest('rows are counted', function () {\n    $rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count_rows($rows))->toBeGreaterThan(6);\n});\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\ntest('rows are counted', function () {\n    $rows = [1, 2, 3, 4, 5, 6, 7];\n    expect(count_rows($rows))->toBeGreaterThanOrEqual(6);\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "php-phpunit-bound-tightened",
+      "base": {
+        "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertGreaterThanOrEqual(6, count_rows($rows));\n    }\n}\n"
+      },
+      "head": {
+        "tests/RowsTest.php": "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{\n    public function testCounts(): void\n    {\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        $this->assertGreaterThan(6, count_rows($rows));\n    }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "kotlin-kotest-bound-widened",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsSpec.kt": "import io.kotest.core.spec.style.StringSpec\nimport io.kotest.matchers.shouldBe\n\nclass RowsSpec : StringSpec({\n    \"rows are counted\" {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        countRows(rows) shouldBeGreaterThan 6\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsSpec.kt": "import io.kotest.core.spec.style.StringSpec\nimport io.kotest.matchers.shouldBe\n\nclass RowsSpec : StringSpec({\n    \"rows are counted\" {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        countRows(rows) shouldBeGreaterThanOrEqual 6\n    }\n})\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "kotlin-test-assert-inverted",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertTrue(countRows(rows) == 7)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertFalse(countRows(rows) == 7)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "kotlin-test-condition-widened",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertTrue(countRows(rows) > 6)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertTrue(countRows(rows) >= 6)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "kotlin-assertj-bound-widened",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertThat(countRows(rows)).isGreaterThan(6)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsTest.kt": "import kotlin.test.Test\nimport kotlin.test.assertTrue\n\nclass RowsTest {\n    @Test\n    fun counts() {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        assertThat(countRows(rows)).isGreaterThanOrEqualTo(6)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "kotlin-kotest-bound-tightened",
+      "base": {
+        "src/main/kotlin/Rows.kt": "fun countRows(rows: List<Int>): Int = rows.size\n",
+        "src/test/kotlin/RowsSpec.kt": "import io.kotest.core.spec.style.StringSpec\nimport io.kotest.matchers.shouldBe\n\nclass RowsSpec : StringSpec({\n    \"rows are counted\" {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        countRows(rows) shouldBeGreaterThanOrEqual 6\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/RowsSpec.kt": "import io.kotest.core.spec.style.StringSpec\nimport io.kotest.matchers.shouldBe\n\nclass RowsSpec : StringSpec({\n    \"rows are counted\" {\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        countRows(rows) shouldBeGreaterThan 6\n    }\n})\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "ruby-rspec-bound-widened",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to be > 6\n  end\nend\n"
+      },
+      "head": {
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to be >= 6\n  end\nend\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ruby-minitest-assert-inverted",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "test/rows_test.rb": "require \"minitest/autorun\"\nrequire_relative \"../lib/rows\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    assert count_rows(rows) == 7\n  end\nend\n"
+      },
+      "head": {
+        "test/rows_test.rb": "require \"minitest/autorun\"\nrequire_relative \"../lib/rows\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    refute count_rows(rows) == 7\n  end\nend\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ruby-minitest-condition-widened",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "test/rows_test.rb": "require \"minitest/autorun\"\nrequire_relative \"../lib/rows\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    assert count_rows(rows) > 6\n  end\nend\n"
+      },
+      "head": {
+        "test/rows_test.rb": "require \"minitest/autorun\"\nrequire_relative \"../lib/rows\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    assert count_rows(rows) >= 6\n  end\nend\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ruby-rspec-matcher-negated",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to eq(7)\n  end\nend\n"
+      },
+      "head": {
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).not_to eq(8)\n  end\nend\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "ruby-rspec-bound-tightened",
+      "base": {
+        "lib/rows.rb": "def count_rows(rows)\n  rows.size\nend\n",
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to be >= 6\n  end\nend\n"
+      },
+      "head": {
+        "spec/rows_spec.rb": "require_relative \"../lib/rows\"\n\nRSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    expect(count_rows(rows)).to be > 6\n  end\nend\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "swift-xctest-bound-widened",
+      "base": {
+        "Sources/Rows/Rows.swift": "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        "Tests/RowsTests/RowsTests.swift": "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {\n    func testCounts() {\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        XCTAssertGreaterThan(countRows(rows), 6)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/RowsTests/RowsTests.swift": "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {\n    func testCounts() {\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        XCTAssertGreaterThanOrEqual(countRows(rows), 6)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "swift-xctest-assert-inverted",
+      "base": {
+        "Sources/Rows/Rows.swift": "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        "Tests/RowsTests/RowsTests.swift": "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {\n    func testCounts() {\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        XCTAssertTrue(countRows(rows) == 7)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/RowsTests/RowsTests.swift": "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {\n    func testCounts() {\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        XCTAssertFalse(countRows(rows) == 7)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "swift-xctest-equal-negated",
+      "base": {
+        "Sources/Rows/Rows.swift": "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        "Tests/RowsTests/RowsTests.swift": "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {\n    func testCounts() {\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        XCTAssertEqual(countRows(rows), 7)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/RowsTests/RowsTests.swift": "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {\n    func testCounts() {\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        XCTAssertNotEqual(countRows(rows), 8)\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "swift-xctest-bound-tightened",
+      "base": {
+        "Sources/Rows/Rows.swift": "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        "Tests/RowsTests/RowsTests.swift": "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {\n    func testCounts() {\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        XCTAssertGreaterThanOrEqual(countRows(rows), 6)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/RowsTests/RowsTests.swift": "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {\n    func testCounts() {\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        XCTAssertGreaterThan(countRows(rows), 6)\n    }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "swift-testing-expect-widened",
+      "base": {
+        "Sources/Rows/Rows.swift": "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        "Tests/RowsTests/CountTests.swift": "import Testing\n@testable import Rows\n\n@Test func counts() {\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    #expect(countRows(rows) >= 7)\n}\n"
+      },
+      "head": {
+        "Tests/RowsTests/CountTests.swift": "import Testing\n@testable import Rows\n\n@Test func counts() {\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    #expect(countRows(rows) != 0)\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "swift-testing-ordering-widened",
+      "base": {
+        "Sources/Rows/Rows.swift": "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        "Tests/RowsTests/CountTests.swift": "import Testing\n@testable import Rows\n\n@Test func counts() {\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    #expect(countRows(rows) > 6)\n}\n"
+      },
+      "head": {
+        "Tests/RowsTests/CountTests.swift": "import Testing\n@testable import Rows\n\n@Test func counts() {\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    #expect(countRows(rows) >= 6)\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-scalatest-bound-widened",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should be > 6\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should be >= 6\n  }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-scalatest-equal-negated",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) shouldBe 7\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should not be 8\n  }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-munit-assert-widened",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSuite.scala": "class RowsSuite extends munit.FunSuite {\n  test(\"counts\") {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    assert(Rows.countRows(rows) > 6)\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSuite.scala": "class RowsSuite extends munit.FunSuite {\n  test(\"counts\") {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    assert(Rows.countRows(rows) >= 6)\n  }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-munit-equals-negated",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSuite.scala": "class RowsSuite extends munit.FunSuite {\n  test(\"counts\") {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    assertEquals(Rows.countRows(rows), 7)\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSuite.scala": "class RowsSuite extends munit.FunSuite {\n  test(\"counts\") {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    assertNotEquals(Rows.countRows(rows), 8)\n  }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "scala-scalatest-bound-tightened",
+      "base": {
+        "src/main/scala/Rows.scala": "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should be >= 6\n  }\n}\n"
+      },
+      "head": {
+        "src/test/scala/RowsSpec.scala": "import org.scalatest.flatspec.AnyFlatSpec\nimport org.scalatest.matchers.should.Matchers\n\nclass RowsSpec extends AnyFlatSpec with Matchers {\n  \"rows\" should \"be counted\" in {\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    Rows.countRows(rows) should be > 6\n  }\n}\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "objc-xctest-bound-widened",
+      "base": {
+        "Sources/Rows.h": "#import <Foundation/Foundation.h>\n\nNSInteger CountRows(NSArray *rows);\n",
+        "Sources/Rows.m": "#import \"Rows.h\"\n\nNSInteger CountRows(NSArray *rows) {\n    return rows.count;\n}\n",
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssertGreaterThan(CountRows(rows), 6);\n}\n\n@end\n"
+      },
+      "head": {
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssertGreaterThanOrEqual(CountRows(rows), 6);\n}\n\n@end\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "objc-xctest-assert-inverted",
+      "base": {
+        "Sources/Rows.h": "#import <Foundation/Foundation.h>\n\nNSInteger CountRows(NSArray *rows);\n",
+        "Sources/Rows.m": "#import \"Rows.h\"\n\nNSInteger CountRows(NSArray *rows) {\n    return rows.count;\n}\n",
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssertTrue(CountRows(rows) == 7);\n}\n\n@end\n"
+      },
+      "head": {
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssertFalse(CountRows(rows) == 7);\n}\n\n@end\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "objc-xctest-condition-widened",
+      "base": {
+        "Sources/Rows.h": "#import <Foundation/Foundation.h>\n\nNSInteger CountRows(NSArray *rows);\n",
+        "Sources/Rows.m": "#import \"Rows.h\"\n\nNSInteger CountRows(NSArray *rows) {\n    return rows.count;\n}\n",
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssert(CountRows(rows) > 6);\n}\n\n@end\n"
+      },
+      "head": {
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssert(CountRows(rows) >= 6);\n}\n\n@end\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "objc-xctest-equal-negated",
+      "base": {
+        "Sources/Rows.h": "#import <Foundation/Foundation.h>\n\nNSInteger CountRows(NSArray *rows);\n",
+        "Sources/Rows.m": "#import \"Rows.h\"\n\nNSInteger CountRows(NSArray *rows) {\n    return rows.count;\n}\n",
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssertEqual(CountRows(rows), 7);\n}\n\n@end\n"
+      },
+      "head": {
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssertNotEqual(CountRows(rows), 8);\n}\n\n@end\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "objc-xctest-bound-tightened",
+      "base": {
+        "Sources/Rows.h": "#import <Foundation/Foundation.h>\n\nNSInteger CountRows(NSArray *rows);\n",
+        "Sources/Rows.m": "#import \"Rows.h\"\n\nNSInteger CountRows(NSArray *rows) {\n    return rows.count;\n}\n",
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssertGreaterThanOrEqual(CountRows(rows), 6);\n}\n\n@end\n"
+      },
+      "head": {
+        "Tests/RowsTests.m": "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    XCTAssertGreaterThan(CountRows(rows), 6);\n}\n\n@end\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
     }
   ]
 }
