@@ -3209,6 +3209,24 @@
       }
     },
     {
+      "name": "cmd-changed-ranges-paths-narrowed-to-docs",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n",
+        "discipline.toml": "[gates.command]\nenabled = true\ncommand = \"sh -c 'exit 0' sh {changed_ranges}\"\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n\npub fn g(x: i32) -> i32 {\n    x + 1\n}\n",
+        "discipline.toml": "[gates.command]\nenabled = true\ncommand = \"sh -c 'exit 0' sh {changed_ranges}\"\nchanged_ranges_paths = [\"docs/**\"]\n"
+      },
+      "body": "",
+      "verdict": {
+        "caught": [
+          "config-integrity/gate-weakened"
+        ]
+      }
+    },
+    {
       "name": "rs-comparison-bound-widened",
       "base": {
         "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
