@@ -29,6 +29,13 @@ pub struct PresetDefinition {
 /// empty run (#847).
 pub const ZERO_MUTANTS_TESTED: &str = r"\b0 mutants tested";
 
+/// The `stryker` preset's zero-items guard. Stryker never prints `0 mutants tested`; its
+/// instrumenter logs `Instrumented <n> source file(s) with <m> mutant(s)` at the default
+/// `info` level, and a run that mutates nothing (no file matched, or a range with no
+/// mutable code) logs `with 0 mutant(s)` and exits 0 (Stryker 10.1.1, recorded on #1068).
+/// `\b` and the space keep it to a count of exactly zero: `with 10 mutant(s)` is not.
+pub const STRYKER_ZERO_MUTANTS: &str = r"\bwith 0 mutant\(s\)";
+
 /// The zero-tests guard of the presets that run libtest (`loom`, `miri`). It is no regular
 /// expression: the run is empty when it printed a `running N tests` line and every such
 /// line has a count of zero ([`libtest_ran_no_test`]). `cargo test` prints one per test
@@ -99,7 +106,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "mutation",
         default_command: "npx stryker run",
         default_timeout_seconds: 300,
-        zero_items_pattern: Some(ZERO_MUTANTS_TESTED),
+        zero_items_pattern: Some(STRYKER_ZERO_MUTANTS),
         forbid_output: &["Survived", "SURVIVED"],
         canary_command: None,
         canary_expected_diagnostic: None,
@@ -671,10 +678,24 @@ mod tests {
             "running 3 tests\ntest result: ok\n   Doc-tests p\nrunning 0 tests\n",
             "error[E0425]: cannot find value `x` in this scope",
         ];
+        // Stryker 10.1.1's own lines, from runs that mutated nothing (a range with no
+        // mutable code; an empty `--mutate`) and runs that mutated something (#1068).
+        let stryker_zero: &[&str] = &[
+            "00:37:36 (48794) INFO Instrumenter Instrumented 1 source file(s) with 0 mutant(s)",
+            "00:37:38 (48929) INFO Instrumenter Instrumented 0 source file(s) with 0 mutant(s)",
+        ];
+        let stryker_more: &[&str] = &[
+            "00:37:15 (45795) INFO Instrumenter Instrumented 2 source file(s) with 21 mutant(s)",
+            "00:37:23 (46862) INFO Instrumenter Instrumented 1 source file(s) with 5 mutant(s)",
+            "Instrumented 3 source file(s) with 10 mutant(s)",
+            "Instrumented 3 source file(s) with 100 mutant(s)",
+            // Not Stryker's: a cargo-mutants line is no evidence a Stryker run was empty.
+            "0 mutants tested",
+        ];
         let samples: &[Samples] = &[
             ("cargo-mutants", mutants_zero, mutants_more),
             ("mutmut", mutants_zero, mutants_more),
-            ("stryker", mutants_zero, mutants_more),
+            ("stryker", stryker_zero, stryker_more),
             ("pit", mutants_zero, mutants_more),
             (
                 "lcov",

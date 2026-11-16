@@ -673,6 +673,34 @@
       }
     },
     {
+      "name": "cmd-stryker-nothing-mutated",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"stryker\", command = \"echo INFO Instrumenter Instrumented 1 source file(s) with 0 mutant(s)\" } ]\n",
+        "src/math.js": "function isAdult(age) {\n  return age >= 18;\n}\nmodule.exports = { isAdult };\n"
+      },
+      "head": {
+        "src/math.js": "function isAdult(age) {\n  return age >= 18; // c\n}\nmodule.exports = { isAdult };\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "caught": [
+          "command/zero-items-executed"
+        ]
+      }
+    },
+    {
+      "name": "control-cmd-stryker-some-mutated",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"stryker\", command = \"echo INFO Instrumenter Instrumented 1 source file(s) with 10 mutant(s)\" } ]\n",
+        "src/math.js": "function isAdult(age) {\n  return age >= 18;\n}\nmodule.exports = { isAdult };\n"
+      },
+      "head": {
+        "src/math.js": "function isAdult(age) {\n  return age >= 18; // c\n}\nmodule.exports = { isAdult };\n"
+      },
+      "gate": "command",
+      "verdict": "clean"
+    },
+    {
       "name": "directive-name-typo",
       "base": {
         "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
