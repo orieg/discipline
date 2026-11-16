@@ -6478,14 +6478,22 @@ command = "cargo test"
                 output_pattern(pattern, id)
             };
             let mut ok = true;
-            for id in ["cargo-mutants", "mutmut", "pit"] {
-                let re = guard(id)?;
-                ok &= re.is_match("0 mutants tested in 1s")
-                    && re.is_match("Found 3 mutants\n0 mutants tested")
-                    && !re.is_match("10 mutants tested in 5s: 10 caught")
-                    && !re.is_match("20 mutants tested")
-                    && !re.is_match("100 mutants tested");
-            }
+            let mutants = guard("cargo-mutants")?;
+            ok &= mutants.is_match("0 mutants tested in 1s")
+                && mutants.is_match("Found 3 mutants\n0 mutants tested")
+                && !mutants.is_match("10 mutants tested in 5s: 10 caught")
+                && !mutants.is_match("20 mutants tested")
+                && !mutants.is_match("100 mutants tested");
+            // mutmut stops on a run no test reaches; PIT says `No mutations found`, or
+            // `>> Ran 0 tests` when no test ran a mutant (#1068).
+            let mutmut = guard("mutmut")?;
+            ok &= mutmut.is_match("Stopping early, because we could not find any test case for any mutant. It seems")
+                && !mutmut.is_match("0 mutants tested");
+            let pit = guard("pit")?;
+            ok &= pit.is_match(">> Ran 0 tests (0 tests per mutation)")
+                && pit.is_match("PIT >> WARNING : No mutations found. This probably means")
+                && !pit.is_match(">> Ran 10 tests (2 tests per mutation)")
+                && !pit.is_match(">> Ran 5 tests (1 tests per mutation)");
             // Stryker's instrumenter line, the one it prints for an empty run (#1068).
             let stryker = guard("stryker")?;
             ok &= stryker.is_match("INFO Instrumenter Instrumented 1 source file(s) with 0 mutant(s)")

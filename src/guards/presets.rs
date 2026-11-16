@@ -36,6 +36,20 @@ pub const ZERO_MUTANTS_TESTED: &str = r"\b0 mutants tested";
 /// `\b` and the space keep it to a count of exactly zero: `with 10 mutant(s)` is not.
 pub const STRYKER_ZERO_MUTANTS: &str = r"\bwith 0 mutant\(s\)";
 
+/// The `mutmut` preset's zero-items guard. mutmut 3.8.1 prints no count of zero: when no
+/// test reaches any mutant (nothing mutable, or no test touching what was mutated) it
+/// prints `Stopping early, because we could not find any test case for any mutant` and
+/// exits 1 (recorded on #1068). The second message is the same stop on its other path in
+/// mutmut's source (READ, not seen in a run).
+pub const MUTMUT_NO_TESTED_MUTANT: &str = r"Stopping early, because (?:we could not find any test case for any mutant|tests recorded trampoline hits but none match any mutant key)";
+
+/// The `pit` preset's zero-items guard. PIT 1.30.2 prints no count of mutants tested.
+/// Nothing to mutate is `No mutations found`: an error and exit 1, or a warning and
+/// exit 0 under `failWhenNoMutations=false`. Mutants that no test runs are
+/// `>> Ran 0 tests (0 tests per mutation)` with exit 0, which nothing else catches
+/// (recorded on #1068). The space before `0` keeps `>> Ran 10 tests` out.
+pub const PIT_NO_TESTED_MUTANT: &str = r"No mutations found|>> Ran 0 tests\b";
+
 /// The zero-tests guard of the presets that run libtest (`loom`, `miri`). It is no regular
 /// expression: the run is empty when it printed a `running N tests` line and every such
 /// line has a count of zero ([`libtest_ran_no_test`]). `cargo test` prints one per test
@@ -92,8 +106,10 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "mutation",
         default_command: "mutmut run",
         default_timeout_seconds: 300,
-        zero_items_pattern: Some(ZERO_MUTANTS_TESTED),
-        forbid_output: &["survived", "SURVIVED"],
+        zero_items_pattern: Some(MUTMUT_NO_TESTED_MUTANT),
+        // `mutmut run` counts survivors as `🙁 <n>` on its progress line; the words are
+        // printed by `mutmut results` only.
+        forbid_output: &["survived", "SURVIVED", "🙁 [1-9]"],
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["setup.cfg", "pyproject.toml"],
@@ -120,8 +136,10 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "mutation",
         default_command: "mvn org.pitest:pitest-maven:mutationCoverage",
         default_timeout_seconds: 300,
-        zero_items_pattern: Some(ZERO_MUTANTS_TESTED),
-        forbid_output: &["SURVIVED"],
+        zero_items_pattern: Some(PIT_NO_TESTED_MUTANT),
+        // PIT prints `SURVIVED 0` for every mutator of every run; a count above zero is
+        // a survivor.
+        forbid_output: &["SURVIVED [1-9]"],
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["pom.xml"],
@@ -616,9 +634,11 @@ mod tests {
     /// expressions with no literal fallback (#600). Every built-in default must compile,
     /// and none may depend on being read as text: each matches its own text. The
     /// zero-items guards, written as expressions, are checked against tool output in
-    /// `every_zero_items_pattern_matches_only_a_whole_count_of_zero`.
+    /// `every_zero_items_pattern_matches_only_a_whole_count_of_zero`, and the survivor
+    /// counts below in `mutation_forbid_output_reads_a_survivor_count_above_zero`.
     #[test]
     fn every_preset_output_pattern_compiles_and_matches_its_own_text() {
+        const COUNTS: &[&str] = &["\u{1f641} [1-9]", "SURVIVED [1-9]"];
         let mut checked = 0;
         for preset in PRESETS {
             let patterns = preset
@@ -631,7 +651,11 @@ mod tests {
                     .unwrap_or_else(|e| panic!("preset `{}`: {e:#}", preset.id));
                 // The text a literal match would have looked for.
                 let text = pattern.replace('\\', "");
-                assert!(re.is_match(&text), "preset `{}`: `{pattern}`", preset.id);
+                assert!(
+                    COUNTS.contains(&pattern) || re.is_match(&text),
+                    "preset `{}`: `{pattern}`",
+                    preset.id
+                );
                 assert!(
                     !re.is_match("nothing of the kind"),
                     "preset `{}`: `{pattern}`",
@@ -641,6 +665,44 @@ mod tests {
             }
         }
         assert!(checked >= 15, "{checked} patterns checked");
+    }
+
+    /// The mutation presets' `forbid_output` reads each tool's own survivor count:
+    /// `mutmut run` prints survivors as `🙁 <n>`, and PIT prints `SURVIVED 0` for every
+    /// mutator of every run, so only a count above zero is a survivor (#1068).
+    #[test]
+    fn mutation_forbid_output_reads_a_survivor_count_above_zero() {
+        let forbids = |id: &str, out: &str| {
+            resolve_preset(id)
+                .unwrap()
+                .forbid_output
+                .iter()
+                .any(|p| regex::Regex::new(p).unwrap().is_match(out))
+        };
+        // mutmut 3.8.1's progress line, final frame of a run with 2 survivors, and the
+        // first frame of the same run.
+        assert!(forbids(
+            "mutmut",
+            "\u{2826} 3/3  \u{1f389} 1 \u{1fae5} 0  \u{23f0} 0  \u{1f914} 0  \u{1f641} 2  \u{1f507} 0  \u{1f9d9} 0"
+        ));
+        assert!(!forbids(
+            "mutmut",
+            "\u{2834} 0/3  \u{1f389} 0 \u{1fae5} 0  \u{23f0} 0  \u{1f914} 0  \u{1f641} 0  \u{1f507} 0  \u{1f9d9} 0"
+        ));
+        // PIT 1.30.2: a mutator with a survivor, and one whose mutants were all killed.
+        assert!(forbids(
+            "pit",
+            "> KILLED 0 SURVIVED 1 TIMED_OUT 0 NON_VIABLE 0 "
+        ));
+        assert!(forbids(
+            "pit",
+            "> KILLED 3 SURVIVED 12 TIMED_OUT 0 NON_VIABLE 0 "
+        ));
+        assert!(!forbids(
+            "pit",
+            "> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0 "
+        ));
+        assert!(!forbids("pit", ">> Generated 5 mutations Killed 5 (100%)"));
     }
 
     /// A zero-items guard means "nothing ran", so it must match a count of exactly zero
@@ -692,11 +754,33 @@ mod tests {
             // Not Stryker's: a cargo-mutants line is no evidence a Stryker run was empty.
             "0 mutants tested",
         ];
+        // mutmut 3.8.1 and PIT 1.30.2's own lines, from runs that tested no mutant and
+        // runs that did (#1068).
+        let mutmut_zero: &[&str] = &[
+            "Stopping early, because we could not find any test case for any mutant. It seems that the selected tests do not cover any code that we mutated.",
+        ];
+        let mutmut_more: &[&str] = &[
+            "\u{2826} 3/3  \u{1f389} 1 \u{1fae5} 0  \u{23f0} 0  \u{1f914} 0  \u{1f641} 2  \u{1f507} 0  \u{1f9d9} 0",
+            "\u{2834} 0/3  \u{1f389} 0 \u{1fae5} 0  \u{23f0} 0  \u{1f914} 0  \u{1f641} 0  \u{1f507} 0  \u{1f9d9} 0",
+            "0 mutants tested",
+        ];
+        let pit_zero: &[&str] = &[
+            "[ERROR] Failed to execute goal org.pitest:pitest-maven:1.30.2:mutationCoverage (default-cli) on project pitlab: Execution default-cli of goal org.pitest:pitest-maven:1.30.2:mutationCoverage failed: No mutations found. This probably means there is an issue with either the supplied classpath or filters.",
+            "9:06:07 AM PIT >> WARNING : No mutations found. This probably means there is an issue with either the supplied classpath or filters.",
+            ">> Ran 0 tests (0 tests per mutation)",
+        ];
+        let pit_more: &[&str] = &[
+            ">> Ran 5 tests (1 tests per mutation)",
+            ">> Ran 10 tests (2 tests per mutation)",
+            ">> Ran 100 tests (1 tests per mutation)",
+            ">> Generated 5 mutations Killed 3 (60%)",
+            "0 mutants tested",
+        ];
         let samples: &[Samples] = &[
             ("cargo-mutants", mutants_zero, mutants_more),
-            ("mutmut", mutants_zero, mutants_more),
+            ("mutmut", mutmut_zero, mutmut_more),
             ("stryker", stryker_zero, stryker_more),
-            ("pit", mutants_zero, mutants_more),
+            ("pit", pit_zero, pit_more),
             (
                 "lcov",
                 &["  lines......: 0% (0 of 12 lines)"],
