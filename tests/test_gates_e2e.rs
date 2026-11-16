@@ -14883,6 +14883,48 @@ fn command_preset_cargo_mutants_count_ending_in_zero_is_not_zero_items() {
         .contains(&"Zero Items Selected Or Executed".to_string()));
 }
 
+/// #1068: Stryker never prints `0 mutants tested`. A run that mutates nothing logs its
+/// instrumenter line `Instrumented <n> source file(s) with 0 mutant(s)` and exits 0, so the
+/// `stryker` preset's guard reads that line. The lines below are Stryker 10.1.1's own.
+#[test]
+fn command_preset_stryker_reads_strykers_own_empty_run_line() {
+    let check = |printed: &str| -> Run {
+        let repo = Repo::new();
+        repo.commit_base(
+            "discipline.toml",
+            &format!(
+                "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommands = [ {{ name = \"mut\", \
+                 preset = \"stryker\", command = \"echo {printed}\" }} ]\n"
+            ),
+            "ci: configure stryker",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// c\n"));
+        repo.commit("chore: touch the library");
+        repo.check(&[])
+    };
+    for printed in [
+        "INFO Instrumenter Instrumented 1 source file(s) with 0 mutant(s)",
+        "INFO Instrumenter Instrumented 0 source file(s) with 0 mutant(s)",
+    ] {
+        let run = check(printed);
+        assert_eq!(run.code, 1, "{printed}: {}{}", run.stdout, run.stderr);
+        assert!(
+            run.titles("command")
+                .contains(&"Zero Items Selected Or Executed".to_string()),
+            "{printed}"
+        );
+    }
+    // Control: a run that mutated something, including a count ending in 0, passes.
+    for printed in [
+        "INFO Instrumenter Instrumented 2 source file(s) with 21 mutant(s)",
+        "INFO Instrumenter Instrumented 2 source file(s) with 10 mutant(s)",
+    ] {
+        let run = check(printed);
+        assert_eq!(run.code, 0, "{printed}: {}{}", run.stdout, run.stderr);
+        assert!(run.violations("command").is_empty(), "{printed}");
+    }
+}
+
 /// A `cargo` that answers as `cargo mutants --in-diff <file>` must be called: it fails unless
 /// the argument after `--in-diff` is a readable file holding the change's diff (the `b/`
 /// side of `src/lib.rs` and its added line), and logs the argument it was given to `log`.

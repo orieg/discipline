@@ -6478,7 +6478,7 @@ command = "cargo test"
                 output_pattern(pattern, id)
             };
             let mut ok = true;
-            for id in ["cargo-mutants", "mutmut", "stryker", "pit"] {
+            for id in ["cargo-mutants", "mutmut", "pit"] {
                 let re = guard(id)?;
                 ok &= re.is_match("0 mutants tested in 1s")
                     && re.is_match("Found 3 mutants\n0 mutants tested")
@@ -6486,6 +6486,11 @@ command = "cargo test"
                     && !re.is_match("20 mutants tested")
                     && !re.is_match("100 mutants tested");
             }
+            // Stryker's instrumenter line, the one it prints for an empty run (#1068).
+            let stryker = guard("stryker")?;
+            ok &= stryker.is_match("INFO Instrumenter Instrumented 1 source file(s) with 0 mutant(s)")
+                && !stryker.is_match("Instrumented 2 source file(s) with 10 mutant(s)")
+                && !stryker.is_match("Instrumented 2 source file(s) with 21 mutant(s)");
             for id in ["loom", "miri"] {
                 let pattern = resolve_preset(id)
                     .and_then(|p| p.zero_items_pattern)
