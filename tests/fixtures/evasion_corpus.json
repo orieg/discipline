@@ -701,6 +701,94 @@
       "verdict": "clean"
     },
     {
+      "name": "cmd-mutmut-no-mutant-tested",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"mutmut\", command = \"echo 'Stopping early, because we could not find any test case for any mutant. It seems that the selected tests do not cover any code that we mutated.'\" } ]\n",
+        "src/age.py": "def is_adult(age):\n    return age >= 18\n"
+      },
+      "head": {
+        "src/age.py": "def is_adult(age):\n    return age >= 18  # c\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "caught": [
+          "command/zero-items-executed"
+        ]
+      }
+    },
+    {
+      "name": "cmd-pit-no-test-ran",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"pit\", command = \"echo '>> Ran 0 tests (0 tests per mutation)'\" } ]\n",
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; }\n}\n"
+      },
+      "head": {
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; } // c\n}\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "caught": [
+          "command/zero-items-executed"
+        ]
+      }
+    },
+    {
+      "name": "cmd-mutmut-survivor-on-progress-line",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"mutmut\", command = \"echo '3/3  🎉 1 🫥 0  ⏰ 0  🤔 0  🙁 2  🔇 0  🧙 0'\" } ]\n",
+        "src/age.py": "def is_adult(age):\n    return age >= 18\n"
+      },
+      "head": {
+        "src/age.py": "def is_adult(age):\n    return age >= 18  # c\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "caught": [
+          "command/forbidden-output"
+        ]
+      }
+    },
+    {
+      "name": "control-cmd-pit-all-killed",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"pit\", command = \"echo '> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0'\" } ]\n",
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; }\n}\n"
+      },
+      "head": {
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; } // c\n}\n"
+      },
+      "gate": "command",
+      "verdict": "clean"
+    },
+    {
+      "name": "cmd-pit-mutant-no-test-covers",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"pit\", command = \"echo '> NO_COVERAGE 1 EQUIVALENT 0'\" } ]\n",
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; }\n}\n"
+      },
+      "head": {
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; } // c\n}\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "caught": [
+          "command/forbidden-output"
+        ]
+      }
+    },
+    {
+      "name": "control-cmd-pit-every-mutant-covered",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"pit\", command = \"echo '> NO_COVERAGE 0 EQUIVALENT 0'\" } ]\n",
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; }\n}\n"
+      },
+      "head": {
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; } // c\n}\n"
+      },
+      "gate": "command",
+      "verdict": "clean"
+    },
+    {
       "name": "directive-name-typo",
       "base": {
         "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",

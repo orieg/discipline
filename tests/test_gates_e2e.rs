@@ -14925,6 +14925,67 @@ fn command_preset_stryker_reads_strykers_own_empty_run_line() {
     }
 }
 
+/// #1068: mutmut and PIT never print `0 mutants tested` either. mutmut stops with
+/// `Stopping early, because we could not find any test case for any mutant`; PIT prints
+/// `No mutations found`, or `>> Ran 0 tests` (exit 0) when no test ran a mutant. Survivors
+/// are mutmut's `🙁 <n>` and PIT's `SURVIVED <n>` above zero, and so are mutants no test
+/// covers (`🫥 <n>`, `NO_COVERAGE <n>`); PIT prints `SURVIVED 0` and `NO_COVERAGE 0` on
+/// every run. The lines below are mutmut 3.8.1's and PIT 1.30.2's own.
+#[test]
+fn command_presets_mutmut_and_pit_read_their_tools_own_lines() {
+    let check = |preset: &str, printed: &str| -> Run {
+        let repo = Repo::new();
+        repo.commit_base(
+            "discipline.toml",
+            &format!(
+                "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommands = [ {{ name = \"mut\", \
+                 preset = \"{preset}\", command = \"echo '{printed}'\" }} ]\n"
+            ),
+            "ci: configure mutation testing",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// c\n"));
+        repo.commit("chore: touch the library");
+        repo.check(&[])
+    };
+    let titles = |run: &Run| run.titles("command");
+    for (preset, printed, title) in [
+        (
+            "mutmut",
+            "Stopping early, because we could not find any test case for any mutant. It seems that the selected tests do not cover any code that we mutated.",
+            "Zero Items Selected Or Executed",
+        ),
+        ("pit", ">> Ran 0 tests (0 tests per mutation)", "Zero Items Selected Or Executed"),
+        (
+            "pit",
+            "PIT >> WARNING : No mutations found. This probably means there is an issue with either the supplied classpath or filters.",
+            "Zero Items Selected Or Executed",
+        ),
+        ("mutmut", "3/3  🎉 1 🫥 0  ⏰ 0  🤔 0  🙁 2  🔇 0  🧙 0", "Forbidden Output Detected"),
+        ("pit", "> KILLED 0 SURVIVED 1 TIMED_OUT 0 NON_VIABLE 0", "Forbidden Output Detected"),
+        ("mutmut", "3/3  🎉 1 🫥 2  ⏰ 0  🤔 0  🙁 0  🔇 0  🧙 0", "Forbidden Output Detected"),
+        ("pit", "> NO_COVERAGE 1 EQUIVALENT 0", "Forbidden Output Detected"),
+    ] {
+        let run = check(preset, printed);
+        assert_eq!(run.code, 1, "{preset} {printed}: {}{}", run.stdout, run.stderr);
+        assert!(titles(&run).contains(&title.to_string()), "{preset} {printed}: {:?}", titles(&run));
+    }
+    // Control: runs that tested mutants and kept no survivor pass.
+    for (preset, printed) in [
+        ("mutmut", "3/3  🎉 3 🫥 0  ⏰ 0  🤔 0  🙁 0  🔇 0  🧙 0"),
+        ("pit", ">> Ran 10 tests (2 tests per mutation)"),
+        ("pit", "> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0"),
+        ("pit", "> NO_COVERAGE 0 EQUIVALENT 0"),
+    ] {
+        let run = check(preset, printed);
+        assert_eq!(
+            run.code, 0,
+            "{preset} {printed}: {}{}",
+            run.stdout, run.stderr
+        );
+        assert!(run.violations("command").is_empty(), "{preset} {printed}");
+    }
+}
+
 /// A `cargo` that answers as `cargo mutants --in-diff <file>` must be called: it fails unless
 /// the argument after `--in-diff` is a readable file holding the change's diff (the `b/`
 /// side of `src/lib.rs` and its added line), and logs the argument it was given to `log`.
