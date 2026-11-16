@@ -87,6 +87,8 @@ pub fn generate_schema() -> Value {
             "claim-labels" => "#/$defs/ClaimLabelsGate",
             "companion-edit" => "#/$defs/CompanionEditGate",
             "changed-line-coverage" => "#/$defs/ChangedLineCoverageGate",
+            "visual-evidence" => "#/$defs/VisualEvidenceGate",
+            "invented-names" => "#/$defs/InventedNamesGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -480,6 +482,9 @@ pub fn generate_schema() -> Value {
                 "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
                 "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs. Needs the table's own command or preset: entries do not inherit it" },
                 "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" },
+                "snapshot_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`" },
+                "example": { "type": "string", "description": "Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}`" },
+                "example_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`" },
                 "commands": {
                     "type": "array",
                     "items": { "$ref": "#/$defs/CommandEntry" },
@@ -503,7 +508,10 @@ pub fn generate_schema() -> Value {
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
                     "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
                     "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs" },
-                    "snapshot_ignore": { "$ref": "#/$defs/StringList", "description": "Regexes for lines left out of the snapshot comparison, on both sides" }
+                    "snapshot_ignore": { "$ref": "#/$defs/StringList", "description": "Regexes for lines left out of the snapshot comparison, on both sides" },
+                    "snapshot_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `snapshot` the stdout must match, in place of the whole file; a region holding one fenced code block is compared by the block's body. Needs `snapshot`" },
+                    "example": { "type": "string", "description": "Repository-relative path of a document whose example a command reads through `{example_file}`, read from the head side before any command runs; the command must name `{example_file}`" },
+                    "example_marker": { "type": "string", "description": "Name of the `<!-- generated:<name> -->` ... `<!-- /generated -->` region of `example` that is the example, in place of the whole file; a region holding one fenced code block gives the block's body. Needs `example`" }
                 }
             },
             "DependencyDeltaGate": gate_table(json!({
@@ -695,7 +703,8 @@ pub fn generate_schema() -> Value {
                 "unanchored_citations": { "type": "string", "enum": ["ignore", "warn", "reject"], "description": "How unanchored path:line citations are handled" },
                 "verify_tracker_titles": { "type": "boolean", "description": "Whether to verify claimed issue or pull request titles via forge API" },
                 "require_online": { "type": "boolean", "description": "Whether offline operation fails closed when verifying tracker titles" },
-                "min_quote_chars": { "type": "integer", "minimum": 0, "description": "Fewest non-whitespace characters a citation's quoted text must hold (default: 8); a shorter quote is reported" }
+                "min_quote_chars": { "type": "integer", "minimum": 0, "description": "Fewest non-whitespace characters a citation's quoted text must hold (default: 8); a shorter quote is reported" },
+                "removed_link_exempt_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of documents not read for link-target-removed: documents that name removed paths on purpose, such as changelogs, migration notes and archives" }
             })),
             "ClaimLabelsGate": gate_table(json!({
                 "diff_only": { "type": "boolean", "description": "Whether to inspect changed lines only rather than the whole file" },
@@ -705,6 +714,40 @@ pub fn generate_schema() -> Value {
             "ChangedLineCoverageGate": gate_table(json!({
                 "report": { "type": "string", "description": "Repository-relative path of the coverage report the test run writes; a tracked file, a symlink or a path outside the repository stops the run" },
                 "format": { "type": "string", "enum": ["lcov", "cobertura"], "description": "The report's format: an LCOV tracefile or a Cobertura XML report" }
+            })),
+            "VisualEvidenceGate": gate_table(json!({
+                "exempt_authors": { "$ref": "#/$defs/StringListOrReset", "description": "Pull request author logins (dependency bots) whose changes need no images" },
+                "rules": {
+                    "type": "array",
+                    "description": "Path sets whose change needs an After image, and a Before image when a matched path existed on the base side, in the pull request body",
+                    "items": {
+                        "type": "object",
+                        "required": ["trigger_paths"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "trigger_paths": { "$ref": "#/$defs/StringList", "description": "Globs; a changed path matching any of them (either side of a rename, a deletion included) fires the rule" },
+                            "reason": { "type": "string", "description": "Why these paths need visual evidence, quoted in the finding" }
+                        }
+                    }
+                }
+            })),
+            "InventedNamesGate": gate_table(json!({
+                "diff_only": { "type": "boolean", "description": "When true (default), reads only the lines the change adds to a Markdown document; false reads every tracked Markdown document" },
+                "tools": {
+                    "type": "array",
+                    "description": "Tools whose flags and configuration keys documents are checked against a declared list of names",
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "surface"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "name": { "type": "string", "description": "The command name a shell line or code span starts with" },
+                            "surface": { "type": "string", "description": "Repository-relative path of the tracked list of accepted names: one flag (--name, -n) or configuration key (section.key) per line; # comments and blank lines skipped" },
+                            "config_files": { "$ref": "#/$defs/StringList", "description": "File names of the tool's configuration: a toml block whose info string or first comment names one is read for keys" },
+                            "config_docs": { "$ref": "#/$defs/StringList", "description": "Globs of documents whose toml blocks naming no other .toml file are all the tool's configuration" }
+                        }
+                    }
+                }
             })),
             "CompanionEditGate": gate_table(json!({
                 "rules": {
@@ -718,6 +761,7 @@ pub fn generate_schema() -> Value {
                             "trigger_paths": { "$ref": "#/$defs/StringList", "description": "Globs; a changed path matching any of them fires the rule" },
                             "require_edits_to": { "$ref": "#/$defs/StringList", "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside" },
                             "require_all": { "type": "boolean", "description": "Whether every require_edits_to glob must match a changed path, rather than any one" },
+                            "require_mention": { "type": "boolean", "description": "Whether the companion's added lines must name a public name the triggering change added, removed or modified (prose and table cells; not fenced code, HTML comments or changelog files)" },
                             "reason": { "type": "string", "description": "Why the two path sets change together, quoted in the finding" }
                         }
                     }

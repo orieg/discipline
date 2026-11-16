@@ -34,7 +34,12 @@ impl LanguagePack for CPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -52,6 +57,37 @@ impl LanguagePack for CPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         functions::is_test_file(path, Some(is_c_cpp_test_path))
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        let masked = mask_macros(src, vocab);
+        let text = masked.as_deref().unwrap_or(src);
+        let guarded = super::c_macros::mask_cplusplus_guards(text);
+        let text = guarded.as_deref().unwrap_or(text);
+        let as_c = super::public_names::names_of(
+            &tree_sitter_c::LANGUAGE.into(),
+            "the C",
+            path,
+            text,
+            |root, s| super::public_names::c_family(path, root, s, false),
+        );
+        // A `.h` header may be C++ or Objective-C, as for `extract`: the first reading
+        // that parses without errors is kept.
+        if as_c.is_err() && super::extension(path) == Some("h") {
+            if let Ok(names) = CppPack.public_names(path, src, vocab) {
+                return Ok(names);
+            }
+            #[cfg(feature = "lang-objc")]
+            if let Ok(names) = super::objc::ObjcPack.public_names(path, src, vocab) {
+                return Ok(names);
+            }
+        }
+        as_c
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -134,7 +170,12 @@ impl LanguagePack for CppPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -155,6 +196,23 @@ impl LanguagePack for CppPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         functions::is_test_file(path, Some(is_c_cpp_test_path))
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        let masked = mask_macros(src, vocab);
+        let text = masked.as_deref().unwrap_or(src);
+        super::public_names::names_of(
+            &tree_sitter_cpp::LANGUAGE.into(),
+            "the C++",
+            path,
+            text,
+            |root, s| super::public_names::c_family(path, root, s, true),
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -217,6 +275,7 @@ fn shared_facts<'t>(
     facts: &mut ParsedFileFacts,
 ) {
     C_PACK.shared_facts(root, anc, src, path, vocab, facts);
+    super::comparisons::c_cpp(root, src, &mut facts.tests);
     facts.prose = super::prose::extract(
         root,
         src,
@@ -1189,10 +1248,14 @@ impl<'a> CCppExtractor<'a> {
         test_fn: &mut TestFn,
     ) {
         test_fn.total_asserts += 1;
-        let is_strong = fn_name.contains("EQUAL")
-            || fn_name.contains("_EQ")
-            || fn_name.contains("_NE")
-            || fn_name.contains("MATCH");
+        // Unity's `GREATER_OR_EQUAL` / `LESS_OR_EQUAL` hold "EQUAL" but are orderings,
+        // counted like `GREATER_THAN` / `LESS_THAN`.
+        let ordering = fn_name.contains("GREATER_") || fn_name.contains("LESS_");
+        let is_strong = !ordering
+            && (fn_name.contains("EQUAL")
+                || fn_name.contains("_EQ")
+                || fn_name.contains("_NE")
+                || fn_name.contains("MATCH"));
         if is_strong {
             test_fn.strong_asserts += 1;
             if args.len() >= 2 {
@@ -1955,5 +2018,19 @@ int main() {
                 .skipped_error_nodes_count,
             0
         );
+    }
+
+    #[test]
+    fn unity_ordering_macros_are_not_equality_assertions() {
+        // `TEST_ASSERT_GREATER_OR_EQUAL` holds "EQUAL" in its name but is an ordering.
+        let src = "#include \"unity.h\"\nvoid test_counts(void) {\n    TEST_ASSERT_GREATER_OR_EQUAL(6, n);\n    TEST_ASSERT_LESS_OR_EQUAL_INT(6, n);\n    TEST_ASSERT_GREATER_THAN(6, n);\n    TEST_ASSERT_EQUAL_INT(6, n);\n    TEST_ASSERT_NOT_EQUAL(6, n);\n    TEST_ASSERT_EQUAL_INT(n, n);\n}\n";
+        let facts = CPack
+            .extract("test/test_counts.c", src, &AssertVocabulary::default())
+            .expect("extract succeeds");
+        let t = &facts.tests[0];
+        assert_eq!(t.total_asserts, 6);
+        // EQUAL_INT twice and NOT_EQUAL; the ordering forms are not counted.
+        assert_eq!(t.strong_asserts, 3, "{t:?}");
+        assert_eq!(t.tautologies, 1, "EQUAL_INT(n, n): {t:?}");
     }
 }

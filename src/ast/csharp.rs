@@ -20,7 +20,12 @@ impl LanguagePack for CSharpPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -34,6 +39,21 @@ impl LanguagePack for CSharpPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         super::functions::is_test_file(path, Some(is_csharp_test_path))
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        super::public_names::names_of(
+            &tree_sitter_c_sharp::LANGUAGE.into(),
+            "the C#",
+            path,
+            src,
+            super::public_names::csharp,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -72,6 +92,7 @@ impl LanguagePack for CSharpPack {
             super::caught_assertions::csharp(root, &anc, src, helpers, vocab)
         });
         super::expected_exceptions::csharp(root, &anc, src, &mut extractor.facts.tests);
+        super::comparisons::csharp(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,

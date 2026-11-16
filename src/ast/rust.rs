@@ -30,6 +30,7 @@ impl LanguagePack for RustPack {
                 | Fact::Prose
                 | Fact::Budgets
                 | Fact::CapabilitySinks
+                | Fact::PublicNames
         )
     }
 
@@ -52,6 +53,21 @@ impl LanguagePack for RustPack {
             path,
             src,
             &super::capability_sinks::RUST,
+        )
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        super::public_names::names_of(
+            &tree_sitter_rust::LANGUAGE.into(),
+            "the Rust",
+            path,
+            src,
+            super::public_names::rust,
         )
     }
 

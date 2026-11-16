@@ -20,7 +20,12 @@ impl LanguagePack for RubyPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -36,6 +41,21 @@ impl LanguagePack for RubyPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         functions::is_test_file(path, Some(is_ruby_test_path))
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        super::public_names::names_of(
+            &tree_sitter_ruby::LANGUAGE.into(),
+            "the Ruby",
+            path,
+            src,
+            super::public_names::ruby,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -74,6 +94,7 @@ impl LanguagePack for RubyPack {
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "heredoc_body"]);
         super::expected_exceptions::ruby(root, src, &mut extractor.facts.tests);
+        super::comparisons::ruby(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }

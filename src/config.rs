@@ -652,6 +652,26 @@ pub const GATES: &[GateInfo] = &[
         scope: Scope::Repository,
         triggers: &[],
     },
+    GateInfo {
+        id: "visual-evidence",
+        suite: Suite::Hygiene,
+        summary: "a change to UI paths needs before and after images in the pull request body",
+        coverage: Coverage::Stated("any"),
+        available: true,
+        delta_only: true,
+        scope: Scope::Provenance,
+        triggers: &[],
+    },
+    GateInfo {
+        id: "invented-names",
+        suite: Suite::Hygiene,
+        summary: "a flag or configuration key a document gives a tool that the tool's declared surface does not list",
+        coverage: Coverage::Stated("markdown, any"),
+        available: true,
+        delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -1117,6 +1137,8 @@ pub struct Gates {
     pub claim_labels: ClaimLabelsGate,
     pub companion_edit: CompanionEditGate,
     pub changed_line_coverage: ChangedLineCoverageGate,
+    pub visual_evidence: VisualEvidenceGate,
+    pub invented_names: InventedNamesGate,
 }
 
 /// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
@@ -1228,7 +1250,9 @@ impl_gate_settings!(
     CitationAnchorsGate,
     ClaimLabelsGate,
     CompanionEditGate,
-    ChangedLineCoverageGate
+    ChangedLineCoverageGate,
+    VisualEvidenceGate,
+    InventedNamesGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1847,8 +1871,17 @@ pub struct CommandGate {
     pub canary_expected_diagnostic: Option<String>,
     /// Repository-relative path of a committed file the command's stdout must match.
     pub snapshot: Option<String>,
+    /// Name of the `<!-- generated:<name> -->` region of `snapshot` the stdout must
+    /// match, in place of the whole file.
+    pub snapshot_marker: Option<String>,
     /// Regexes for lines left out of the snapshot comparison, on both sides.
     pub snapshot_ignore: Vec<String>,
+    /// Repository-relative path of a document whose example `{example_file}` hands to the
+    /// command as a file.
+    pub example: Option<String>,
+    /// Name of the `<!-- generated:<name> -->` region of `example` that is the example, in
+    /// place of the whole file.
+    pub example_marker: Option<String>,
     /// Multi-command suite support.
     pub commands: Vec<CommandEntry>,
 }
@@ -1870,7 +1903,10 @@ impl Default for CommandGate {
             canary_command: None,
             canary_expected_diagnostic: None,
             snapshot: None,
+            snapshot_marker: None,
             snapshot_ignore: Vec::new(),
+            example: None,
+            example_marker: None,
             commands: Vec::new(),
         }
     }
@@ -1892,8 +1928,17 @@ pub struct CommandEntry {
     pub canary_expected_diagnostic: Option<String>,
     /// Repository-relative path of a committed file the command's stdout must match.
     pub snapshot: Option<String>,
+    /// Name of the `<!-- generated:<name> -->` region of `snapshot` the stdout must
+    /// match, in place of the whole file.
+    pub snapshot_marker: Option<String>,
     /// Regexes for lines left out of the snapshot comparison, on both sides.
     pub snapshot_ignore: Vec<String>,
+    /// Repository-relative path of a document whose example `{example_file}` hands to the
+    /// command as a file.
+    pub example: Option<String>,
+    /// Name of the `<!-- generated:<name> -->` region of `example` that is the example, in
+    /// place of the whole file.
+    pub example_marker: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2849,6 +2894,9 @@ pub struct CitationAnchorsGate {
     /// Fewest non-whitespace characters a quoted text must hold. A shorter quote is
     /// contained in almost any line, so it anchors nothing and is reported.
     pub min_quote_chars: usize,
+    /// Documents not read for `link-target-removed`: those that name removed paths on
+    /// purpose (changelogs, migration notes, archives, history).
+    pub removed_link_exempt_paths: Vec<String>,
 }
 
 impl Default for CitationAnchorsGate {
@@ -2862,6 +2910,15 @@ impl Default for CitationAnchorsGate {
             verify_tracker_titles: false,
             require_online: false,
             min_quote_chars: 8,
+            removed_link_exempt_paths: [
+                "**/CHANGELOG*",
+                "**/MIGRATION*",
+                "**/HISTORY*",
+                "**/ROADMAP*",
+                "docs/archive/**",
+            ]
+            .map(String::from)
+            .to_vec(),
         }
     }
 }
@@ -2911,6 +2968,10 @@ pub struct CompanionEditRule {
     pub require_edits_to: Vec<String>,
     #[serde(default)]
     pub require_all: bool,
+    /// The companion's added lines must name a public name the triggering change added,
+    /// removed or modified (`companion-edit/companion-not-specific`).
+    #[serde(default)]
+    pub require_mention: bool,
     /// Why the two sets move together, quoted in the finding.
     #[serde(default)]
     pub reason: Option<String>,
@@ -2949,6 +3010,83 @@ pub struct ChangedLineCoverageGate {
     /// Repository-relative path of the report the test run writes; untracked.
     pub report: Option<String>,
     pub format: CoverageFormat,
+}
+
+/// `visual-evidence`: path sets whose change needs before and after images in the pull
+/// request body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VisualEvidenceGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Pull request authors (dependency bots) whose changes need no images.
+    pub exempt_authors: Vec<String>,
+    pub rules: Vec<VisualEvidenceRule>,
+}
+
+impl Default for VisualEvidenceGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            exempt_authors: Vec::new(),
+            rules: Vec::new(),
+        }
+    }
+}
+/// `invented-names`: each tool whose flags and configuration keys documents are checked
+/// against the list of names it declares.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InventedNamesGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Read only the lines the change adds to a document.
+    pub diff_only: bool,
+    pub tools: Vec<InventedNamesTool>,
+}
+
+impl Default for InventedNamesGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Warning,
+            exempt_paths: Vec::new(),
+            diff_only: true,
+            tools: Vec::new(),
+        }
+    }
+}
+
+/// One `[[gates.visual-evidence.rules]]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VisualEvidenceRule {
+    /// Globs; a changed path matching any of them needs visual evidence.
+    pub trigger_paths: Vec<String>,
+    /// Why these paths need it, quoted in the finding.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+/// One `[[gates.invented-names.tools]]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InventedNamesTool {
+    /// The command name a shell line or code span starts with (`mytool`).
+    pub name: String,
+    /// Repository-relative path of the tracked list of the names the tool accepts: one
+    /// flag (`--name`, `-n`) or configuration key (`section.key`) per line.
+    pub surface: String,
+    /// File names of the tool's configuration (`mytool.toml`): a `toml` block whose info
+    /// string or first comment names one is read for keys.
+    #[serde(default)]
+    pub config_files: Vec<String>,
+    /// Globs of documents whose unmarked `toml` blocks are all the tool's configuration.
+    #[serde(default)]
+    pub config_docs: Vec<String>,
 }
 
 impl Default for ChangedLineCoverageGate {
@@ -3014,6 +3152,8 @@ impl Gates {
             "claim-labels" => &self.claim_labels,
             "companion-edit" => &self.companion_edit,
             "changed-line-coverage" => &self.changed_line_coverage,
+            "visual-evidence" => &self.visual_evidence,
+            "invented-names" => &self.invented_names,
             _ => return None,
         })
     }
@@ -3402,6 +3542,7 @@ pub fn split_phrase_list(raw: &str) -> Vec<String> {
 
 pub const SHORTER_IS_STRICTER: &[&str] = &[
     "exempt_paths",
+    "removed_link_exempt_paths",
     "allow_patterns",
     "allowed_users",
     "assert_helper_fns",

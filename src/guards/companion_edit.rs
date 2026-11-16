@@ -157,7 +157,8 @@ pub fn evaluate_companion_edit(ctx: &Context) -> Result<GateOutcome> {
 
     let mut touched = BTreeSet::new();
     let mut edited = BTreeSet::new();
-    for f in ctx.git.changed_files()? {
+    let changed = ctx.git.changed_files()?;
+    for f in changed.iter().cloned() {
         if !f.is_deleted() && !exempt.matches(&f.path) {
             edited.insert(f.path.clone());
         }
@@ -179,6 +180,9 @@ pub fn evaluate_companion_edit(ctx: &Context) -> Result<GateOutcome> {
             Verdict::NotFired => continue,
             Verdict::Met => {
                 out.examined += 1;
+                if rule.require_mention {
+                    judge_mention(ctx, rule, compiled, position, &changed, &exempt, &mut out)?;
+                }
                 continue;
             }
             Verdict::NoneEdited { fired } => (
@@ -242,6 +246,183 @@ pub fn evaluate_companion_edit(ctx: &Context) -> Result<GateOutcome> {
     Ok(out)
 }
 
+/// The forms in which a changed public name counts as named: the qualified name, and its
+/// last segment (`get` for `Store::get`, `Cache#get`, `-[Store get:]`).
+pub fn mention_forms(name: &str) -> Vec<String> {
+    let mut forms = vec![name.to_string()];
+    let last = name
+        .trim_start_matches(['-', '+'])
+        .trim_matches(['[', ']'])
+        .rsplit(['.', ':', '#', ' '])
+        .find(|seg| !seg.is_empty())
+        .unwrap_or(name)
+        .to_string();
+    if !last.is_empty() && last != name {
+        forms.push(last);
+    }
+    forms
+}
+
+fn word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Whether `line` holds `form` as a whole word: neither neighbour continues an identifier.
+pub fn names(line: &str, form: &str) -> bool {
+    line.match_indices(form).any(|(at, _)| {
+        let before = line[..at].chars().next_back();
+        let after = line[at + form.len()..].chars().next();
+        !before.is_some_and(word_char) && !after.is_some_and(word_char)
+    })
+}
+
+/// Files a mention never counts in: a changelog lists changes without describing them.
+const CHANGELOG: &[&str] = &["**/CHANGELOG*", "**/CHANGES*", "**/HISTORY*", "**/NEWS*"];
+
+/// `require_mention`: the rule fired and its companion path changed; the companion's added
+/// prose must name a public name the triggering paths added, removed or modified.
+fn judge_mention(
+    ctx: &Context,
+    rule: &CompanionEditRule,
+    compiled: &CompiledRule,
+    position: usize,
+    changed: &[crate::gitctx::ChangedFile],
+    exempt: &PathFilter,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    use crate::ast::public_names::{changed_public_names, FileChange};
+    let changelog = PathFilter::new(&CHANGELOG.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
+    let fires = |p: &str| !p.is_empty() && !exempt.matches(p) && compiled.trigger.matches(p);
+    let companion =
+        |p: &str| !exempt.matches(p) && compiled.required.iter().any(|(_, f)| f.matches(p));
+    let mut texts = Vec::new();
+    for f in changed {
+        if !(fires(&f.path) || fires(&f.old_path)) || companion(&f.path) {
+            continue;
+        }
+        let base = if f.kind == crate::gitctx::ChangeKind::Added {
+            None
+        } else {
+            ctx.git.base_content(&f.old_path)?
+        };
+        let head = if f.is_deleted() {
+            None
+        } else {
+            ctx.git.head_content(&f.path)?
+        };
+        texts.push((f, base, head));
+    }
+    let files: Vec<FileChange> = texts
+        .iter()
+        .map(|(f, base, head)| FileChange {
+            base_path: if f.old_path.is_empty() {
+                &f.path
+            } else {
+                &f.old_path
+            },
+            head_path: &f.path,
+            base: base.as_deref(),
+            head: head.as_deref(),
+        })
+        .collect();
+    let vocab = super::agent_diff::assert_vocabulary(ctx.config);
+    let changes = changed_public_names(&crate::ast::default_registry(), &vocab, &files);
+    let names: Vec<&crate::ast::public_names::ChangedName> = changes
+        .added
+        .iter()
+        .chain(&changes.removed)
+        .chain(&changes.modified)
+        .collect();
+    let unread: Vec<String> = changes
+        .not_checked
+        .iter()
+        .map(|(p, _)| format!("`{p}`"))
+        .collect();
+    if names.is_empty() {
+        out.notes.push(if unread.is_empty() {
+            format!("rule {position}: the triggering change adds, removes or modifies no public name; `require_mention` asks nothing of the companion")
+        } else {
+            format!(
+                "rule {position}: could not check `require_mention`: no public name read, and the public names of {} could not be read",
+                unread.join(", ")
+            )
+        });
+        return Ok(());
+    }
+    if !unread.is_empty() {
+        out.notes.push(format!(
+            "rule {position}: `require_mention` judged on the public names read; those of {} could not be read",
+            unread.join(", ")
+        ));
+    }
+
+    // The companion's added lines, as prose: fenced code and HTML comments are not read.
+    let mut companions = Vec::new();
+    let mut found = false;
+    for f in changed {
+        if f.is_deleted() || !companion(&f.path) || changelog.matches(&f.path) {
+            continue;
+        }
+        companions.push(f.path.clone());
+        let Some(text) = ctx.git.head_content(&f.path)? else {
+            continue;
+        };
+        found |= crate::guards::pr_checklist::readable_lines(&text)
+            .iter()
+            .filter(|(n, _)| f.added_lines.contains(n))
+            .any(|(_, line)| {
+                names.iter().any(|c| {
+                    mention_forms(&c.name)
+                        .iter()
+                        .any(|form| self::names(line, form))
+                })
+            });
+        if found {
+            break;
+        }
+    }
+    if found {
+        return Ok(());
+    }
+    let subject = &rule.require_edits_to[0];
+    let at = companions.first().unwrap_or(subject);
+    let mut shown: Vec<String> = names
+        .iter()
+        .take(5)
+        .map(|c| format!("`{}`", c.name))
+        .collect();
+    if names.len() > 5 {
+        shown.push(format!("and {} more", names.len() - 5));
+    }
+    let lifted = ctx.find_override(
+        GATE,
+        &crate::findings::COMPANION_NOT_SPECIFIC,
+        tokens::ALLOW_COMPANION_EDIT,
+        subject,
+    );
+    out.lift_or_push(
+        lifted,
+        ctx.overridable(rule_severity(ctx)),
+        &crate::findings::COMPANION_NOT_SPECIFIC,
+        (Some(at), None),
+        format!(
+            "Rule {position} (`require_mention`): the companion edit names none of the public names the change touches in `trigger_paths` ({}). Lines in fenced code, HTML comments and changelog files do not count.",
+            shown.join(", ")
+        ),
+        &format!(
+            "Describe the change in `{at}`, naming what changed, or justify with `allow-companion-edit: {subject} <reason>`."
+        ),
+    );
+    if let Some(anchor) = later_rule_anchor(&ctx.config.gates.companion_edit.rules, position) {
+        out.anchor_last(anchor);
+    }
+    Ok(())
+}
+
+fn rule_severity(ctx: &Context) -> crate::config::Severity {
+    ctx.config.gates.companion_edit.severity()
+}
+
 fn list(items: &[String]) -> String {
     items
         .iter()
@@ -282,6 +463,7 @@ mod tests {
             trigger_paths: trigger.iter().map(|s| s.to_string()).collect(),
             require_edits_to: required.iter().map(|s| s.to_string()).collect(),
             require_all,
+            require_mention: false,
             reason: None,
         }
     }
@@ -294,6 +476,21 @@ mod tests {
         CompiledRule::new(r, 0)
             .unwrap()
             .judge(&set(touched), &set(edited))
+    }
+
+    #[test]
+    fn a_name_is_mentioned_as_a_whole_word_in_its_qualified_or_short_form() {
+        assert_eq!(mention_forms("Store::get"), ["Store::get", "get"]);
+        assert_eq!(mention_forms("Cache#get"), ["Cache#get", "get"]);
+        assert_eq!(mention_forms("-[Store get:]"), ["-[Store get:]", "get"]);
+        assert_eq!(mention_forms("open"), ["open"]);
+        assert!(names("Adds `Store::get` for lookups.", "Store::get"));
+        assert!(names("Call get() to read.", "get"));
+        assert!(names("| `limit` | the cap |", "limit"));
+        // Not inside a longer identifier.
+        assert!(!names("Call getter() to read.", "get"));
+        assert!(!names("my_limit is new", "limit"));
+        assert!(!names("nothing here", "get"));
     }
 
     #[test]

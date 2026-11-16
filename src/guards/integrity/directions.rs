@@ -55,6 +55,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("enabled", Direction::LooserWhenFalse),
     ("severity", Direction::Severity),
     ("exempt_paths", Direction::Grown),
+    ("removed_link_exempt_paths", Direction::Grown),
     ("ci_skip_severity", Direction::Severity),
     // Lists that widen what is tolerated.
     ("allow_patterns", Direction::Grown),
@@ -109,6 +110,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("mock_assert_fns", Direction::Shrunk),
     ("rules", Direction::Shrunk),
     ("groups", Direction::Shrunk),
+    ("tools", Direction::Shrunk),
     // A lost entry lets a banned action back in; a gained one bans more.
     ("banned_actions", Direction::Shrunk),
     // Numbers.
@@ -219,6 +221,9 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("count_pattern", Direction::Evidence),
     ("zero_items_pattern", Direction::Evidence),
     ("snapshot", Direction::Evidence),
+    ("snapshot_marker", Direction::Evidence),
+    ("example", Direction::Evidence),
+    ("example_marker", Direction::Evidence),
     ("constant_file", Direction::Evidence),
     ("constant_name", Direction::Evidence),
     ("deny_file", Direction::Evidence),
@@ -262,6 +267,8 @@ pub struct EntryShape {
     pub stricter_when_shrunk: &'static [&'static str],
     /// Fields whose addition is stricter: absent on base, any value on head passes.
     pub stricter_when_added: &'static [&'static str],
+    /// Boolean fields where `true` is stricter: base `false` or absent, head `true` passes.
+    pub stricter_when_true: &'static [&'static str],
 }
 
 /// Every other field of a matched entry must be unchanged. `citation_measurement_jobs` is
@@ -274,6 +281,7 @@ pub const ENTRY_SHAPES: &[EntryShape] = &[
         stricter_when_grown: &["sources"],
         stricter_when_shrunk: &[],
         stricter_when_added: &[],
+        stricter_when_true: &[],
     },
     // manifest-sync: more watched paths require the manifest to move more often; fewer
     // exclusions leave less outside the rule.
@@ -283,6 +291,17 @@ pub const ENTRY_SHAPES: &[EntryShape] = &[
         stricter_when_grown: &["watched_paths"],
         stricter_when_shrunk: &["exclude_paths"],
         stricter_when_added: &[],
+        stricter_when_true: &[],
+    },
+    // companion-edit: a rule is named by its two path sets; requiring the companion to
+    // name what changed is one more condition on it.
+    EntryShape {
+        key: "rules",
+        identity: &["trigger_paths", "require_edits_to"],
+        stricter_when_grown: &[],
+        stricter_when_shrunk: &[],
+        stricter_when_added: &[],
+        stricter_when_true: &["require_mention"],
     },
     // command: one more forbidden output pattern is one more way the command fails; a
     // snapshot added is one more comparison, and fewer ignored lines compare more.
@@ -292,6 +311,7 @@ pub const ENTRY_SHAPES: &[EntryShape] = &[
         stricter_when_grown: &["forbid_output"],
         stricter_when_shrunk: &["snapshot_ignore"],
         stricter_when_added: &["snapshot"],
+        stricter_when_true: &[],
     },
 ];
 

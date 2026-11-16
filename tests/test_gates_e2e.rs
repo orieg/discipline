@@ -1432,6 +1432,1049 @@ fn a_rust_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
     assert_eq!((code, codes), (0, vec![]));
 }
 
+/// A JS/TS assertion of an existing test weakened or inverted is reported as
+/// `weakened-bound` (#1070): a comparison matcher moved the loose way, a matcher negated
+/// with `.not`, an `assert(..)` comparison widened, and `assert(x)` -> `assert(!x)`.
+#[test]
+fn a_js_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let js = |check: &str| {
+        format!(
+            "import {{ count, ok }} from '../src/rows.js';\n\ndescribe('rows', () => {{\n  it('counts', () => {{\n    const rows = [1, 2, 3, 4, 5, 6, 7];\n    {check}\n  }});\n}});\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "src/rows.js",
+            "export function count(x) { return x.length; }\nexport function ok(x) { return x > 0; }\n",
+        );
+        repo.commit_base("test/rows.test.ts", &js(base), "test: counts");
+        repo.write("test/rows.test.ts", &js(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "expect(count(rows)).toBeGreaterThan(6);",
+            "expect(count(rows)).toBeGreaterThanOrEqual(6);",
+            "`toBeGreaterThan` to `toBeGreaterThanOrEqual`",
+        ),
+        (
+            "expect(count([])).toBe(0);",
+            "expect(count([])).not.toBe(1);",
+            "`toBe` to `not.toBe`",
+        ),
+        (
+            "expect(rows).toContain(3);",
+            "expect(rows).not.toContain(3);",
+            "`toContain` to `not.toContain`",
+        ),
+        (
+            "assert(count(rows) > 6, 'seven rows');",
+            "assert(count(rows) >= 6, 'seven rows');",
+            "`>` to `>=`",
+        ),
+        (
+            "assert.ok(ok(1));",
+            "assert.ok(!ok(1));",
+            "`assert(x)` to `assert(!x)`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("count("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: counts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, and `==` written as `===`.
+    for (base, head) in [
+        (
+            "expect(count(rows)).toBeGreaterThanOrEqual(6);",
+            "expect(count(rows)).toBeGreaterThan(6);",
+        ),
+        ("assert(count(rows) == 7);", "assert(count(rows) === 7);"),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// Java assertions (#1070) weakened or inverted are reported as the same finding: an
+/// AssertJ comparison method moved the loose way, an AssertJ twin negated, a JUnit
+/// `assertTrue` comparison widened, `assertTrue` -> `assertFalse`, and `assertEquals` ->
+/// `assertNotEquals` read as `==` -> `!=`.
+#[test]
+fn a_java_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let java = |check: &str| {
+        format!(
+            "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass RowsTest {{\n    @Test\n    void counts() {{\n        int[] rows = {{1, 2, 3, 4, 5, 6, 7}};\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "src/main/java/Rows.java",
+            "public class Rows {\n    public static int count(int[] x) { return x.length; }\n}\n",
+        );
+        repo.commit_base("src/test/java/RowsTest.java", &java(base), "test: counts");
+        repo.write("src/test/java/RowsTest.java", &java(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "assertThat(Rows.count(rows)).isGreaterThan(6);",
+            "assertThat(Rows.count(rows)).isGreaterThanOrEqualTo(6);",
+            "`isGreaterThan` to `isGreaterThanOrEqualTo`",
+        ),
+        (
+            "assertThat(rows).contains(3);",
+            "assertThat(rows).doesNotContain(3);",
+            "`contains` to `doesNotContain`",
+        ),
+        (
+            "assertTrue(Rows.count(rows) > 6, \"seven rows\");",
+            "assertTrue(Rows.count(rows) >= 6, \"seven rows\");",
+            "`>` to `>=`",
+        ),
+        (
+            "assertTrue(Rows.count(rows) == 7);",
+            "assertFalse(Rows.count(rows) == 7);",
+            "`assertTrue` to `assertFalse`",
+        ),
+        (
+            "assertEquals(0, Rows.count(new int[0]));",
+            "assertNotEquals(1, Rows.count(new int[0]));",
+            "`assertEquals` to `assertNotEquals`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("Rows.count("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: RowsTest.counts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, and a failure condition tightened.
+    for (base, head) in [
+        (
+            "assertThat(Rows.count(rows)).isGreaterThanOrEqualTo(6);",
+            "assertThat(Rows.count(rows)).isGreaterThan(6);",
+        ),
+        (
+            "assertFalse(Rows.count(rows) < 6);",
+            "assertFalse(Rows.count(rows) <= 6);",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// C# assertions (#1070) weakened or inverted are reported as the same finding: a
+/// FluentAssertions comparison moved the loose way, an xUnit twin negated, an xUnit
+/// `Assert.True` comparison widened, an NUnit constraint widened, and `Assert.Equal` ->
+/// `Assert.NotEqual` read as `==` -> `!=`.
+#[test]
+fn a_csharp_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let cs = |check: &str| {
+        format!(
+            "using FluentAssertions;\nusing NUnit.Framework;\nusing Xunit;\n\npublic class RowsTests\n{{\n    [Fact]\n    public void Counts()\n    {{\n        int[] rows = {{ 1, 2, 3, 4, 5, 6, 7 }};\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "src/Rows.cs",
+            "public static class Rows\n{\n    public static int Count(int[] x) => x.Length;\n}\n",
+        );
+        repo.commit_base("tests/RowsTests.cs", &cs(base), "test: counts");
+        repo.write("tests/RowsTests.cs", &cs(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "Rows.Count(rows).Should().BeGreaterThan(6);",
+            "Rows.Count(rows).Should().BeGreaterThanOrEqualTo(6);",
+            "`BeGreaterThan` to `BeGreaterThanOrEqualTo`",
+        ),
+        (
+            "Assert.Contains(3, rows);",
+            "Assert.DoesNotContain(3, rows);",
+            "`Contains` to `DoesNotContain`",
+        ),
+        (
+            "Assert.True(Rows.Count(rows) > 6, \"seven rows\");",
+            "Assert.True(Rows.Count(rows) >= 6, \"seven rows\");",
+            "`>` to `>=`",
+        ),
+        (
+            "Assert.That(Rows.Count(rows), Is.GreaterThan(6));",
+            "Assert.That(Rows.Count(rows), Is.GreaterThanOrEqualTo(6));",
+            "`Is.GreaterThan` to `Is.GreaterThanOrEqualTo`",
+        ),
+        (
+            "Assert.Equal(0, Rows.Count(new int[0]));",
+            "Assert.NotEqual(1, Rows.Count(new int[0]));",
+            "`Equal` to `NotEqual`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("Rows.Count("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: Counts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, and a failure condition tightened.
+    for (base, head) in [
+        (
+            "Rows.Count(rows).Should().BeGreaterThanOrEqualTo(6);",
+            "Rows.Count(rows).Should().BeGreaterThan(6);",
+        ),
+        (
+            "Assert.False(Rows.Count(rows) < 6);",
+            "Assert.False(Rows.Count(rows) <= 6);",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// C and C++ assertions (#1070) weakened or inverted are reported as the same finding: a
+/// GoogleTest comparison macro moved the loose way, `EXPECT_TRUE` -> `EXPECT_FALSE`, a
+/// condition's comparison widened, a GoogleMock matcher widened, `EXPECT_EQ` ->
+/// `EXPECT_NE` read as `==` -> `!=`, and a Unity threshold widened in a C test.
+#[test]
+fn a_c_cpp_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let gtest = |check: &str| {
+        format!(
+            "#include <gtest/gtest.h>\n#include \"../src/rows.h\"\n\nTEST(Rows, Counts) {{\n    int rows[] = {{1, 2, 3, 4, 5, 6, 7}};\n    {check}\n}}\n"
+        )
+    };
+    let unity = |check: &str| {
+        format!(
+            "#include \"unity.h\"\n#include \"../src/rows.h\"\n\nvoid test_counts(void) {{\n    int rows[] = {{1, 2, 3, 4, 5, 6, 7}};\n    {check}\n}}\n"
+        )
+    };
+    let run = |path: &str, base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write("src/rows.h", "int Count(const int *x, int n);\n");
+        repo.write(
+            "src/rows.c",
+            "#include \"rows.h\"\n\nint Count(const int *x, int n) {\n    (void)x;\n    return n;\n}\n",
+        );
+        let wrap = |check: &str| {
+            if path.ends_with(".c") {
+                unity(check)
+            } else {
+                gtest(check)
+            }
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    const CPP: &str = "tests/RowsTest.cpp";
+    const C: &str = "tests/test_rows.c";
+    for (path, test, base, head, ops) in [
+        (
+            CPP,
+            "Counts",
+            "EXPECT_GT(Count(rows, 7), 6) << \"seven rows\";",
+            "EXPECT_GE(Count(rows, 7), 6) << \"seven rows\";",
+            "`EXPECT_GT` to `EXPECT_GE`",
+        ),
+        (
+            CPP,
+            "Counts",
+            "EXPECT_TRUE(Count(rows, 7) == 7);",
+            "EXPECT_FALSE(Count(rows, 7) == 7);",
+            "`EXPECT_TRUE` to `EXPECT_FALSE`",
+        ),
+        (
+            CPP,
+            "Counts",
+            "ASSERT_TRUE(Count(rows, 7) > 6);",
+            "ASSERT_TRUE(Count(rows, 7) >= 6);",
+            "`>` to `>=`",
+        ),
+        (
+            CPP,
+            "Counts",
+            "EXPECT_THAT(Count(rows, 7), ::testing::Gt(6));",
+            "EXPECT_THAT(Count(rows, 7), ::testing::Ge(6));",
+            "`Gt` to `Ge`",
+        ),
+        (
+            CPP,
+            "Counts",
+            "EXPECT_EQ(0, Count(rows, 0));",
+            "EXPECT_NE(1, Count(rows, 0));",
+            "`EXPECT_EQ` to `EXPECT_NE`",
+        ),
+        (
+            C,
+            "test_counts",
+            "TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));",
+            "TEST_ASSERT_GREATER_OR_EQUAL(6, Count(rows, 7));",
+            "`TEST_ASSERT_GREATER_THAN` to `TEST_ASSERT_GREATER_OR_EQUAL`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(path, base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("Count(rows"), "{message}");
+        let lifted = run(
+            path,
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a Unity
+    // threshold raised under the same operator. A Unity `GREATER_OR_EQUAL` tightened to
+    // `GREATER_THAN` is an ordering both sides, not an equality assertion dropped.
+    for (path, base, head) in [
+        (
+            C,
+            "TEST_ASSERT_GREATER_OR_EQUAL(6, Count(rows, 7));",
+            "TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));",
+        ),
+        (
+            C,
+            "TEST_ASSERT_LESS_OR_EQUAL_INT(8, Count(rows, 7));",
+            "TEST_ASSERT_LESS_THAN_INT(8, Count(rows, 7));",
+        ),
+        (
+            CPP,
+            "EXPECT_GE(Count(rows, 7), 6);",
+            "EXPECT_GT(Count(rows, 7), 6);",
+        ),
+        (
+            CPP,
+            "EXPECT_FALSE(Count(rows, 7) < 6);",
+            "EXPECT_FALSE(Count(rows, 7) <= 6);",
+        ),
+        (
+            C,
+            "TEST_ASSERT_GREATER_THAN(6, Count(rows, 7));",
+            "TEST_ASSERT_GREATER_THAN(7, Count(rows, 8));",
+        ),
+    ] {
+        let (code, codes, _) = run(path, base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// PHP assertions (#1070) weakened or inverted are reported as the same finding: a
+/// PHPUnit ordering moved the loose way, `assertTrue` -> `assertFalse`, a condition's
+/// comparison widened, `assertSame` -> `assertNotSame` read as `==` -> `!=`, and a Pest
+/// matcher widened or negated.
+#[test]
+fn a_php_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let phpunit = |check: &str| {
+        format!(
+            "<?php\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class RowsTest extends TestCase\n{{\n    public function testCounts(): void\n    {{\n        $rows = [1, 2, 3, 4, 5, 6, 7];\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let pest = |check: &str| {
+        format!(
+            "<?php\n\ntest('counts', function () {{\n    $rows = [1, 2, 3, 4, 5, 6, 7];\n    {check}\n}});\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "src/Rows.php",
+            "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",
+        );
+        let wrap = |check: &str| {
+            if check.starts_with("expect(") {
+                pest(check)
+            } else {
+                phpunit(check)
+            }
+        };
+        repo.commit_base("tests/RowsTest.php", &wrap(base), "test: counts");
+        repo.write("tests/RowsTest.php", &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (test, base, head, ops) in [
+        (
+            "testCounts",
+            "$this->assertGreaterThan(6, count_rows($rows), 'seven rows');",
+            "$this->assertGreaterThanOrEqual(6, count_rows($rows), 'seven rows');",
+            "`assertGreaterThan` to `assertGreaterThanOrEqual`",
+        ),
+        (
+            "testCounts",
+            "$this->assertTrue(count_rows($rows) === 7);",
+            "$this->assertFalse(count_rows($rows) === 7);",
+            "`assertTrue` to `assertFalse`",
+        ),
+        (
+            "testCounts",
+            "self::assertTrue(count_rows($rows) > 6);",
+            "self::assertTrue(count_rows($rows) >= 6);",
+            "`>` to `>=`",
+        ),
+        (
+            "testCounts",
+            "$this->assertSame(0, count_rows([]));",
+            "$this->assertNotSame(1, count_rows([]));",
+            "`assertSame` to `assertNotSame`",
+        ),
+        (
+            "test: counts",
+            "expect(count_rows($rows))->toBeGreaterThan(6);",
+            "expect(count_rows($rows))->toBeGreaterThanOrEqual(6);",
+            "`toBeGreaterThan` to `toBeGreaterThanOrEqual`",
+        ),
+        (
+            "test: counts",
+            "expect(count_rows($rows))->toContain(7);",
+            "expect(count_rows($rows))->not->toContain(7);",
+            "`toContain` to `not->toContain`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("count_rows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // threshold raised under the same operator.
+    for (base, head) in [
+        (
+            "$this->assertGreaterThanOrEqual(6, count_rows($rows));",
+            "$this->assertGreaterThan(6, count_rows($rows));",
+        ),
+        (
+            "$this->assertFalse(count_rows($rows) < 6);",
+            "$this->assertFalse(count_rows($rows) <= 6);",
+        ),
+        (
+            "$this->assertGreaterThan(6, count_rows($rows));",
+            "$this->assertGreaterThan(7, count_rows($rows));",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// Kotlin assertions (#1070) weakened or inverted are reported as the same finding: a
+/// Kotest matcher moved the loose way, infix or called, `assertTrue` -> `assertFalse`, a
+/// condition's comparison widened, `assertEquals` -> `assertNotEquals` read as `==` ->
+/// `!=`, and an AssertJ comparison widened.
+#[test]
+fn a_kotlin_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let junit = |check: &str| {
+        format!(
+            "import kotlin.test.Test\n\nclass RowsTest {{\n    @Test\n    fun counts() {{\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let kotest = |check: &str| {
+        format!(
+            "class RowsSpec : StringSpec({{\n    \"counts\" {{\n        val rows = listOf(1, 2, 3, 4, 5, 6, 7)\n        {check}\n    }}\n}})\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "src/main/kotlin/Rows.kt",
+            "fun countRows(rows: List<Int>): Int = rows.size\n",
+        );
+        let (path, wrap): (&str, &dyn Fn(&str) -> String) = if base.contains("should") {
+            ("src/test/kotlin/RowsSpec.kt", &kotest)
+        } else {
+            ("src/test/kotlin/RowsTest.kt", &junit)
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (test, base, head, ops) in [
+        (
+            "RowsSpec.counts",
+            "countRows(rows) shouldBeGreaterThan 6",
+            "countRows(rows) shouldBeGreaterThanOrEqual 6",
+            "`shouldBeGreaterThan` to `shouldBeGreaterThanOrEqual`",
+        ),
+        (
+            "RowsSpec.counts",
+            "countRows(rows).shouldBe(0)",
+            "countRows(rows).shouldNotBe(1)",
+            "`shouldBe` to `shouldNotBe`",
+        ),
+        (
+            "RowsTest.counts",
+            "assertTrue(countRows(rows) == 7)",
+            "assertFalse(countRows(rows) == 7)",
+            "`assertTrue` to `assertFalse`",
+        ),
+        (
+            "RowsTest.counts",
+            "assertTrue(countRows(rows) > 6, \"seven rows\")",
+            "assertTrue(countRows(rows) >= 6, \"seven rows\")",
+            "`>` to `>=`",
+        ),
+        (
+            "RowsTest.counts",
+            "assertEquals(0, countRows(listOf()))",
+            "assertNotEquals(1, countRows(listOf()))",
+            "`assertEquals` to `assertNotEquals`",
+        ),
+        (
+            "RowsTest.counts",
+            "assertThat(countRows(rows)).isGreaterThan(6)",
+            "assertThat(countRows(rows)).isGreaterThanOrEqualTo(6)",
+            "`isGreaterThan` to `isGreaterThanOrEqualTo`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("countRows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "countRows(rows) shouldBeGreaterThanOrEqual 6",
+            "countRows(rows) shouldBeGreaterThan 6",
+        ),
+        (
+            "assertFalse(countRows(rows) < 6)",
+            "assertFalse(countRows(rows) <= 6)",
+        ),
+        (
+            "countRows(rows) shouldBeGreaterThan 6",
+            "countRows(rows) shouldBeGreaterThan 7",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// Ruby assertions (#1070) weakened or inverted are reported as the same finding: an
+/// RSpec bound moved the loose way, `to eq` -> `not_to eq`, a matcher negated, Minitest
+/// `assert` -> `refute`, a condition's comparison widened, and `assert_operator` widened.
+#[test]
+fn a_ruby_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let minitest = |check: &str| {
+        format!(
+            "require \"minitest/autorun\"\n\nclass RowsTest < Minitest::Test\n  def test_counts\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    {check}\n  end\nend\n"
+        )
+    };
+    let rspec = |check: &str| {
+        format!(
+            "RSpec.describe \"rows\" do\n  it \"counts\" do\n    rows = [1, 2, 3, 4, 5, 6, 7]\n    {check}\n  end\nend\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write("lib/rows.rb", "def count_rows(rows)\n  rows.size\nend\n");
+        let (path, wrap): (&str, &dyn Fn(&str) -> String) = if base.contains("expect") {
+            ("spec/rows_spec.rb", &rspec)
+        } else {
+            ("test/rows_test.rb", &minitest)
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (test, base, head, ops) in [
+        (
+            "counts",
+            "expect(count_rows(rows)).to be > 6",
+            "expect(count_rows(rows)).to be >= 6",
+            "`to be >` to `to be >=`",
+        ),
+        (
+            "counts",
+            "expect(count_rows([])).to eq(0)",
+            "expect(count_rows([])).not_to eq(1)",
+            "`to eq` to `not_to eq`",
+        ),
+        (
+            "counts",
+            "expect(count_rows(rows)).to include(7)",
+            "expect(count_rows(rows)).not_to include(7)",
+            "`to include` to `not_to include`",
+        ),
+        (
+            "test_counts",
+            "assert count_rows(rows) == 7",
+            "refute count_rows(rows) == 7",
+            "`assert` to `refute`",
+        ),
+        (
+            "test_counts",
+            "assert count_rows(rows) > 6, \"seven rows\"",
+            "assert count_rows(rows) >= 6, \"seven rows\"",
+            "`>` to `>=`",
+        ),
+        (
+            "test_counts",
+            "assert_operator count_rows(rows), :>, 6",
+            "assert_operator count_rows(rows), :>=, 6",
+            "`:>` to `:>=`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("count_rows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "expect(count_rows(rows)).to be >= 6",
+            "expect(count_rows(rows)).to be > 6",
+        ),
+        (
+            "refute count_rows(rows) < 6",
+            "refute count_rows(rows) <= 6",
+        ),
+        (
+            "expect(count_rows(rows)).to be > 6",
+            "expect(count_rows(rows)).to be > 7",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// Swift assertions (#1070) weakened or inverted are reported as the same finding: an
+/// XCTest ordering moved the loose way, `XCTAssertTrue` -> `XCTAssertFalse`, a
+/// condition's comparison widened, `XCTAssertEqual` -> `XCTAssertNotEqual` read as `==`
+/// -> `!=`, and a Swift Testing `#expect` condition widened.
+#[test]
+fn a_swift_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let xctest = |check: &str| {
+        format!(
+            "import XCTest\n@testable import Rows\n\nfinal class RowsTests: XCTestCase {{\n    func testCounts() {{\n        let rows = [1, 2, 3, 4, 5, 6, 7]\n        {check}\n    }}\n}}\n"
+        )
+    };
+    let testing = |check: &str| {
+        format!(
+            "import Testing\n@testable import Rows\n\n@Test func counts() {{\n    let rows = [1, 2, 3, 4, 5, 6, 7]\n    {check}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "Sources/Rows/Rows.swift",
+            "public func countRows(_ rows: [Int]) -> Int {\n    rows.count\n}\n",
+        );
+        let (path, wrap): (&str, &dyn Fn(&str) -> String) = if base.contains('#') {
+            ("Tests/RowsTests/CountTests.swift", &testing)
+        } else {
+            ("Tests/RowsTests/RowsTests.swift", &xctest)
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (test, base, head, ops) in [
+        (
+            "RowsTests.testCounts",
+            "XCTAssertGreaterThan(countRows(rows), 6, \"seven rows\")",
+            "XCTAssertGreaterThanOrEqual(countRows(rows), 6, \"seven rows\")",
+            "`XCTAssertGreaterThan` to `XCTAssertGreaterThanOrEqual`",
+        ),
+        (
+            "RowsTests.testCounts",
+            "XCTAssertTrue(countRows(rows) == 7)",
+            "XCTAssertFalse(countRows(rows) == 7)",
+            "`XCTAssertTrue` to `XCTAssertFalse`",
+        ),
+        (
+            "RowsTests.testCounts",
+            "XCTAssert(countRows(rows) > 6)",
+            "XCTAssert(countRows(rows) >= 6)",
+            "`>` to `>=`",
+        ),
+        (
+            "RowsTests.testCounts",
+            "XCTAssertEqual(countRows([]), 0)",
+            "XCTAssertNotEqual(countRows([]), 1)",
+            "`XCTAssertEqual` to `XCTAssertNotEqual`",
+        ),
+        (
+            "RowsTests.testCounts",
+            "XCTAssertNotNil(countRows(rows))",
+            "XCTAssertNil(countRows(rows))",
+            "`XCTAssertNotNil` to `XCTAssertNil`",
+        ),
+        (
+            "counts",
+            "#expect(countRows(rows) >= 7)",
+            "#expect(countRows(rows) != 0)",
+            "`>=` to `!=`",
+        ),
+        // The grammar reads `>=` and `<=` as a custom infix operator; each is still a
+        // comparison, so the widened bound is this finding and not a count decrease.
+        (
+            "counts",
+            "#expect(countRows(rows) > 6)",
+            "#expect(countRows(rows) >= 6)",
+            "`>` to `>=`",
+        ),
+        (
+            "counts",
+            "#expect(countRows(rows) < 8)",
+            "#expect(countRows(rows) <= 8)",
+            "`<` to `<=`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("countRows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "XCTAssertGreaterThanOrEqual(countRows(rows), 6)",
+            "XCTAssertGreaterThan(countRows(rows), 6)",
+        ),
+        (
+            "XCTAssertFalse(countRows(rows) < 6)",
+            "XCTAssertFalse(countRows(rows) <= 6)",
+        ),
+        (
+            "#expect(countRows(rows) > 6)",
+            "#expect(countRows(rows) > 7)",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// Scala assertions (#1070) weakened or inverted are reported as the same finding: a
+/// ScalaTest bound moved the loose way, `shouldBe` -> `should not be`, a matcher negated,
+/// an `assert(..)` condition widened, and MUnit `assertEquals` -> `assertNotEquals` read
+/// as `==` -> `!=`.
+#[test]
+fn a_scala_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let scalatest = |check: &str| {
+        format!(
+            "class RowsSpec extends AnyFunSuite with Matchers {{\n  test(\"counts\") {{\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    {check}\n  }}\n}}\n"
+        )
+    };
+    let munit = |check: &str| {
+        format!(
+            "class RowsSuite extends munit.FunSuite {{\n  test(\"counts\") {{\n    val rows = List(1, 2, 3, 4, 5, 6, 7)\n    {check}\n  }}\n}}\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "src/main/scala/Rows.scala",
+            "object Rows {\n  def countRows(rows: List[Int]): Int = rows.size\n}\n",
+        );
+        let (path, wrap): (&str, &dyn Fn(&str) -> String) = if base.contains("should") {
+            ("src/test/scala/RowsSpec.scala", &scalatest)
+        } else {
+            ("src/test/scala/RowsSuite.scala", &munit)
+        };
+        repo.commit_base(path, &wrap(base), "test: counts");
+        repo.write(path, &wrap(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "Rows.countRows(rows) should be > 6",
+            "Rows.countRows(rows) should be >= 6",
+            "`should be >` to `should be >=`",
+        ),
+        (
+            "Rows.countRows(List()) shouldBe 0",
+            "Rows.countRows(List()) should not be 1",
+            "`shouldBe` to `should not be`",
+        ),
+        (
+            "Rows.countRows(rows) should contain (7)",
+            "Rows.countRows(rows) should not contain (7)",
+            "`should contain` to `should not contain`",
+        ),
+        (
+            "assert(Rows.countRows(rows) > 6, \"seven rows\")",
+            "assert(Rows.countRows(rows) >= 6, \"seven rows\")",
+            "`>` to `>=`",
+        ),
+        (
+            "assertEquals(Rows.countRows(List()), 0)",
+            "assertNotEquals(Rows.countRows(List()), 1)",
+            "`assertEquals` to `assertNotEquals`",
+        ),
+        (
+            "assertTrue(Rows.countRows(rows) == 7)",
+            "assertFalse(Rows.countRows(rows) == 7)",
+            "`assertTrue` to `assertFalse`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("countRows("), "{message}");
+        let test = if base.contains("should") {
+            "RowsSpec.counts"
+        } else {
+            "RowsSuite.counts"
+        };
+        let lifted = run(
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the check is intended\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "Rows.countRows(rows) should be >= 6",
+            "Rows.countRows(rows) should be > 6",
+        ),
+        (
+            "assertFalse(Rows.countRows(rows) < 6)",
+            "assertFalse(Rows.countRows(rows) <= 6)",
+        ),
+        (
+            "Rows.countRows(rows) should be > 6",
+            "Rows.countRows(rows) should be > 7",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
+/// Objective-C assertions (#1070) weakened or inverted are reported as the same finding:
+/// an XCTest ordering moved the loose way, `XCTAssertTrue` -> `XCTAssertFalse`, a
+/// condition's comparison widened, `XCTAssertEqualObjects` -> `XCTAssertNotEqualObjects`
+/// read as `==` -> `!=`, and an `NSAssert` condition widened.
+#[test]
+fn an_objc_assertion_weakened_or_inverted_fails_as_a_weakened_bound() {
+    let xctest = |check: &str| {
+        format!(
+            "#import <XCTest/XCTest.h>\n#import \"Rows.h\"\n\n@interface RowsTests : XCTestCase\n@end\n\n@implementation RowsTests\n\n- (void)testCounts {{\n    NSArray *rows = @[@1, @2, @3, @4, @5, @6, @7];\n    {check}\n}}\n\n@end\n"
+        )
+    };
+    let run = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write(
+            "Sources/Rows.h",
+            "#import <Foundation/Foundation.h>\n\nNSInteger CountRows(NSArray *rows);\n",
+        );
+        repo.write(
+            "Sources/Rows.m",
+            "#import \"Rows.h\"\n\nNSInteger CountRows(NSArray *rows) {\n    return rows.count;\n}\n",
+        );
+        repo.commit_base("Tests/RowsTests.m", &xctest(base), "test: counts");
+        repo.write("Tests/RowsTests.m", &xctest(head));
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes: Vec<String> = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    for (base, head, ops) in [
+        (
+            "XCTAssertGreaterThan(CountRows(rows), 6, @\"seven rows\");",
+            "XCTAssertGreaterThanOrEqual(CountRows(rows), 6, @\"seven rows\");",
+            "`XCTAssertGreaterThan` to `XCTAssertGreaterThanOrEqual`",
+        ),
+        (
+            "XCTAssertTrue(CountRows(rows) == 7);",
+            "XCTAssertFalse(CountRows(rows) == 7);",
+            "`XCTAssertTrue` to `XCTAssertFalse`",
+        ),
+        (
+            "XCTAssert(CountRows(rows) > 6);",
+            "XCTAssert(CountRows(rows) >= 6);",
+            "`>` to `>=`",
+        ),
+        (
+            "XCTAssertEqualObjects([rows componentsJoinedByString:@\",\"], @\"1,2,3,4,5,6,7\");",
+            "XCTAssertNotEqualObjects([rows componentsJoinedByString:@\",\"], @\"\");",
+            "`XCTAssertEqualObjects` to `XCTAssertNotEqualObjects`",
+        ),
+        (
+            "XCTAssertEqual(CountRows(@[]), 0);",
+            "XCTAssertNotEqual(CountRows(@[]), 1);",
+            "`XCTAssertEqual` to `XCTAssertNotEqual`",
+        ),
+        (
+            "NSAssert(CountRows(rows) > 6, @\"seven rows\");",
+            "NSAssert(CountRows(rows) >= 6, @\"seven rows\");",
+            "`>` to `>=`",
+        ),
+    ] {
+        let (code, codes, outcome) = run(base, head, "");
+        assert_eq!(code, 1, "{head}");
+        assert_eq!(codes, ["assertion-reduction/weakened-bound"], "{head}");
+        let message = outcome["violations"][0]["message"].as_str().unwrap();
+        assert!(message.contains(ops), "{message}");
+        assert!(!message.contains("CountRows("), "{message}");
+        let lifted = run(
+            base,
+            head,
+            "allow-assertion-drop: RowsTests.testCounts the check is intended\n",
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{head}: lifted");
+    }
+    // Negative controls: the bound tightened, a failure condition tightened, and a
+    // literal raised under the same operator.
+    for (base, head) in [
+        (
+            "XCTAssertGreaterThanOrEqual(CountRows(rows), 6);",
+            "XCTAssertGreaterThan(CountRows(rows), 6);",
+        ),
+        (
+            "XCTAssertFalse(CountRows(rows) < 6);",
+            "XCTAssertFalse(CountRows(rows) <= 6);",
+        ),
+        (
+            "XCTAssertGreaterThan(CountRows(rows), 6);",
+            "XCTAssertGreaterThan(CountRows(rows), 7);",
+        ),
+    ] {
+        let (code, codes, _) = run(base, head, "");
+        assert_eq!((code, codes), (0, vec![]), "{head}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
@@ -10743,7 +11786,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 21 disabled, 1 not evaluated (64 items examined)"
+            "gates:  26 passed, 0 failed, 23 disabled, 1 not evaluated (66 items examined)"
         ),
         "{}",
         run.stdout
@@ -10759,13 +11802,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=64"), "{step_output}");
+    assert!(step_output.contains("examined_items=66"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 21 disabled, 1 not evaluated (64 items examined)"
+            "**Summary:** 26 passed, 0 failed, 23 disabled, 1 not evaluated (66 items examined)"
         ),
         "{step_summary}"
     );
@@ -17259,6 +18302,305 @@ fn command_snapshot_ignore_widened_on_head_is_a_gate_weakening() {
     );
 }
 
+/// A repository whose base compares the command's output with the `cli` region of
+/// `docs/cli.md`, which holds the output in a fenced block between prose (#1088).
+fn region_repo(doc: &str) -> Repo {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("docs/cli.md", doc),
+            (
+                "discipline.toml",
+                "[meta]\nversion = 1\nname = \"test-repo\"\n\n\
+                 [gates.deletion-rationale]\nenabled = false\n\n\
+                 [gates.command]\ncommand = \"printf 'usage: x\\\\n  -h\\\\n'\"\n\
+                 snapshot = \"docs/cli.md\"\nsnapshot_marker = \"cli\"\n",
+            ),
+        ],
+        "base: command output kept in a doc region",
+    );
+    repo
+}
+
+const REGION_DOC: &str = "# CLI\n\nIntro prose.\n\n<!-- generated:cli -->\n```text\nusage: x\n  -h\n```\n<!-- /generated -->\n\nMore prose.\n";
+
+#[test]
+fn command_snapshot_marker_compares_one_doc_region() {
+    let repo = region_repo(REGION_DOC);
+
+    // The fence body matches; the prose and the fence lines are not compared.
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+
+    // Prose outside the region changes freely.
+    repo.write(
+        "docs/cli.md",
+        &REGION_DOC.replace("Intro prose.", "New intro."),
+    );
+    repo.commit("docs: reword the intro");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+
+    // The tool's output changed and the region was not updated: the finding points at the
+    // file line of the first difference (line 8, `  -h`), and names the region.
+    let run = render(&repo, "printf 'usage: x\\n  -v\\n'");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let v = run.violations("command");
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0]["code"], "command/snapshot-mismatch");
+    assert_eq!(v[0]["file"], "docs/cli.md");
+    assert_eq!(v[0]["line"], 8);
+    let msg = v[0]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("snapshot `docs/cli.md` (region `cli`)"),
+        "{msg}"
+    );
+    assert!(msg.contains("first difference at snapshot line 8"), "{msg}");
+    assert!(!msg.contains("-v"), "{msg}");
+    let fix = v[0]["remediation"].as_str().unwrap();
+    assert!(fix.contains("<!-- generated:cli -->"), "{fix}");
+}
+
+#[test]
+fn command_snapshot_marker_fails_closed_when_the_region_cannot_be_read() {
+    let exit_2 = |run: &Run, reason: &str, needle: &str| {
+        assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.could_not_check(),
+            (reason.to_string(), Some("command".to_string()))
+        );
+        assert!(run.stderr.contains(needle), "{}", run.stderr);
+    };
+
+    // The change deletes the markers: there is no region left, which is not a pass.
+    let repo = region_repo(REGION_DOC);
+    repo.write(
+        "docs/cli.md",
+        &REGION_DOC
+            .replace("<!-- generated:cli -->\n", "")
+            .replace("<!-- /generated -->\n", ""),
+    );
+    repo.commit("docs: drop the markers");
+    exit_2(
+        &repo.check(&[]),
+        "gate",
+        "has no `<!-- generated:cli -->` region",
+    );
+
+    // The region opened twice, and never closed.
+    let repo = region_repo(&format!(
+        "{REGION_DOC}\n<!-- generated:cli -->\nx\n<!-- /generated -->\n"
+    ));
+    exit_2(&repo.check(&[]), "gate", "opens the region `cli` 2 times");
+    let repo = region_repo("<!-- generated:cli -->\nusage: x\n  -h\n");
+    exit_2(&repo.check(&[]), "gate", "not closed");
+
+    // A marker with no snapshot, and a name that is not a region name, are configuration
+    // errors.
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n\
+         command = \"printf 'x\\\\n'\"\nsnapshot_marker = \"cli\"\n",
+        "base: marker without a snapshot",
+    );
+    exit_2(
+        &repo.check(&[]),
+        "configuration",
+        "`snapshot_marker` without `snapshot`",
+    );
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("docs/cli.md", REGION_DOC),
+            (
+                "discipline.toml",
+                "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n\
+                 command = \"printf 'x\\\\n'\"\nsnapshot = \"docs/cli.md\"\nsnapshot_marker = \"cli -->\"\n",
+            ),
+        ],
+        "base: a marker that is not a region name",
+    );
+    exit_2(&repo.check(&[]), "configuration", "region name");
+}
+
+#[test]
+fn command_snapshot_marker_changed_on_head_is_a_gate_weakening() {
+    let repo = region_repo(&format!(
+        "{REGION_DOC}\n<!-- generated:empty -->\n<!-- /generated -->\n"
+    ));
+    let toml = std::fs::read_to_string(repo.file("discipline.toml")).unwrap();
+    repo.write(
+        "discipline.toml",
+        &toml.replace(
+            "snapshot_marker = \"cli\"",
+            "snapshot_marker = \"empty\"\nallow_zero = true",
+        ),
+    );
+    repo.commit("chore: compare another region");
+    let run = repo.check(&[]);
+    let found = run.violations("config-integrity");
+    assert!(
+        found
+            .iter()
+            .any(|v| v["message"].as_str().unwrap().contains("snapshot_marker")),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+}
+
+/// A repository whose base runs the shell example of `docs/guide.md`'s `step` region
+/// through `{example_file}` (#1088).
+fn example_repo(script: &str, extra: &str) -> Repo {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("docs/guide.md", &example_doc(script)),
+            (
+                "discipline.toml",
+                &format!(
+                    "[meta]\nversion = 1\nname = \"test-repo\"\n\n\
+                     [gates.deletion-rationale]\nenabled = false\n\n\
+                     [gates.command]\ncommand = \"sh {{example_file}}\"\n\
+                     example = \"docs/guide.md\"\nexample_marker = \"step\"\n{extra}"
+                ),
+            ),
+        ],
+        "base: a documented example that must still run",
+    );
+    repo
+}
+
+fn example_doc(script: &str) -> String {
+    format!("# Guide\n\nRun this:\n\n<!-- generated:step -->\n```sh\n{script}```\n<!-- /generated -->\n")
+}
+
+#[test]
+fn command_example_runs_the_documented_example() {
+    // The fence body is what the command reads: the script prints and exits 0.
+    let repo = example_repo("printf 'ok\\n'\n", "snapshot = \"out.txt\"\n");
+    repo.write("out.txt", "ok\n");
+    repo.commit("test: the example's expected output");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+
+    // The documented example stops working: the command fails on it.
+    repo.write("docs/guide.md", &example_doc("printf 'ok\\n'\nexit 3\n"));
+    repo.commit("docs: an example that no longer runs");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<_> = run
+        .violations("command")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, ["command/command-failed"]);
+
+    // It runs and prints something else: the snapshot of its output catches it.
+    repo.write("docs/guide.md", &example_doc("printf 'changed\\n'\n"));
+    repo.commit("docs: an example whose output changed");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.violations("command")[0]["code"],
+        "command/snapshot-mismatch"
+    );
+}
+
+#[test]
+fn command_example_fails_closed_without_its_region_or_its_placeholder() {
+    let exit_2 = |run: &Run, reason: &str, needle: &str| {
+        assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.could_not_check(),
+            (reason.to_string(), Some("command".to_string()))
+        );
+        assert!(run.stderr.contains(needle), "{}", run.stderr);
+    };
+
+    // The change deletes the markers: there is no example to run, which is not a pass.
+    let repo = example_repo("exit 0\n", "");
+    repo.write("docs/guide.md", "# Guide\n\n```sh\nexit 0\n```\n");
+    repo.commit("docs: drop the markers");
+    exit_2(
+        &repo.check(&[]),
+        "gate",
+        "has no `<!-- generated:step -->` region",
+    );
+
+    // The document is gone.
+    let repo = example_repo("exit 0\n", "");
+    repo.git(&["rm", "-q", "docs/guide.md"]);
+    repo.commit("docs: drop the guide");
+    exit_2(&repo.check(&[]), "gate", "does not exist");
+
+    // `example` with no command that reads it, the placeholder with no `example`, and a
+    // marker with no `example` are configuration errors.
+    for (toml, needle) in [
+        (
+            "command = \"true\"\nexample = \"docs/guide.md\"\n",
+            "never run",
+        ),
+        ("command = \"sh {example_file}\"\n", "sets no `example`"),
+        (
+            "command = \"true\"\nexample_marker = \"step\"\n",
+            "`example_marker` without `example`",
+        ),
+        (
+            "command = \"sh {example_file} {example_fil}\"\nexample = \"docs/guide.md\"\nexample_marker = \"step\"\n",
+            "`{example_fil}` is not a placeholder",
+        ),
+    ] {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                ("docs/guide.md", &example_doc("exit 0\n")),
+                (
+                    "discipline.toml",
+                    &format!(
+                        "[meta]\nversion = 1\nname = \"test-repo\"\n\n[gates.command]\n{toml}"
+                    ),
+                ),
+            ],
+            "base: an example misconfigured",
+        );
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 2, "{toml}: {}{}", run.stdout, run.stderr);
+        assert!(run.stderr.contains(needle), "{toml}: {}", run.stderr);
+    }
+}
+
+#[test]
+fn command_example_changed_on_head_is_a_gate_weakening() {
+    let repo = example_repo("exit 0\n", "");
+    let toml = std::fs::read_to_string(repo.file("discipline.toml")).unwrap();
+    repo.write(
+        "discipline.toml",
+        &toml.replace("example_marker = \"step\"", "example_marker = \"other\""),
+    );
+    repo.write(
+        "docs/guide.md",
+        &format!(
+            "{}\n<!-- generated:other -->\n```sh\nexit 0\n```\n<!-- /generated -->\n",
+            example_doc("exit 0\n")
+        ),
+    );
+    repo.commit("chore: run another example");
+    let run = repo.check(&[]);
+    let found = run.violations("config-integrity");
+    assert!(
+        found
+            .iter()
+            .any(|v| v["message"].as_str().unwrap().contains("example_marker")),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+}
+
 #[test]
 fn command_snapshot_on_base_tests_is_a_configuration_error() {
     // `base-tests` never reaches the snapshot comparison: a snapshot on it would be
@@ -21450,6 +22792,69 @@ fn citation_anchors_reports_a_relative_markdown_link_whose_target_is_missing() {
         "{}",
         run.stdout
     );
+}
+
+#[test]
+fn citation_anchors_reports_a_link_whose_target_the_change_removes() {
+    let base = [
+        (
+            "README.md",
+            "# p\n\nSee [the guide](docs/guide.md) and `src/old.rs:3`.\n",
+        ),
+        ("docs/guide.md", "# guide\n"),
+        ("CHANGELOG.md", "- [guide](docs/guide.md)\n"),
+        (
+            "src/old.rs",
+            "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n",
+        ),
+        ("src/lib.rs", "pub fn f() {}\n"),
+    ];
+    let repo = citation_repo(&base, &[("src/lib.rs", "pub fn g() {}\n")], "feat: g");
+    repo.remove("docs/guide.md");
+    repo.git(&["mv", "src/old.rs", "src/new.rs"]);
+    repo.commit("refactor: drop the guide, rename the module");
+
+    // Off by default: nothing reads the README. (The deletion itself is
+    // `deletion-rationale`'s.)
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.violations("citation-anchors").len(),
+        0,
+        "{}",
+        run.stdout
+    );
+
+    let run = repo.check(&["--enable", "citation-anchors"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let found = run.violations("citation-anchors");
+    assert_eq!(found.len(), 2, "{}", run.stdout);
+    for f in &found {
+        assert_eq!(f["code"], "citation-anchors/link-target-removed");
+        assert_eq!(f["file"], "README.md");
+        assert_eq!(f["line"], 3);
+    }
+    let message = |i: usize| found[i]["message"].as_str().unwrap().to_string();
+    assert!(
+        message(0).contains("`docs/guide.md`") && message(0).contains("deletes"),
+        "{}",
+        message(0)
+    );
+    assert!(
+        message(1).contains("renames to `src/new.rs`"),
+        "{}",
+        message(1)
+    );
+
+    // Control: the same change with the README updated passes; the changelog is exempt.
+    repo.write("README.md", "# p\n\nSee `src/new.rs:3`.\n");
+    repo.commit("docs: follow the rename");
+    let run = repo.check(&["--enable", "citation-anchors"]);
+    let removed = run
+        .violations("citation-anchors")
+        .into_iter()
+        .filter(|v| v["code"] == "citation-anchors/link-target-removed")
+        .count();
+    assert_eq!(removed, 0, "{}", run.stdout);
 }
 
 #[test]
@@ -25755,4 +27160,343 @@ require_edits_to = ["docs/spec.md", "docs/api.md"]
         stopped.stdout,
         stopped.stderr
     );
+}
+
+#[test]
+fn visual_evidence_requires_after_and_before_only_for_existing_ui_paths() {
+    let config = r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.visual-evidence]
+enabled = true
+
+[[gates.visual-evidence.rules]]
+trigger_paths = ["web/**"]
+reason = "UI changes are reviewed from screenshots"
+"#;
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("web/Nav.tsx", "export const Nav = 1;\n"),
+            ("src/lib.rs", "pub fn f() {}\n"),
+        ],
+        "base: enable visual-evidence",
+    );
+    let after_only = "## Summary\nNew page.\n\n## After\n![page](https://example.com/p.png)\n";
+    let both = "## Before\n![old](https://example.com/o.png)\n\n## After\n<img src=\"https://example.com/n.png\">\n";
+    let codes = |run: &Run| -> Vec<String> {
+        run.violations("visual-evidence")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // 1. A new page alone: After is enough, and a note says Before was not required.
+    repo.write("web/Page.tsx", "export const Page = 1;\n");
+    repo.commit("feat: page");
+    let run = repo.check_with_pr(&[], after_only);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+    assert!(
+        run.outcome("visual-evidence")["notes"]
+            .to_string()
+            .contains("`Before` is not required"),
+        "{}",
+        run.stdout
+    );
+
+    // 2. No images at all: After missing, and nothing more for an added-only change.
+    let run = repo.check_with_pr(&[], "## Summary\nNew page.\n");
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(codes(&run), ["visual-evidence/visual-evidence-missing"]);
+    let message = run.violations("visual-evidence")[0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("`web/Page.tsx`") && message.contains("Reason: UI changes"),
+        "{message}"
+    );
+    // An example image inside a fence is not evidence.
+    let fenced = "## After\n```md\n![page](https://example.com/p.png)\n```\n";
+    let run = repo.check_with_pr(&[], fenced);
+    assert_eq!(codes(&run), ["visual-evidence/visual-evidence-missing"]);
+
+    // 3. Editing an existing UI file needs Before too, naming that file.
+    repo.write("web/Nav.tsx", "export const Nav = 2;\n");
+    repo.commit("feat: nav links the page");
+    let run = repo.check_with_pr(&[], after_only);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(codes(&run), ["visual-evidence/visual-evidence-incomplete"]);
+    assert!(
+        run.violations("visual-evidence")[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`web/Nav.tsx` existed before this change"),
+        "{}",
+        run.stdout
+    );
+    // Both images: pass.
+    let run = repo.check_with_pr(&[], both);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty());
+    // The Before requirement lifted by its directive.
+    let waived =
+        format!("{after_only}\nallow-visual-evidence: before the old nav had no visible state\n");
+    let run = repo.check_with_pr(&[], &waived);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty());
+    assert_eq!(
+        run.outcome("visual-evidence")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // 4. A change outside trigger_paths: nothing examined.
+    repo.git(&["checkout", "-q", "-B", "other", "main"]);
+    repo.write("src/lib.rs", "pub fn g() {}\n");
+    repo.commit("feat: g");
+    let run = repo.check_with_pr(&[], "No UI.\n");
+    assert_eq!(run.outcome("visual-evidence")["examined"], 0);
+    assert!(codes(&run).is_empty());
+
+    // 5. Fail closed: enabled with no rules.
+    let empty = Repo::new();
+    empty.commit_base_files(
+        &[(
+            "discipline.toml",
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.visual-evidence]\nenabled = true\n",
+        )],
+        "base: visual-evidence with no rules",
+    );
+    empty.write("web/a.tsx", "x\n");
+    empty.commit("feat: a");
+    let stopped = empty.check_with_pr(&[], both);
+    assert_eq!(stopped.code, 2, "{}\n{}", stopped.stdout, stopped.stderr);
+    let (reason, gate) = stopped.could_not_check();
+    assert_eq!(reason, "configuration");
+    assert_eq!(gate.as_deref(), Some("visual-evidence"));
+}
+
+#[test]
+fn invented_names_reports_flags_and_keys_the_surface_does_not_list() {
+    let config = r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.invented-names]
+enabled = true
+
+[[gates.invented-names.tools]]
+name = "mytool"
+surface = "docs/surface.txt"
+config_files = ["mytool.toml"]
+"#;
+    let usage = "# Usage\n\nOld: `mytool --legacy-invented`.\n";
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            (
+                "docs/surface.txt",
+                "# mytool\n--base\n-q\ngates.pii.enabled\n",
+            ),
+            ("docs/usage.md", usage),
+        ],
+        "base: enable invented-names",
+    );
+
+    // Off by default elsewhere; here enabled at `warning`, so the run passes with findings.
+    repo.write(
+        "docs/usage.md",
+        &format!(
+            "{usage}\nIn prose, --prose-only is not read.\n\n```bash\nmytool check --base main --dry-run -q\n```\n\n```toml mytool.toml\n[gates.pii]\nenabled = true\nstrict = true\n```\n"
+        ),
+    );
+    repo.commit("docs: usage");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let found = run.violations("invented-names");
+    let got: Vec<(String, String, u64)> = found
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    // The unchanged line's invented flag is not read under `diff_only`.
+    assert_eq!(
+        got,
+        [
+            (
+                "invented-names/unknown-flag".to_string(),
+                "docs/usage.md".to_string(),
+                8
+            ),
+            (
+                "invented-names/unknown-config-key".to_string(),
+                "docs/usage.md".to_string(),
+                14
+            ),
+        ],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        found[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`--dry-run`"),
+        "{found:?}"
+    );
+    assert!(
+        found[1]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`gates.pii.strict`"),
+        "{found:?}"
+    );
+    assert_eq!(run.outcome("invented-names")["examined"], 1);
+
+    // Control: the surface gains both names, and nothing is reported.
+    repo.write(
+        "docs/surface.txt",
+        "# mytool\n--base\n--dry-run\n-q\ngates.pii.enabled\ngates.pii.strict\n",
+    );
+    repo.commit("feat: the tool gains --dry-run and strict");
+    let run = repo.check(&[]);
+    assert_eq!(run.violations("invented-names").len(), 0, "{}", run.stdout);
+
+    // Fail closed: a surface that is not a list of names, or is gone.
+    repo.write("docs/surface.txt", "--base\nnot a name\n");
+    repo.commit("break the surface");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    let (reason, gate) = run.could_not_check();
+    assert_eq!(reason, "gate");
+    assert_eq!(gate.as_deref(), Some("invented-names"));
+    repo.remove("docs/surface.txt");
+    repo.commit("drop the surface");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(run.could_not_check().0, "gate");
+
+    // Fail closed: enabled with no tools.
+    let empty = Repo::new();
+    empty.commit_base_files(
+        &[(
+            "discipline.toml",
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.invented-names]\nenabled = true\n",
+        )],
+        "base: invented-names with no tools",
+    );
+    empty.write("README.md", "# r\n");
+    empty.commit("docs: readme");
+    let stopped = empty.check(&[]);
+    assert_eq!(stopped.code, 2, "{}\n{}", stopped.stdout, stopped.stderr);
+    let (reason, gate) = stopped.could_not_check();
+    assert_eq!(reason, "configuration");
+    assert_eq!(gate.as_deref(), Some("invented-names"));
+}
+
+#[test]
+fn companion_edit_require_mention_needs_the_doc_to_name_what_changed() {
+    let config = r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.companion-edit]
+enabled = true
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["src/**"]
+require_edits_to = ["docs/api.md"]
+require_mention = true
+"#;
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("src/lib.rs", "pub fn open() {}\nfn private() {}\n"),
+            ("docs/api.md", "# API\n\n`open` opens.\n"),
+        ],
+        "base: companion-edit with require_mention",
+    );
+    let codes = |run: &Run| -> Vec<String> {
+        run.violations("companion-edit")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // 1. A new public fn, and a doc edit that does not name it: reported.
+    repo.write(
+        "src/lib.rs",
+        "pub fn open() {}\npub fn close() {}\nfn private() {}\n",
+    );
+    repo.write(
+        "docs/api.md",
+        "# API\n\n`open` opens.\n\nReworded intro.\n\n```rust\nclose();\n```\n<!-- close -->\n",
+    );
+    repo.commit("feat: close");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(codes(&run), ["companion-edit/companion-not-specific"]);
+    let found = &run.violations("companion-edit")[0];
+    assert_eq!(found["file"], "docs/api.md");
+    assert!(
+        found["message"].as_str().unwrap().contains("`close`"),
+        "{found}"
+    );
+
+    // 2. The doc names it on an added prose line: met.
+    repo.write(
+        "docs/api.md",
+        "# API\n\n`open` opens.\n\n`close` releases what `open` took.\n",
+    );
+    repo.commit("docs: close");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+
+    // 3. Only a private fn changed: a note, never a finding.
+    repo.git(&["checkout", "-q", "-B", "refactor", "main"]);
+    repo.write(
+        "src/lib.rs",
+        "pub fn open() {}\nfn private() { let _ = 1; }\n",
+    );
+    repo.write("docs/api.md", "# API\n\n`open` opens, faster.\n");
+    repo.commit("refactor: private");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+    assert!(
+        run.outcome("companion-edit")["notes"]
+            .to_string()
+            .contains("no public name"),
+        "{}",
+        run.stdout
+    );
+
+    // 4. The finding is lifted by the rule's directive.
+    repo.git(&["checkout", "-q", "-B", "waived", "main"]);
+    repo.write(
+        "src/lib.rs",
+        "pub fn open() {}\npub fn close() {}\nfn private() {}\n",
+    );
+    repo.write("docs/api.md", "# API\n\n`open` opens. Reworded.\n");
+    repo.commit("feat: close");
+    let run = repo.check_with_pr(
+        &[],
+        "allow-companion-edit: docs/api.md the reference is regenerated in a follow-up\n",
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
 }

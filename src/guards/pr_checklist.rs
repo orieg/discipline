@@ -264,7 +264,7 @@ impl Declaration {
     }
 }
 
-static HEADING_RE: LazyLock<Regex> =
+pub(crate) static HEADING_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t#]*$").expect("static regex"));
 static ENTRY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX])\][ \t]*(.*)$").expect("static regex")
@@ -272,15 +272,14 @@ static ENTRY_RE: LazyLock<Regex> = LazyLock::new(|| {
 static FENCE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^ {0,3}(`{3,}|~{3,})").expect("static regex"));
 
-/// The `Touched surfaces` section of `body`, read as a closed vocabulary: the first
-/// heading of any level whose text is [`SECTION_HEADING`], up to the next heading of the
-/// same or a higher level. A heading or an entry inside a fenced code block, an HTML
-/// comment or a `>` quote is not read (#896: an example is not a declaration). `None`
-/// when the body has no such section.
-pub fn read_declaration(body: &str) -> Option<Declaration> {
+/// The lines of a pull request body that are read as prose, with their 1-based numbers:
+/// a line inside a fenced code block or a `>` quote is left out, and HTML comments
+/// (which may span lines) are cut out of the lines they touch (#896: an example is not a
+/// declaration).
+pub fn readable_lines(body: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
     let mut fence: Option<String> = None;
     let mut in_comment = false;
-    let mut section: Option<(usize, Declaration)> = None;
     for (idx, raw) in body.lines().enumerate() {
         let line_no = idx + 1;
         // HTML comments, which may span lines: the text outside them is kept.
@@ -330,6 +329,19 @@ pub fn read_declaration(body: &str) -> Option<Declaration> {
         if line.trim_start().starts_with('>') {
             continue;
         }
+        out.push((line_no, line));
+    }
+    out
+}
+
+/// The `Touched surfaces` section of `body`, read as a closed vocabulary: the first
+/// heading of any level whose text is [`SECTION_HEADING`], up to the next heading of the
+/// same or a higher level. A heading or an entry inside a fenced code block, an HTML
+/// comment or a `>` quote is not read (#896: an example is not a declaration). `None`
+/// when the body has no such section.
+pub fn read_declaration(body: &str) -> Option<Declaration> {
+    let mut section: Option<(usize, Declaration)> = None;
+    for (line_no, line) in readable_lines(body) {
         if let Some(h) = HEADING_RE.captures(&line) {
             let level = h[1].len();
             let text = h

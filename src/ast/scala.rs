@@ -31,7 +31,12 @@ impl LanguagePack for ScalaPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::PublicNames
         )
     }
 
@@ -45,6 +50,21 @@ impl LanguagePack for ScalaPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         functions::is_test_file(path, Some(is_scala_test_path))
+    }
+
+    fn public_names(
+        &self,
+        path: &str,
+        src: &str,
+        _vocab: &AssertVocabulary,
+    ) -> Result<Vec<super::public_names::PublicName>> {
+        super::public_names::names_of(
+            &tree_sitter_scala::LANGUAGE.into(),
+            "the Scala",
+            path,
+            src,
+            super::public_names::scala,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -75,6 +95,7 @@ impl LanguagePack for ScalaPack {
         extractor.resolve_same_file_helpers();
         SCALA_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::scala(root, &anc, src, &mut extractor.facts.tests);
+        super::comparisons::scala(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,

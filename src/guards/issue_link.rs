@@ -210,7 +210,7 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
 
     out.examined = 1;
 
-    let pull_author = exemption_author(ctx, settings)?;
+    let pull_author = exemption_author(ctx, &settings.exempt_authors, GATE)?;
     if let Some(author) = exempt_author(pull_author.as_deref(), &settings.exempt_authors) {
         out.notes.push(format!(
             "pull request opened by `{author}`, listed in `exempt_authors`: no tracking issue required"
@@ -252,8 +252,12 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
 /// read from the forge. Read only when `exempt_authors` lists someone; a merge request
 /// that cannot be read is exit 2, never the pipeline starter instead. `None` for a run
 /// with no pull request.
-fn exemption_author(ctx: &Context, settings: &IssueLinkGate) -> Result<Option<String>> {
-    if settings.exempt_authors.is_empty() {
+pub(crate) fn exemption_author(
+    ctx: &Context,
+    exempt_authors: &[String],
+    gate: &str,
+) -> Result<Option<String>> {
+    if exempt_authors.is_empty() {
         return Ok(None);
     }
     let Some((access, pull)) = ctx
@@ -269,12 +273,12 @@ fn exemption_author(ctx: &Context, settings: &IssueLinkGate) -> Result<Option<St
     let forge = (access.identify)().map_err(|e| {
         tag(
             Reason::Forge,
-            anyhow!("issue-link cannot identify the forge to read the author `exempt_authors` is matched against: {e}"),
+            anyhow!("{gate} cannot identify the forge to read the author `exempt_authors` is matched against: {e}"),
         )
     })?;
     let author = pull
         .author_on(access.api, &forge)
-        .map_err(|e| tag(Reason::Forge, anyhow!("issue-link `exempt_authors`: {e:#}")))?;
+        .map_err(|e| tag(Reason::Forge, anyhow!("{gate} `exempt_authors`: {e:#}")))?;
     Ok(Some(author))
 }
 
