@@ -14928,7 +14928,8 @@ fn command_preset_stryker_reads_strykers_own_empty_run_line() {
 /// #1068: mutmut and PIT never print `0 mutants tested` either. mutmut stops with
 /// `Stopping early, because we could not find any test case for any mutant`; PIT prints
 /// `No mutations found`, or `>> Ran 0 tests` (exit 0) when no test ran a mutant. Survivors
-/// are mutmut's `🙁 <n>` and PIT's `SURVIVED <n>` above zero; PIT prints `SURVIVED 0` on
+/// are mutmut's `🙁 <n>` and PIT's `SURVIVED <n>` above zero, and so are mutants no test
+/// covers (`🫥 <n>`, `NO_COVERAGE <n>`); PIT prints `SURVIVED 0` and `NO_COVERAGE 0` on
 /// every run. The lines below are mutmut 3.8.1's and PIT 1.30.2's own.
 #[test]
 fn command_presets_mutmut_and_pit_read_their_tools_own_lines() {
@@ -14961,6 +14962,8 @@ fn command_presets_mutmut_and_pit_read_their_tools_own_lines() {
         ),
         ("mutmut", "3/3  🎉 1 🫥 0  ⏰ 0  🤔 0  🙁 2  🔇 0  🧙 0", "Forbidden Output Detected"),
         ("pit", "> KILLED 0 SURVIVED 1 TIMED_OUT 0 NON_VIABLE 0", "Forbidden Output Detected"),
+        ("mutmut", "3/3  🎉 1 🫥 2  ⏰ 0  🤔 0  🙁 0  🔇 0  🧙 0", "Forbidden Output Detected"),
+        ("pit", "> NO_COVERAGE 1 EQUIVALENT 0", "Forbidden Output Detected"),
     ] {
         let run = check(preset, printed);
         assert_eq!(run.code, 1, "{preset} {printed}: {}{}", run.stdout, run.stderr);
@@ -14971,6 +14974,7 @@ fn command_presets_mutmut_and_pit_read_their_tools_own_lines() {
         ("mutmut", "3/3  🎉 3 🫥 0  ⏰ 0  🤔 0  🙁 0  🔇 0  🧙 0"),
         ("pit", ">> Ran 10 tests (2 tests per mutation)"),
         ("pit", "> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0"),
+        ("pit", "> NO_COVERAGE 0 EQUIVALENT 0"),
     ] {
         let run = check(preset, printed);
         assert_eq!(

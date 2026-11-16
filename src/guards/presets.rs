@@ -107,9 +107,9 @@ pub static PRESETS: &[PresetDefinition] = &[
         default_command: "mutmut run",
         default_timeout_seconds: 300,
         zero_items_pattern: Some(MUTMUT_NO_TESTED_MUTANT),
-        // `mutmut run` counts survivors as `🙁 <n>` on its progress line; the words are
-        // printed by `mutmut results` only.
-        forbid_output: &["survived", "SURVIVED", "🙁 [1-9]"],
+        // `mutmut run` counts survivors as `🙁 <n>` and mutants no test covers as `🫥 <n>`
+        // on its progress line; the words are printed by `mutmut results` only.
+        forbid_output: &["survived", "SURVIVED", "🙁 [1-9]", "🫥 [1-9]"],
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["setup.cfg", "pyproject.toml"],
@@ -137,9 +137,9 @@ pub static PRESETS: &[PresetDefinition] = &[
         default_command: "mvn org.pitest:pitest-maven:mutationCoverage",
         default_timeout_seconds: 300,
         zero_items_pattern: Some(PIT_NO_TESTED_MUTANT),
-        // PIT prints `SURVIVED 0` for every mutator of every run; a count above zero is
-        // a survivor.
-        forbid_output: &["SURVIVED [1-9]"],
+        // PIT prints `SURVIVED 0` and `NO_COVERAGE 0` for every mutator of every run; a
+        // count above zero is a survivor, or a mutant no test covers.
+        forbid_output: &["SURVIVED [1-9]", "NO_COVERAGE [1-9]"],
         canary_command: None,
         canary_expected_diagnostic: None,
         policy_files: &["pom.xml"],
@@ -638,7 +638,12 @@ mod tests {
     /// counts below in `mutation_forbid_output_reads_a_survivor_count_above_zero`.
     #[test]
     fn every_preset_output_pattern_compiles_and_matches_its_own_text() {
-        const COUNTS: &[&str] = &["\u{1f641} [1-9]", "SURVIVED [1-9]"];
+        const COUNTS: &[&str] = &[
+            "\u{1f641} [1-9]",
+            "\u{1fae5} [1-9]",
+            "SURVIVED [1-9]",
+            "NO_COVERAGE [1-9]",
+        ];
         let mut checked = 0;
         for preset in PRESETS {
             let patterns = preset
@@ -703,6 +708,14 @@ mod tests {
             "> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0 "
         ));
         assert!(!forbids("pit", ">> Generated 5 mutations Killed 5 (100%)"));
+        // Mutants no test covers: mutmut 3.8.1's last frame with 2 of them, and PIT
+        // 1.30.2's per-mutator line with one and with none (#1068).
+        assert!(forbids(
+            "mutmut",
+            "\u{2826} 3/3  \u{1f389} 1 \u{1fae5} 2  \u{23f0} 0  \u{1f914} 0  \u{1f641} 0  \u{1f507} 0  \u{1f9d9} 0"
+        ));
+        assert!(forbids("pit", "> NO_COVERAGE 1 EQUIVALENT 0 "));
+        assert!(!forbids("pit", "> NO_COVERAGE 0 EQUIVALENT 0 "));
     }
 
     /// A zero-items guard means "nothing ran", so it must match a count of exactly zero

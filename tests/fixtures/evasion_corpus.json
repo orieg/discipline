@@ -761,6 +761,34 @@
       "verdict": "clean"
     },
     {
+      "name": "cmd-pit-mutant-no-test-covers",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"pit\", command = \"echo '> NO_COVERAGE 1 EQUIVALENT 0'\" } ]\n",
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; }\n}\n"
+      },
+      "head": {
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; } // c\n}\n"
+      },
+      "gate": "command",
+      "verdict": {
+        "caught": [
+          "command/forbidden-output"
+        ]
+      }
+    },
+    {
+      "name": "control-cmd-pit-every-mutant-covered",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"pit\", command = \"echo '> NO_COVERAGE 0 EQUIVALENT 0'\" } ]\n",
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; }\n}\n"
+      },
+      "head": {
+        "src/main/java/Age.java": "public class Age {\n  static boolean adult(int a) { return a >= 18; } // c\n}\n"
+      },
+      "gate": "command",
+      "verdict": "clean"
+    },
+    {
       "name": "directive-name-typo",
       "base": {
         "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
