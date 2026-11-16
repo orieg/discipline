@@ -1946,6 +1946,42 @@ mod tests {
             .collect()
     }
 
+    /// `changed_ranges_paths` narrows what `{changed_ranges}` hands the command: setting
+    /// it, on the table or on an entry, is reported, and so is any edit of it.
+    #[test]
+    fn changed_ranges_paths_set_or_edited_is_reported() {
+        const TABLE: &str =
+            "[gates.command]\ncommand = \"npx stryker run --mutate {changed_ranges}\"\n";
+        let entry = |paths: &str| {
+            format!(
+                "[gates.command]\n[[gates.command.commands]]\nname = \"stryker\"\ncommand = \"npx stryker run --mutate {{changed_ranges}}\"\n{paths}"
+            )
+        };
+        let set = "changed_ranges_paths = [\"src/**\"]\n";
+        let narrowed = "changed_ranges_paths = [\"src/**\", \"!src/a.js\"]\n";
+        let lost = "command: `commands` lost 1 entr(y/ies)";
+        for (base, head, says) in [
+            (
+                TABLE.to_string(),
+                format!("{TABLE}{set}"),
+                "command: `changed_ranges_paths` changed from [] to [\"src/**\"]",
+            ),
+            (
+                format!("{TABLE}{set}"),
+                format!("{TABLE}{narrowed}"),
+                "command: `changed_ranges_paths` changed from [\"src/**\"] to [\"src/**\", \"!src/a.js\"]",
+            ),
+            // An edited entry is read as the entry lost.
+            (entry(""), entry(set), lost),
+            (entry(set), entry(narrowed), lost),
+        ] {
+            assert_eq!(said(&base, &head, false), [says], "{base}\n=>\n{head}");
+        }
+        // Control: the same configuration on both sides says nothing.
+        assert!(said(&entry(set), &entry(set), false).is_empty());
+        assert!(said(&format!("{TABLE}{set}"), &format!("{TABLE}{set}"), false).is_empty());
+    }
+
     fn builtin_pattern_line() -> String {
         format!(
             "pattern = '{}'\n",

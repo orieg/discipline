@@ -6012,6 +6012,23 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: `changed_ranges_paths` keeps a changed file a plain glob matches and no `!` glob does, and a list nothing reads or that keeps no file is refused (#1068)",
+        || {
+            use crate::guards::command::RangesFilter;
+            let globs = |g: &[&str]| g.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            let cmd = "npx stryker run --mutate {changed_ranges}".to_string();
+            let plain = "npx stryker run".to_string();
+            let Some(filter) = RangesFilter::resolve("t", &globs(&["src/**/*.js", "!src/**/*.test.js"]), &[Some(&cmd)])? else {
+                return Ok(false);
+            };
+            Ok(filter.keeps("src/a.js")
+                && !filter.keeps("src/a.test.js")
+                && !filter.keeps("README.md")
+                && RangesFilter::resolve("t", &globs(&["src/**"]), &[Some(&plain)]).is_err()
+                && RangesFilter::resolve("t", &globs(&["!docs/**"]), &[Some(&cmd)]).is_err())
+        },
+    ),
+    (
         "changed-line-coverage: a changed line the report lists with zero hits is uncovered, one it does not list is not, and report paths are made repository-relative (#1068)",
         || {
             use crate::guards::changed_line_coverage::{by_repo_path, parse_cobertura, parse_lcov, uncovered};

@@ -1384,6 +1384,7 @@ const GLOB_LIST_KEYS: &[&str] = &[
     "verify_paths",
     "trigger_paths",
     "require_edits_to",
+    "changed_ranges_paths",
 ];
 
 /// One step of the way to a configured value: a table key or an array index.
