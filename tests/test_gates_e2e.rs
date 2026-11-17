@@ -14883,6 +14883,109 @@ fn command_preset_cargo_mutants_count_ending_in_zero_is_not_zero_items() {
         .contains(&"Zero Items Selected Or Executed".to_string()));
 }
 
+/// #1068: Stryker never prints `0 mutants tested`. A run that mutates nothing logs its
+/// instrumenter line `Instrumented <n> source file(s) with 0 mutant(s)` and exits 0, so the
+/// `stryker` preset's guard reads that line. The lines below are Stryker 10.1.1's own.
+#[test]
+fn command_preset_stryker_reads_strykers_own_empty_run_line() {
+    let check = |printed: &str| -> Run {
+        let repo = Repo::new();
+        repo.commit_base(
+            "discipline.toml",
+            &format!(
+                "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommands = [ {{ name = \"mut\", \
+                 preset = \"stryker\", command = \"echo {printed}\" }} ]\n"
+            ),
+            "ci: configure stryker",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// c\n"));
+        repo.commit("chore: touch the library");
+        repo.check(&[])
+    };
+    for printed in [
+        "INFO Instrumenter Instrumented 1 source file(s) with 0 mutant(s)",
+        "INFO Instrumenter Instrumented 0 source file(s) with 0 mutant(s)",
+    ] {
+        let run = check(printed);
+        assert_eq!(run.code, 1, "{printed}: {}{}", run.stdout, run.stderr);
+        assert!(
+            run.titles("command")
+                .contains(&"Zero Items Selected Or Executed".to_string()),
+            "{printed}"
+        );
+    }
+    // Control: a run that mutated something, including a count ending in 0, passes.
+    for printed in [
+        "INFO Instrumenter Instrumented 2 source file(s) with 21 mutant(s)",
+        "INFO Instrumenter Instrumented 2 source file(s) with 10 mutant(s)",
+    ] {
+        let run = check(printed);
+        assert_eq!(run.code, 0, "{printed}: {}{}", run.stdout, run.stderr);
+        assert!(run.violations("command").is_empty(), "{printed}");
+    }
+}
+
+/// #1068: mutmut and PIT never print `0 mutants tested` either. mutmut stops with
+/// `Stopping early, because we could not find any test case for any mutant`; PIT prints
+/// `No mutations found`, or `>> Ran 0 tests` (exit 0) when no test ran a mutant. Survivors
+/// are mutmut's `🙁 <n>` and PIT's `SURVIVED <n>` above zero, and so are mutants no test
+/// covers (`🫥 <n>`, `NO_COVERAGE <n>`); PIT prints `SURVIVED 0` and `NO_COVERAGE 0` on
+/// every run. The lines below are mutmut 3.8.1's and PIT 1.30.2's own.
+#[test]
+fn command_presets_mutmut_and_pit_read_their_tools_own_lines() {
+    let check = |preset: &str, printed: &str| -> Run {
+        let repo = Repo::new();
+        repo.commit_base(
+            "discipline.toml",
+            &format!(
+                "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommands = [ {{ name = \"mut\", \
+                 preset = \"{preset}\", command = \"echo '{printed}'\" }} ]\n"
+            ),
+            "ci: configure mutation testing",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// c\n"));
+        repo.commit("chore: touch the library");
+        repo.check(&[])
+    };
+    let titles = |run: &Run| run.titles("command");
+    for (preset, printed, title) in [
+        (
+            "mutmut",
+            "Stopping early, because we could not find any test case for any mutant. It seems that the selected tests do not cover any code that we mutated.",
+            "Zero Items Selected Or Executed",
+        ),
+        ("pit", ">> Ran 0 tests (0 tests per mutation)", "Zero Items Selected Or Executed"),
+        (
+            "pit",
+            "PIT >> WARNING : No mutations found. This probably means there is an issue with either the supplied classpath or filters.",
+            "Zero Items Selected Or Executed",
+        ),
+        ("mutmut", "3/3  🎉 1 🫥 0  ⏰ 0  🤔 0  🙁 2  🔇 0  🧙 0", "Forbidden Output Detected"),
+        ("pit", "> KILLED 0 SURVIVED 1 TIMED_OUT 0 NON_VIABLE 0", "Forbidden Output Detected"),
+        ("mutmut", "3/3  🎉 1 🫥 2  ⏰ 0  🤔 0  🙁 0  🔇 0  🧙 0", "Forbidden Output Detected"),
+        ("pit", "> NO_COVERAGE 1 EQUIVALENT 0", "Forbidden Output Detected"),
+    ] {
+        let run = check(preset, printed);
+        assert_eq!(run.code, 1, "{preset} {printed}: {}{}", run.stdout, run.stderr);
+        assert!(titles(&run).contains(&title.to_string()), "{preset} {printed}: {:?}", titles(&run));
+    }
+    // Control: runs that tested mutants and kept no survivor pass.
+    for (preset, printed) in [
+        ("mutmut", "3/3  🎉 3 🫥 0  ⏰ 0  🤔 0  🙁 0  🔇 0  🧙 0"),
+        ("pit", ">> Ran 10 tests (2 tests per mutation)"),
+        ("pit", "> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0"),
+        ("pit", "> NO_COVERAGE 0 EQUIVALENT 0"),
+    ] {
+        let run = check(preset, printed);
+        assert_eq!(
+            run.code, 0,
+            "{preset} {printed}: {}{}",
+            run.stdout, run.stderr
+        );
+        assert!(run.violations("command").is_empty(), "{preset} {printed}");
+    }
+}
+
 /// A `cargo` that answers as `cargo mutants --in-diff <file>` must be called: it fails unless
 /// the argument after `--in-diff` is a readable file holding the change's diff (the `b/`
 /// side of `src/lib.rs` and its added line), and logs the argument it was given to `log`.
@@ -15017,6 +15120,91 @@ fn changed_ranges_is_given_the_added_lines_and_a_change_with_none_is_not_run() {
         run.stderr
     );
     assert_eq!(given(), None);
+}
+
+/// `changed_ranges_paths` limits `{changed_ranges}` to the files it keeps (#1068): a
+/// changed document, a file a `!` glob leaves out and a path the list could not carry are
+/// not listed. A change that adds lines only outside the kept files does not run the
+/// command, and the note names the filter.
+#[cfg(unix)]
+#[test]
+fn changed_ranges_paths_lists_only_the_kept_files() {
+    let logs = tempfile::tempdir().unwrap();
+    let log = logs.path().join("ranges.log");
+    let setup = || {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                (
+                    "discipline.toml",
+                    &format!(
+                        "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommand = \"sh -c 'printf %s \\\"$1\\\" > {}' sh --mutate={{changed_ranges}}\"\nchanged_ranges_paths = [\"src/**/*.rs\", \"!src/skip.rs\"]\n",
+                        log.display()
+                    ),
+                ),
+                ("src/skip.rs", "pub fn s() {}\n"),
+            ],
+            "ci: configure a scoped command",
+        );
+        repo
+    };
+    let given = || std::fs::read_to_string(&log).ok();
+
+    let repo = setup();
+    let lib_lines = GOOD_LIB.lines().count();
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}// one\n"));
+    repo.write("src/skip.rs", "pub fn s() {}\npub fn t() {}\n");
+    repo.write("README.md", "# readme\n");
+    repo.write("-x.md", "a path the list could not carry\n");
+    repo.commit("feat: add lines");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+    assert_eq!(
+        given().as_deref(),
+        Some(format!("--mutate=src/lib.rs:{}-{}", lib_lines + 1, lib_lines + 1).as_str())
+    );
+    std::fs::remove_file(&log).unwrap();
+
+    // Lines added only outside the kept files: the command is not run.
+    let repo = setup();
+    repo.write("src/skip.rs", "pub fn s() {}\npub fn t() {}\n");
+    repo.write("README.md", "# readme\n");
+    repo.commit("docs: readme");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("command");
+    assert_eq!(outcome["examined"], 0);
+    assert!(
+        outcome["notes"].as_array().unwrap().iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .contains("adds no line in a file `changed_ranges_paths` keeps")),
+        "{outcome}"
+    );
+    assert_eq!(given(), None);
+
+    // A filter on a command that never names `{changed_ranges}` is a configuration error.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[(
+            "discipline.toml",
+            &format!(
+                "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommand = \"true\"\nchanged_ranges_paths = [\"src/**\"]\n"
+            ),
+        )],
+        "ci: configure",
+    );
+    repo.write("src/a.rs", "pub fn a() {}\n");
+    repo.commit("feat: a");
+    let run = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        format!("{}{}", run.stdout, run.stderr).contains("so nothing reads it"),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
 }
 
 const COVERAGE_BASE_LIB: &str = "pub fn double(x: i32) -> i32 {\n    x * 2\n}\n";

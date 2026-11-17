@@ -444,6 +444,10 @@
           "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text",
           "type": "string"
         },
+        "changed_ranges_paths": {
+          "$ref": "#/$defs/StringList",
+          "description": "Globs naming the changed files `{changed_ranges}` lists, where a glob starting with `!` leaves out what it matches; a change with no added line in a kept file does not run the command. Needs `{changed_ranges}` in the command or the canary"
+        },
         "command": {
           "description": "Command string to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff, and `{changed_ranges}` by the lines it adds (`path:start-end`, joined by `,`); any other `{diff}`, `{changed}`, `{diff_…}` or `{changed_…}` stops the run (exit 2)",
           "type": "string"
@@ -516,6 +520,10 @@
         "canary_expected_diagnostic": {
           "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text",
           "type": "string"
+        },
+        "changed_ranges_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Globs naming the changed files `{changed_ranges}` lists, where a glob starting with `!` leaves out what it matches; a change with no added line in a kept file does not run the command. Needs `{changed_ranges}` in the command or the canary"
         },
         "command": {
           "description": "Primary command to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff, and `{changed_ranges}` by the lines it adds (`path:start-end`, joined by `,`); any other `{diff}`, `{changed}`, `{diff_…}` or `{changed_…}` stops the run (exit 2)",

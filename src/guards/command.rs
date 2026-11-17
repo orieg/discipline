@@ -362,6 +362,81 @@ pub fn changed_ranges(files: &[crate::gitctx::ChangedFile]) -> Result<String> {
     Ok(entries.join(","))
 }
 
+/// `changed_ranges_paths`: which changed files [`CHANGED_RANGES_PLACEHOLDER`] lists. A
+/// path is kept when it matches a glob that does not start with `!` and none that does,
+/// the reading Stryker gives its own `mutate` list, whatever the order of the globs.
+pub struct RangesFilter {
+    keep: globset::GlobSet,
+    drop: globset::GlobSet,
+}
+
+impl RangesFilter {
+    /// The filter `globs` names for the command or canary `cmds`; `None` when `globs` is
+    /// empty. A glob that does not compile, a list with no glob that keeps a file, and a
+    /// list beside a command and canary that never name [`CHANGED_RANGES_PLACEHOLDER`] are
+    /// configuration errors: each would leave the list set and nothing filtered.
+    pub fn resolve(
+        owner: &str,
+        globs: &[String],
+        cmds: &[Option<&String>],
+    ) -> Result<Option<Self>> {
+        if globs.is_empty() {
+            return Ok(None);
+        }
+        let config_error = |msg: String| tag(Reason::Configuration, anyhow!(msg));
+        let named = cmds
+            .iter()
+            .flatten()
+            .map(|cmd| split_command_line(cmd).map(|argv| takes_changed_ranges(&argv)))
+            .collect::<Result<Vec<bool>>>()?
+            .contains(&true);
+        if !named {
+            return Err(config_error(format!(
+                "{owner} sets `changed_ranges_paths`, and neither its command nor its canary names `{CHANGED_RANGES_PLACEHOLDER}`, so nothing reads it"
+            )));
+        }
+        let mut keep = globset::GlobSetBuilder::new();
+        let mut drop = globset::GlobSetBuilder::new();
+        let mut keeps_any = false;
+        for raw in globs {
+            let (set, glob) = match raw.strip_prefix('!') {
+                Some(glob) => (&mut drop, glob),
+                None => {
+                    keeps_any = true;
+                    (&mut keep, raw.as_str())
+                }
+            };
+            set.add(globset::Glob::new(glob).map_err(|e| {
+                config_error(format!(
+                    "{owner} `changed_ranges_paths` glob `{raw}` does not compile: {e}"
+                ))
+            })?);
+        }
+        if !keeps_any {
+            return Err(config_error(format!(
+                "{owner} `changed_ranges_paths` holds only `!` globs, which keep no file: name the files to list, then leave some out"
+            )));
+        }
+        Ok(Some(Self {
+            keep: keep.build()?,
+            drop: drop.build()?,
+        }))
+    }
+
+    pub fn keeps(&self, path: &str) -> bool {
+        self.keep.is_match(path) && !self.drop.is_match(path)
+    }
+}
+
+/// [`changed_ranges`] over the change's files that `filter` keeps (all of them with none).
+fn filtered_changed_ranges(ctx: &Context, filter: Option<&RangesFilter>) -> Result<String> {
+    let mut files = ctx.git.changed_files()?;
+    if let Some(filter) = filter {
+        files.retain(|f| filter.keeps(&f.path));
+    }
+    changed_ranges(&files)
+}
+
 /// `argv` with each placeholder of `values` replaced by its value, in one pass over each
 /// argument: a value is never read again for a placeholder, so a path that spells one
 /// stays as written. Each element stays one argument. An argument longer than
@@ -525,6 +600,7 @@ fn run_gate_command(
     timeout_secs: u64,
     dir: &Path,
     example: Option<&str>,
+    paths: Option<&RangesFilter>,
 ) -> Result<CommandRunResult> {
     let argv =
         split_command_line(cmd).with_context(|| format!("invalid command line for `{name}`"))?;
@@ -535,10 +611,7 @@ fn run_gate_command(
         );
     }
     let ranges = if takes_changed_ranges(&argv) {
-        let ranges = ctx
-            .git
-            .changed_files()
-            .and_then(|files| changed_ranges(&files))
+        let ranges = filtered_changed_ranges(ctx, paths)
             .with_context(|| format!("command `{name}`: cannot list the change's lines"))?;
         if ranges.is_empty() {
             bail!("command `{name}`: the change adds no line, so `{CHANGED_RANGES_PLACEHOLDER}` would be an empty argument");
@@ -943,6 +1016,8 @@ struct ResolvedCommand {
     committed_snapshot: Option<CommittedSnapshot>,
     /// `example`, with what it held before any command of this run started.
     example: Option<(Snapshot, CommittedSnapshot)>,
+    /// `changed_ranges_paths`: which changed files `{changed_ranges}` lists.
+    changed_ranges_paths: Option<RangesFilter>,
 }
 
 /// A committed file the command's stdout must match, or one marked region of it.
@@ -1541,6 +1616,11 @@ fn resolve_table_command(
             &[Some(&cmd), canary_cmd.as_ref()],
             is_base,
         )?;
+        let changed_ranges_paths = RangesFilter::resolve(
+            "`[gates.command]`",
+            &gate.changed_ranges_paths,
+            &[Some(&cmd), canary_cmd.as_ref()],
+        )?;
         resolved.push(ResolvedCommand {
             name: gate.preset.clone().unwrap_or_else(|| "default".to_string()),
             is_base_tests: is_base,
@@ -1558,7 +1638,15 @@ fn resolve_table_command(
             committed_snapshot: committed_snapshot(ctx, snapshot.as_ref())?,
             snapshot,
             example,
+            changed_ranges_paths,
         });
+    } else if !gate.changed_ranges_paths.is_empty() {
+        return Err(tag(
+            Reason::Configuration,
+            anyhow!(
+                "`[gates.command]` sets `changed_ranges_paths` but declares no `command` or `preset` of its own, so no command reads it: entries do not inherit it; set `changed_ranges_paths` on the `[[gates.command.commands]]` entry it is for"
+            ),
+        ));
     } else if gate.example.is_some() || gate.example_marker.is_some() {
         let key = if gate.example.is_some() {
             "example"
@@ -1695,6 +1783,11 @@ fn resolve_entry_commands(
             &[Some(&effective_cmd), canary_cmd.as_ref()],
             is_base,
         )?;
+        let changed_ranges_paths = RangesFilter::resolve(
+            &format!("command entry `{}`", entry.name),
+            &entry.changed_ranges_paths,
+            &[Some(&effective_cmd), canary_cmd.as_ref()],
+        )?;
         resolved.push(ResolvedCommand {
             name: entry.name.clone(),
             is_base_tests: is_base,
@@ -1715,6 +1808,7 @@ fn resolve_entry_commands(
             committed_snapshot: committed_snapshot(ctx, snapshot.as_ref())?,
             snapshot,
             example,
+            changed_ranges_paths,
         });
     }
 
@@ -1744,13 +1838,11 @@ fn change_adds_no_lines(ctx: &Context, item: &ResolvedCommand) -> Result<bool> {
     if !named {
         return Ok(false);
     }
-    let files = ctx
-        .git
-        .changed_files()
-        .with_context(|| format!("command `{}`: cannot list the change's lines", item.name))?;
-    Ok(changed_ranges(&files)
-        .with_context(|| format!("command `{}`", item.name))?
-        .is_empty())
+    Ok(
+        filtered_changed_ranges(ctx, item.changed_ranges_paths.as_ref())
+            .with_context(|| format!("command `{}`: cannot list the change's lines", item.name))?
+            .is_empty(),
+    )
 }
 
 /// Runs one command and judges it; `false` when it was not run, which is not counted as
@@ -1767,8 +1859,13 @@ fn evaluate_one_command(
 
     if change_adds_no_lines(ctx, &item)? {
         outcome.notes.push(format!(
-            "command `{}`: the change adds no line for `{CHANGED_RANGES_PLACEHOLDER}`, so it was not run",
-            item.name
+            "command `{}`: the change adds no line{} for `{CHANGED_RANGES_PLACEHOLDER}`, so it was not run",
+            item.name,
+            if item.changed_ranges_paths.is_some() {
+                " in a file `changed_ranges_paths` keeps"
+            } else {
+                ""
+            }
         ));
         apply_findings(ctx, gate, &item, command_violations, outcome);
         return Ok(false);
@@ -1784,6 +1881,7 @@ fn evaluate_one_command(
         item.timeout_seconds,
         ctx.git.root(),
         example_text(&item)?,
+        item.changed_ranges_paths.as_ref(),
     )?;
     if run_res.stdout_truncated || run_res.stderr_truncated {
         // Every pattern is matched against stdout and stderr together.
@@ -1880,6 +1978,7 @@ fn check_canary(
             item.timeout_seconds,
             ctx.git.root(),
             example_text(item)?,
+            item.changed_ranges_paths.as_ref(),
         )?;
         let canary_output = format!("{}\n{}", canary_res.stdout, canary_res.stderr);
         if let Some(ref expected_diag) = item.canary_expected_diagnostic {
@@ -2677,6 +2776,7 @@ fn evaluate_base_tests(
         cmd.timeout_seconds,
         &temp_path,
         None,
+        None,
     )?;
     outcome.examined += 1;
     // The failed cases are read from the output: a report cut off may have lost them.
@@ -3316,6 +3416,7 @@ mod tests {
             5,
             dir.path(),
             Some("usage: x\n"),
+            None,
         )
         .unwrap();
         let (path, text) = run.stdout.split_once('\n').unwrap();
@@ -3323,8 +3424,8 @@ mod tests {
         assert_eq!(text, "usage: x\n");
         assert!(!Path::new(path).exists(), "{path} left behind");
         // The placeholder with no example is a configuration error, and nothing runs.
-        let err =
-            run_gate_command(&ctx, "ex", "sh {example_file}", 5, dir.path(), None).unwrap_err();
+        let err = run_gate_command(&ctx, "ex", "sh {example_file}", 5, dir.path(), None, None)
+            .unwrap_err();
         assert!(
             format!("{err:#}").contains("no `example` is configured"),
             "{err:#}"
@@ -3596,6 +3697,54 @@ mod tests {
         }
     }
 
+    /// `changed_ranges_paths` keeps a path that a plain glob matches and no `!` glob does,
+    /// whatever the order; a list nothing reads, one that keeps no file and a glob that
+    /// does not compile are configuration errors.
+    #[test]
+    fn changed_ranges_paths_keeps_plain_matches_less_the_negated_ones() {
+        let globs = |g: &[&str]| g.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let cmd = "npx stryker run --mutate {changed_ranges}".to_string();
+        let filter = RangesFilter::resolve(
+            "t",
+            &globs(&["!src/**/*.test.js", "src/**/*.js"]),
+            &[Some(&cmd)],
+        )
+        .unwrap()
+        .unwrap();
+        assert!(filter.keeps("src/math.js"));
+        assert!(filter.keeps("src/deep/a.js"));
+        assert!(!filter.keeps("src/math.test.js"));
+        assert!(!filter.keeps("README.md"));
+        assert!(!filter.keeps("test/math.js"));
+        assert!(RangesFilter::resolve("t", &[], &[Some(&cmd)])
+            .unwrap()
+            .is_none());
+        // The canary alone naming the placeholder is enough.
+        let plain = "npx stryker run".to_string();
+        assert!(
+            RangesFilter::resolve("t", &globs(&["src/**"]), &[Some(&plain), Some(&cmd)])
+                .unwrap()
+                .is_some()
+        );
+        for (g, cmds, says) in [
+            (
+                &["src/**"][..],
+                &[Some(&plain), None][..],
+                "nothing reads it",
+            ),
+            (&["!docs/**"][..], &[Some(&cmd)][..], "keep no file"),
+            (&["src/[**"][..], &[Some(&cmd)][..], "does not compile"),
+        ] {
+            let err = RangesFilter::resolve("t", &globs(g), cmds).err().unwrap();
+            assert!(format!("{err:#}").contains(says), "{err:#}");
+            assert_eq!(
+                crate::could_not_check::classify(&err).0,
+                Reason::Configuration,
+                "{err:#}"
+            );
+        }
+    }
+
     #[test]
     fn changed_ranges_lists_added_lines_by_path_and_run() {
         use crate::gitctx::ChangeKind::*;
@@ -3756,6 +3905,7 @@ mod tests {
             5,
             dir.path(),
             None,
+            None,
         )
         .unwrap();
         assert!(run.status.success(), "{}", run.stderr);
@@ -3777,6 +3927,7 @@ mod tests {
             r#"sh -c 'printf "%s" "$1"' sh diff_file"#,
             5,
             dir.path(),
+            None,
             None,
         )
         .unwrap();

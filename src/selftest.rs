@@ -6012,6 +6012,23 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: `changed_ranges_paths` keeps a changed file a plain glob matches and no `!` glob does, and a list nothing reads or that keeps no file is refused (#1068)",
+        || {
+            use crate::guards::command::RangesFilter;
+            let globs = |g: &[&str]| g.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            let cmd = "npx stryker run --mutate {changed_ranges}".to_string();
+            let plain = "npx stryker run".to_string();
+            let Some(filter) = RangesFilter::resolve("t", &globs(&["src/**/*.js", "!src/**/*.test.js"]), &[Some(&cmd)])? else {
+                return Ok(false);
+            };
+            Ok(filter.keeps("src/a.js")
+                && !filter.keeps("src/a.test.js")
+                && !filter.keeps("README.md")
+                && RangesFilter::resolve("t", &globs(&["src/**"]), &[Some(&plain)]).is_err()
+                && RangesFilter::resolve("t", &globs(&["!docs/**"]), &[Some(&cmd)]).is_err())
+        },
+    ),
+    (
         "changed-line-coverage: a changed line the report lists with zero hits is uncovered, one it does not list is not, and report paths are made repository-relative (#1068)",
         || {
             use crate::guards::changed_line_coverage::{by_repo_path, parse_cobertura, parse_lcov, uncovered};
@@ -6478,14 +6495,27 @@ command = "cargo test"
                 output_pattern(pattern, id)
             };
             let mut ok = true;
-            for id in ["cargo-mutants", "mutmut", "stryker", "pit"] {
-                let re = guard(id)?;
-                ok &= re.is_match("0 mutants tested in 1s")
-                    && re.is_match("Found 3 mutants\n0 mutants tested")
-                    && !re.is_match("10 mutants tested in 5s: 10 caught")
-                    && !re.is_match("20 mutants tested")
-                    && !re.is_match("100 mutants tested");
-            }
+            let mutants = guard("cargo-mutants")?;
+            ok &= mutants.is_match("0 mutants tested in 1s")
+                && mutants.is_match("Found 3 mutants\n0 mutants tested")
+                && !mutants.is_match("10 mutants tested in 5s: 10 caught")
+                && !mutants.is_match("20 mutants tested")
+                && !mutants.is_match("100 mutants tested");
+            // mutmut stops on a run no test reaches; PIT says `No mutations found`, or
+            // `>> Ran 0 tests` when no test ran a mutant (#1068).
+            let mutmut = guard("mutmut")?;
+            ok &= mutmut.is_match("Stopping early, because we could not find any test case for any mutant. It seems")
+                && !mutmut.is_match("0 mutants tested");
+            let pit = guard("pit")?;
+            ok &= pit.is_match(">> Ran 0 tests (0 tests per mutation)")
+                && pit.is_match("PIT >> WARNING : No mutations found. This probably means")
+                && !pit.is_match(">> Ran 10 tests (2 tests per mutation)")
+                && !pit.is_match(">> Ran 5 tests (1 tests per mutation)");
+            // Stryker's instrumenter line, the one it prints for an empty run (#1068).
+            let stryker = guard("stryker")?;
+            ok &= stryker.is_match("INFO Instrumenter Instrumented 1 source file(s) with 0 mutant(s)")
+                && !stryker.is_match("Instrumented 2 source file(s) with 10 mutant(s)")
+                && !stryker.is_match("Instrumented 2 source file(s) with 21 mutant(s)");
             for id in ["loom", "miri"] {
                 let pattern = resolve_preset(id)
                     .and_then(|p| p.zero_items_pattern)

@@ -224,6 +224,9 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("snapshot_marker", Direction::Evidence),
     ("example", Direction::Evidence),
     ("example_marker", Direction::Evidence),
+    // Narrows the files `{changed_ranges}` hands the command; any edit is reported, since
+    // a gained `!` glob and a lost plain glob both leave lines out.
+    ("changed_ranges_paths", Direction::Evidence),
     ("constant_file", Direction::Evidence),
     ("constant_name", Direction::Evidence),
     ("deny_file", Direction::Evidence),
