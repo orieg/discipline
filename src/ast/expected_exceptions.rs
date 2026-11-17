@@ -4308,6 +4308,23 @@ fn scala_generic<'t>(node: Node<'t>, src: &'t str) -> Option<(&'t str, Node<'t>)
     Some((text(name, src), class))
 }
 
+/// specs2 `throwA[T]` / `throwAn[T]`, bare or called with a message pattern
+/// (`throwA[T]("negative")`): the class, and the message argument when there is one.
+fn scala_throw_a<'t>(node: Node<'t>, src: &'t str) -> Option<(Node<'t>, Option<Node<'t>>)> {
+    let (generic, args) = if node.kind() == "call_expression" {
+        (
+            node.child_by_field_name("function")?,
+            node.child_by_field_name("arguments"),
+        )
+    } else {
+        (node, None)
+    };
+    match scala_generic(generic, src)? {
+        ("throwA" | "throwAn", class) => Some((class, args.and_then(|a| a.named_child(0)))),
+        _ => None,
+    }
+}
+
 /// A specs2 message argument (`throwA[T]("negative")`, `message = "negative"`), which
 /// is a pattern searched for in the message.
 fn scala_pattern(arg: Node, src: &str) -> String {
@@ -4358,73 +4375,55 @@ pub fn scala<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Tes
                 let Some((left, operator, right)) = scala_infix(node, src) else {
                     return true;
                 };
-                if operator != "thrownBy" {
-                    return true;
-                }
-                // `a [T] should be thrownBy ..`: the subject stands before `should be`.
-                let subject = match scala_infix(left, src) {
-                    Some((subject, "should" | "must", be)) if text(be, src) == "be" => subject,
-                    Some(_) => return true,
-                    None => left,
-                };
-                match scala_generic(subject, src) {
-                    Some(("the", class)) if subject == left => {
-                        expected.exception_type = Some(text(class, src).to_string());
-                        // `.. should have message "m"`.
-                        let message = anc
-                            .parent(node)
-                            .and_then(|p| scala_infix(p, src))
-                            .filter(|(l, op, have)| {
-                                *l == node
-                                    && matches!(*op, "should" | "must")
-                                    && text(*have, src) == "have"
-                            })
-                            .and_then(|_| anc.parent(anc.parent(node)?))
-                            .and_then(|g| scala_infix(g, src))
-                            .filter(|(_, op, _)| *op == "message")
-                            .map(|(_, _, value)| value);
-                        if let Some(value) = message {
-                            expected.matcher = Some(matcher_value(value, src));
-                            expected.whole_message = true;
+                // specs2 `code must throwA[T]`, `.. throwA[T]("negative")`.
+                if matches!(operator, "must" | "should") {
+                    let Some((class, message)) = scala_throw_a(right, src) else {
+                        return true;
+                    };
+                    expected.exception_type = Some(text(class, src).to_string());
+                    expected.matcher = message.map(|a| scala_pattern(a, src));
+                    Some(left)
+                } else {
+                    if operator != "thrownBy" {
+                        return true;
+                    }
+                    // `a [T] should be thrownBy ..`: the subject stands before `should be`.
+                    let subject = match scala_infix(left, src) {
+                        Some((subject, "should" | "must", be)) if text(be, src) == "be" => subject,
+                        Some(_) => return true,
+                        None => left,
+                    };
+                    match scala_generic(subject, src) {
+                        Some(("the", class)) if subject == left => {
+                            expected.exception_type = Some(text(class, src).to_string());
+                            // `.. should have message "m"`.
+                            let message = anc
+                                .parent(node)
+                                .and_then(|p| scala_infix(p, src))
+                                .filter(|(l, op, have)| {
+                                    *l == node
+                                        && matches!(*op, "should" | "must")
+                                        && text(*have, src) == "have"
+                                })
+                                .and_then(|_| anc.parent(anc.parent(node)?))
+                                .and_then(|g| scala_infix(g, src))
+                                .filter(|(_, op, _)| *op == "message")
+                                .map(|(_, _, value)| value);
+                            if let Some(value) = message {
+                                expected.matcher = Some(matcher_value(value, src));
+                                expected.whole_message = true;
+                            }
                         }
+                        Some(("a" | "an", class)) if subject != left => {
+                            expected.exception_type = Some(text(class, src).to_string());
+                        }
+                        None if subject != left && text(subject, src) == "noException" => {
+                            expected.kind = "doesNotThrow".to_string();
+                        }
+                        _ => return true,
                     }
-                    Some(("a" | "an", class)) if subject != left => {
-                        expected.exception_type = Some(text(class, src).to_string());
-                    }
-                    None if subject != left && text(subject, src) == "noException" => {
-                        expected.kind = "doesNotThrow".to_string();
-                    }
-                    _ => return true,
+                    Some(right)
                 }
-                Some(right)
-            }
-            // `code must throwA[T]`: the grammar gives the type argument to the whole
-            // `code must throwA`.
-            "generic_function" => {
-                let Some((code, "must" | "should", matcher)) = node
-                    .child_by_field_name("function")
-                    .and_then(|f| scala_infix(f, src))
-                else {
-                    return true;
-                };
-                if !matches!(text(matcher, src), "throwA" | "throwAn") {
-                    return true;
-                }
-                expected.exception_type = node
-                    .child_by_field_name("type_arguments")
-                    .and_then(|t| t.named_child(0))
-                    .map(|c| text(c, src).to_string());
-                // `.. throwA[T]("negative")`: the call that wraps it.
-                expected.matcher = anc
-                    .parent(node)
-                    .filter(|p| {
-                        p.kind() == "call_expression"
-                            && p.child_by_field_name("function") == Some(node)
-                    })
-                    .and_then(|p| p.child_by_field_name("arguments"))
-                    .and_then(|a| a.named_child(0))
-                    .map(|a| scala_pattern(a, src));
-                Some(code)
             }
             _ => return true,
         };
