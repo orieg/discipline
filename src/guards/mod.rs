@@ -1369,6 +1369,7 @@ const GLOB_LIST_KEYS: &[&str] = &[
     "manifests",
     "allowed_paths",
     "forbidden_paths",
+    "locked_paths",
     "protected_paths",
     "never_ratifiable",
     "watched_paths",

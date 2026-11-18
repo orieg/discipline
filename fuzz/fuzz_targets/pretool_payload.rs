@@ -45,6 +45,7 @@ fuzz_target!(|data: &[u8]| {
             worktrees: &worktrees,
             leases: &[],
             forbidden: None,
+            locked: None,
             branch: Some("main"),
         };
         let _ = pretool::judge_shell(&text, Path::new("/repo"), &scene);

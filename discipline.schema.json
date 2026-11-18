@@ -1449,6 +1449,10 @@
           "$ref": "#/$defs/StringListOrReset",
           "description": "Glob patterns of paths agents are strictly forbidden to touch"
         },
+        "locked_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Glob patterns of paths whose files on the base side may not be modified, deleted or renamed; a file added there passes"
+        },
         "plan_paths": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Glob patterns of plan files to inspect"

@@ -662,6 +662,7 @@ pub fn generate_schema() -> Value {
             "ScopeConfinementGate": gate_table(json!({
                 "allowed_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of paths agents are authorized to modify" },
                 "forbidden_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of paths agents are strictly forbidden to touch" },
+                "locked_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of paths whose files on the base side may not be modified, deleted or renamed; a file added there passes" },
                 "check_plans": { "type": "boolean", "description": "Whether to inspect plan files for planned output paths" },
                 "plan_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of plan files to inspect" },
                 "require_declared_outputs": { "type": "boolean", "description": "Whether plan files must declare at least one output path" }

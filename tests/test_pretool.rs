@@ -823,3 +823,61 @@ fn shell_respects_worktree_lease_and_base_forbidden_paths_survive_worktree_tampe
         o.stderr
     );
 }
+
+/// `locked_paths` (#1074) in the hook: a file the base side has under the lock is refused
+/// before the edit, and a new one is let through, though the working tree's
+/// `discipline.toml` drops the lock.
+#[test]
+fn locked_paths_refuse_a_base_side_file_and_survive_worktree_tampering() {
+    let (repo, main, _wt2) = two_worktrees();
+    std::fs::create_dir_all(main.join("tests")).unwrap();
+    std::fs::write(
+        main.join("discipline.toml"),
+        "[gates.scope-confinement]\nenabled = true\nlocked_paths = [\"tests/**\"]\n",
+    )
+    .unwrap();
+    std::fs::write(main.join("tests/oracle.txt"), "expected = 3\n").unwrap();
+    repo.git(&["add", "discipline.toml", "tests/oracle.txt"]);
+    repo.git(&["commit", "-q", "-m", "chore: lock tests"]);
+    repo.git(&["branch", "-f", "main", "HEAD"]);
+    // A file committed after the base is not on the base side.
+    std::fs::write(main.join("tests/later.txt"), "expected = 4\n").unwrap();
+    repo.git(&["add", "tests/later.txt"]);
+    repo.git(&["commit", "-q", "-m", "test: add later"]);
+    std::fs::write(
+        main.join("discipline.toml"),
+        "[gates.scope-confinement]\nenabled = false\n",
+    )
+    .unwrap();
+
+    let edit = |rel: &str| {
+        let p = payload("claude-code/write.json", &main, &main.join(rel));
+        pretool(&main, "claude-code", &p, &[])
+    };
+    let o = edit("tests/oracle.txt");
+    assert_eq!(o.code, 2, "{}", o.stderr);
+    assert!(o.stderr.contains("locked_paths"), "{}", o.stderr);
+    for rel in ["tests/new.txt", "tests/later.txt", "src/a.txt"] {
+        let o = edit(rel);
+        assert_eq!(o.code, 0, "{rel}: {}", o.stderr);
+    }
+    let run = |c: &str| {
+        pretool(
+            &main,
+            "claude-code",
+            &shell("claude-code", "", &main, c),
+            &[],
+        )
+    };
+    for c in [
+        "rm tests/oracle.txt",
+        "echo x > tests/oracle.txt",
+        "rm -r tests",
+    ] {
+        let o = run(c);
+        assert_eq!(o.code, 2, "{c}: {}", o.stderr);
+        assert!(o.stderr.contains("locked_paths"), "{c}: {}", o.stderr);
+    }
+    let o = run("echo x > tests/another.txt");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+}

@@ -1558,22 +1558,7 @@ pub(crate) fn base_discipline_config(
     side: &CheckSide,
 ) -> Option<crate::config::DisciplineConfig> {
     let repo = crate::gitctx::discover_repository(dir).ok()?;
-    let head = repo.head().ok()?.peel_to_commit().ok()?.id();
-    let named = match side {
-        CheckSide::Base(b) => b.clone(),
-        CheckSide::Default if crate::gitctx::environment_names_base() => {
-            crate::gitctx::detect_base_ref(None, None, None)
-        }
-        CheckSide::Default => change_base(&repo).unwrap_or_else(|| "origin/main".to_string()),
-    };
-    let other = match named.strip_prefix("origin/") {
-        Some(local) => local.to_string(),
-        None => format!("origin/{named}"),
-    };
-    let merge_base = [named, other].iter().find_map(|name| {
-        let commit = repo.revparse_single(name).ok()?.peel_to_commit().ok()?;
-        repo.merge_base(commit.id(), head).ok()
-    })?;
+    let merge_base = base_commit(&repo, side)?;
     let tree = repo.find_commit(merge_base).ok()?.tree().ok()?;
     let entry = tree.get_path(Path::new("discipline.toml")).ok()?;
     let blob = repo.find_blob(entry.id()).ok()?;
@@ -1584,6 +1569,63 @@ pub(crate) fn base_discipline_config(
         &crate::config::Overrides::default(),
     )
     .ok()
+}
+
+/// The paths on the base side of the change that `filter` matches: the files of the merge
+/// base of `HEAD` with the base the check measures against, else of `HEAD` itself when
+/// no base can be established (what is committed is then the side an edit changes).
+/// Empty in a repository with no commit; an error when the tree cannot be read.
+pub(crate) fn base_side_paths(
+    dir: &Path,
+    side: &CheckSide,
+    filter: &crate::guards::PathFilter,
+) -> Result<std::collections::BTreeSet<String>> {
+    let repo = crate::gitctx::discover_repository(dir)?;
+    let mut out = std::collections::BTreeSet::new();
+    let commit = match base_commit(&repo, side) {
+        Some(id) => id,
+        None => match repo.head().ok().and_then(|h| h.peel_to_commit().ok()) {
+            Some(c) => c.id(),
+            None => return Ok(out),
+        },
+    };
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|c| c.tree())
+        .context("reading the base side's tree")?;
+    tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        if entry.kind() != Some(git2::ObjectType::Tree) {
+            if let Ok(name) = entry.name() {
+                let path = format!("{root}{name}");
+                if filter.matches(&path) {
+                    out.insert(path);
+                }
+            }
+        }
+        git2::TreeWalkResult::Ok
+    })
+    .context("walking the base side's tree")?;
+    Ok(out)
+}
+
+/// The merge base of `HEAD` with the base the check measures against.
+fn base_commit(repo: &git2::Repository, side: &CheckSide) -> Option<git2::Oid> {
+    let head = repo.head().ok()?.peel_to_commit().ok()?.id();
+    let named = match side {
+        CheckSide::Base(b) => b.clone(),
+        CheckSide::Default if crate::gitctx::environment_names_base() => {
+            crate::gitctx::detect_base_ref(None, None, None)
+        }
+        CheckSide::Default => change_base(repo).unwrap_or_else(|| "origin/main".to_string()),
+    };
+    let other = match named.strip_prefix("origin/") {
+        Some(local) => local.to_string(),
+        None => format!("origin/{named}"),
+    };
+    [named, other].iter().find_map(|name| {
+        let commit = repo.revparse_single(name).ok()?.peel_to_commit().ok()?;
+        repo.merge_base(commit.id(), head).ok()
+    })
 }
 
 /// `[hooks.premature-stop]` of the configuration on the base side of the change: the

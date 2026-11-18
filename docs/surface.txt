@@ -638,6 +638,9 @@ gates.scope-confinement.exempt_paths.reset
 gates.scope-confinement.forbidden_paths
 gates.scope-confinement.forbidden_paths.items
 gates.scope-confinement.forbidden_paths.reset
+gates.scope-confinement.locked_paths
+gates.scope-confinement.locked_paths.items
+gates.scope-confinement.locked_paths.reset
 gates.scope-confinement.plan_paths
 gates.scope-confinement.plan_paths.items
 gates.scope-confinement.plan_paths.reset

@@ -88,6 +88,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("placeholders", Direction::Shrunk),
     ("workflows", Direction::Shrunk),
     ("forbidden_paths", Direction::Shrunk),
+    ("locked_paths", Direction::Shrunk),
     ("plan_paths", Direction::Shrunk),
     ("section_headings", Direction::Shrunk),
     ("deny_dependencies", Direction::Shrunk),
