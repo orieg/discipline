@@ -1,9 +1,9 @@
 # Pre-registration for `head-tests-on-base-v1` (#1071): how many tests that merged coding-agent
 # pull requests added pass on the code as it was before the change, and why.
 #
-# Status `draft`. The owner locks it by changing the status to `locked-pre-data` in a commit
-# made before any test of the population runs at its base commit. Before the lock only the
-# population scan has run (`population.json`), which reads file lists and no test result.
+# Status `locked-pre-data`: locked by the owner as written in the draft, in a commit of its
+# own made before any test of the population ran. Before the lock only the population scan
+# had run (`population.json`), which reads file lists and no test result.
 # Any later change to the population, the outcomes, the classes, the rater prompt or the
 # verdict rule relabels the verdict `INTERMEDIATE_amended_threshold_redesign`.
 #
@@ -23,7 +23,7 @@
 
 [study]
 id = "head-tests-on-base-v1"
-status = "draft"
+status = "locked-pre-data"
 novelty_tier_claimed = "Characterisation"
 tier_justification = """
 Counts, on a fixed population of merged coding-agent pull requests, the added tests that pass
