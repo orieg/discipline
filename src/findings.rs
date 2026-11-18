@@ -244,6 +244,7 @@ findings! {
     // scope-confinement
     FILE_IN_FORBIDDEN_SCOPE = ["scope-confinement"], "file-in-forbidden-scope", "File In Forbidden Scope", Message;
     FILE_OUTSIDE_AUTHORIZED_SCOPE = ["scope-confinement"], "file-outside-authorized-scope", "File Outside Authorized Scope", Message;
+    LOCKED_FILE_CHANGED = ["scope-confinement"], "locked-file-changed", "Locked File Changed", Same;
     PLANNED_FILE_IN_FORBIDDEN_SCOPE = ["scope-confinement"], "planned-file-in-forbidden-scope", "Planned File In Forbidden Scope", Same;
     PLANNED_FILE_OUTSIDE_AUTHORIZED_SCOPE = ["scope-confinement"], "planned-file-outside-authorized-scope", "Planned File Outside Authorized Scope", Same;
     PLAN_WITHOUT_DECLARED_OUTPUTS = ["scope-confinement"], "plan-without-declared-outputs", "Plan Without Declared Outputs", Same;

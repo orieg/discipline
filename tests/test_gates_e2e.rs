@@ -19945,6 +19945,71 @@ fn scope_confinement_new_symlink_in_a_forbidden_path_is_reported() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
+const SCOPE_TESTS_LOCKED: &str = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.scope-confinement]\nenabled = true\nlocked_paths = [\"tests/**\"]\n";
+
+/// `locked_paths` (#1074): a test the base side has may not be changed, deleted or
+/// renamed; a new test passes, and `allow-scope` lifts the lock for one file.
+#[test]
+fn scope_confinement_locked_paths_refuse_changing_a_base_side_test() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", SCOPE_TESTS_LOCKED),
+            ("tests/oracle.txt", "expected = 3\n"),
+        ],
+        "base: lock tests/",
+    );
+    let locked = |run: &Run| {
+        scope_findings(run)
+            .into_iter()
+            .filter(|(c, _)| c == "scope-confinement/locked-file-changed")
+            .map(|(_, m)| m)
+            .collect::<Vec<_>>()
+    };
+
+    // An added file under the lock passes.
+    repo.write("tests/oracle_new.txt", "expected = 4\n");
+    repo.commit("test: add an oracle");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    // ... and stays editable on the branch: the base side does not have it.
+    repo.write("tests/oracle_new.txt", "expected = 5\n");
+    repo.commit("test: adjust the new oracle");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+
+    // Modified, deleted, renamed: each is refused at the base-side path.
+    let cases: [(&str, &dyn Fn()); 3] = [
+        ("modified", &|| {
+            repo.write("tests/oracle.txt", "expected = 4\n")
+        }),
+        ("deleted", &|| repo.git(&["rm", "-q", "tests/oracle.txt"])),
+        ("renamed", &|| {
+            repo.git(&["mv", "tests/oracle.txt", "tests/moved.txt"])
+        }),
+    ];
+    for (what, change) in cases {
+        repo.git(&["checkout", "-q", "-B", "work", "main"]);
+        change();
+        repo.commit(&format!("test: oracle {what}"));
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 1, "{what}: {}{}", run.stdout, run.stderr);
+        let found = locked(&run);
+        assert_eq!(found.len(), 1, "{what}: {found:?}");
+        assert!(found[0].contains("`tests/oracle.txt`"), "{what}: {found:?}");
+    }
+
+    // The recorded exception lifts it for that file.
+    repo.git(&["checkout", "-q", "-B", "work", "main"]);
+    repo.write("tests/oracle.txt", "expected = 4\n");
+    repo.commit(
+        "test: correct the oracle\n\nallow-scope: tests/oracle.txt the expected value was wrong",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(locked(&run).is_empty());
+}
+
 #[test]
 fn scope_confinement_invalid_glob_is_could_not_check_not_a_pass() {
     let repo = Repo::new();

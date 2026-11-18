@@ -4128,7 +4128,7 @@ const CASES: &[Case] = &[
                 ],
                 here: "main".to_string(),
             };
-            let scene = crate::pretool::Scene { worktrees: &wts, leases: &[], forbidden: None, branch: None };
+            let scene = crate::pretool::Scene { worktrees: &wts, leases: &[], forbidden: None, locked: None, branch: None };
             let call = crate::pretool::ToolCall {
                 tool: "Write".to_string(),
                 edits: true,
@@ -11660,6 +11660,35 @@ proptest! {
                 && out_of.len() == 1
                 && out_of[0].path == "secure/policy.py"
                 && inside.is_empty())
+        },
+    ),
+    (
+        "scope-confinement: locked_paths refuses a modified, deleted or renamed base-side file and lets an added one through (#1074)",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::scope_confinement::{changed_file_breaches, ScopeRules};
+            let rules = ScopeRules::new(&[], &[], &[])?.with_locked(&["tests/**".to_string()])?;
+            let file = |from: &str, to: &str, kind| ChangedFile {
+                path: to.to_string(),
+                old_path: from.to_string(),
+                kind,
+                added_lines: Default::default(),
+            };
+            let locked = |f: ChangedFile| {
+                let b = changed_file_breaches(&f, &rules);
+                b.len() == 1 && b[0].breach == "locked" && b[0].path == "tests/t.py"
+            };
+            let passes = |f: ChangedFile| changed_file_breaches(&f, &rules).is_empty();
+            let hook = crate::pretool::LockedFiles(["tests/t.py".to_string()].into_iter().collect());
+            Ok(locked(file("tests/t.py", "tests/t.py", ChangeKind::Modified))
+                && locked(file("tests/t.py", "tests/t.py", ChangeKind::Deleted))
+                && locked(file("tests/t.py", "src/t.py", ChangeKind::Renamed))
+                && passes(file("tests/new.py", "tests/new.py", ChangeKind::Added))
+                && passes(file("src/t.py", "tests/u.py", ChangeKind::Renamed))
+                && hook.locks("tests/t.py")
+                && hook.locks("tests")
+                && !hook.locks("tests/new.py")
+                && !hook.locks("tests/t"))
         },
     ),
     (

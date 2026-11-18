@@ -253,6 +253,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `sandbox-config/sandbox-config-unreadable` | Sandbox Configuration Unreadable |
 | `scope-confinement/file-in-forbidden-scope` | File In Forbidden Scope |
 | `scope-confinement/file-outside-authorized-scope` | File Outside Authorized Scope |
+| `scope-confinement/locked-file-changed` | Locked File Changed |
 | `scope-confinement/planned-file-in-forbidden-scope` | Planned File In Forbidden Scope |
 | `scope-confinement/planned-file-outside-authorized-scope` | Planned File Outside Authorized Scope |
 | `scope-confinement/plan-without-declared-outputs` | Plan Without Declared Outputs |
@@ -1133,11 +1134,12 @@ How a gate's default severity is allowed to move. This section is doctrine for c
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `scope-confinement`
-- **Rule:** Agent modifications must remain strictly within configured authorized directory and file paths (`allowed_paths`) and never touch restricted paths (`forbidden_paths`).
+- **Rule:** Agent modifications must remain strictly within configured authorized directory and file paths (`allowed_paths`), never touch restricted paths (`forbidden_paths`), and never change a file the base side has under `locked_paths`.
 - **Languages:** Any.
 - **What it catches:**
   - Modifications touching paths outside `allowed_paths` (`file-outside-authorized-scope`).
   - Modifications touching paths matching `forbidden_paths` (e.g. security credentials, CI workflow definitions, release scripts) (`file-in-forbidden-scope`).
+  - A file under `locked_paths` that exists on the base side, modified, deleted or renamed (judged at its old path) (`locked-file-changed`). A file the change adds there passes. It is the test oracle lock (#1074; [the recipe](CONFIGURATION.md#test-oracle-lock)): `locked_paths = ["tests/**"]` lets an agent add tests and not change the ones it is judged by. `forbidden_paths` is judged first; `exempt_paths` lifts the lock. The pre-tool hook refuses the same edit, and a shell command that writes, moves or removes a locked file or a directory holding one, before it runs.
   - Renames, judged at both ends: `git mv secure/policy.py src/` removes a file from `secure/`, so it is reported against `secure/policy.py` (the message names where it moved), as deleting it would be; a rename into a forbidden path is reported at its destination.
   - Symlinks added, retargeted or removed inside a forbidden path, or outside `allowed_paths`. The link itself is the change; other gates read a symlink as its target and skip it.
   - **Plan mode** (`check_plans = true`): each changed plan file matching `plan_paths` is read for the outputs it declares (an `outputs:` front-matter list, an `Outputs:` / `Produces:` / `Writes:` label or heading with its list, or `into` / `update` / `create` / `write to` followed by a path). A declared output inside `forbidden_paths` is `planned-file-in-forbidden-scope`, one outside `allowed_paths` is `planned-file-outside-authorized-scope`, both reported on the plan's line. With `require_declared_outputs = true`, a plan that declares no output is `plan-without-declared-outputs`; otherwise it is a note.
@@ -1150,8 +1152,10 @@ How a gate's default severity is allowed to move. This section is doctrine for c
   - Modifications when `allowed_paths` is empty and no `forbidden_paths` are matched.
   - A write through a symlink that lives outside the forbidden path and points into it: the change is to the target file, which is judged at its own path only when the target itself changes in the diff.
   - Plan outputs written in a form the extractor does not read (prose without a path-like token, a path with spaces).
+  - A planned output under `locked_paths`: a plan does not say whether the file exists, so `locked_paths` is not read in plan mode.
+  - A change that games a test without touching a file under `locked_paths`: an edit to the code under test, or to a test helper or configuration outside the lock.
 - **Lifting directive:** `allow-scope: <path-or-directory/> <reason>` (a directory prefix is written with its slash).
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`, `check_plans`, `plan_paths`, `require_declared_outputs`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`, `locked_paths`, `check_plans`, `plan_paths`, `require_declared_outputs`.
 
 #### `suppression-delta`
 - **Rule:** Rejects net increases in compiler, linter, or type checker suppression annotations unless explicitly authorized. The sites come from the language packs (`ParsedFileFacts::escape_hatches`), so a marker inside a string literal or an ordinary comment is not one. The count is a delta: each changed file's head side is compared with its base side, and a site that merely moved, or that was already there as often, is not new.
@@ -1693,7 +1697,7 @@ How a gate's default severity is allowed to move. This section is doctrine for c
   - Removing `ci_skip_severity` where it was above the gate's `severity`, and removing or repointing `test-floor`'s `test_report`, `base_report` or `head_report`.
   - Removing an optional key whose absence reads looser than the value removed: `max_noise_cv` (absent means no noise check), and a gate's `allow_hidden = false` when `[directives] allow_hidden = true` (the gate then inherits it). Removing `noise_margin_pct` is not one: absent means 0.
   - Growing loosening lists (`exempt_paths`, `allowed_users`, `allow_patterns`, `assert_helper_fns`, `allowed_suppressions`).
-  - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`, `term_denylist`, `workflows`, `forbidden_paths`, `deny_dependencies`), and emptying an allow-list (`allow_dependencies`, `allowed_paths`).
+  - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`, `term_denylist`, `workflows`, `forbidden_paths`, `locked_paths`, `deny_dependencies`), and emptying an allow-list (`allow_dependencies`, `allowed_paths`).
   - Removing or editing an entry of a list of tables (`groups`, `rules`, `commands`, `citation_measurement_jobs`). An entry of `groups`, `rules` or `commands` is matched across base and head by its identity, and an entry whose only edits tighten it is not a loss:
 
     | Option | Identity | Stricter edits | Every other field |

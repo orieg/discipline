@@ -291,9 +291,39 @@ pub struct Scene<'a> {
     pub leases: &'a [(String, Lease)],
     /// `scope-confinement`'s `forbidden_paths` when that gate is enabled.
     pub forbidden: Option<&'a crate::guards::PathFilter>,
+    /// The files of `scope-confinement`'s `locked_paths` that exist on the base side.
+    pub locked: Option<&'a LockedFiles>,
     /// The branch checked out in this session's worktree (a push without a refspec
     /// pushes it).
     pub branch: Option<&'a str>,
+}
+
+/// The files `locked_paths` binds: those of its globs that exist on the base side
+/// (`#1074`). An agent may add a file there, not change, delete or rename one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LockedFiles(pub std::collections::BTreeSet<String>);
+
+impl LockedFiles {
+    /// Whether `rel` (relative to the worktree root) is a locked file, or a directory
+    /// holding one.
+    pub fn locks(&self, rel: &str) -> bool {
+        let rel = rel.trim_end_matches('/');
+        if self.0.contains(rel) {
+            return true;
+        }
+        let prefix = format!("{rel}/");
+        self.0
+            .range(prefix.clone()..)
+            .next()
+            .is_some_and(|p| p.starts_with(&prefix))
+    }
+
+    fn refusal(rel: &str) -> Verdict {
+        Verdict::Deny(format!(
+            "{} exists on the base side and matches `scope-confinement`'s locked_paths; this repository lets an agent add a file there, not change, delete or rename one. Write a new file instead",
+            q(rel)
+        ))
+    }
 }
 
 fn check_worktree_lease(key: &str, call: &ToolCall, scene: &Scene) -> Option<Verdict> {
@@ -362,6 +392,14 @@ pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
                         "{} matches `scope-confinement`'s forbidden_paths; this repository does not let an agent edit it",
                         q(&rel)
                     ));
+                }
+            }
+        }
+        if let Some(l) = scene.locked {
+            if let Ok(rel) = path.strip_prefix(root) {
+                let rel = rel.to_string_lossy().replace('\\', "/");
+                if !rel.is_empty() && l.locks(&rel) {
+                    return LockedFiles::refusal(&rel);
                 }
             }
         }
@@ -575,39 +613,56 @@ fn resolve_tool_loop_config(
     None
 }
 
-/// Resolves `scope-confinement`'s `forbidden_paths`, combining the base ref's
-/// configuration with the working tree's so a session cannot weaken or remove
-/// base-configured `forbidden_paths` by editing `discipline.toml`.
-fn resolve_forbidden_paths(
+/// Resolves `scope-confinement`'s `forbidden_paths` and `locked_paths`, combining the base
+/// ref's configuration with the working tree's so a session cannot weaken or remove
+/// base-configured globs by editing `discipline.toml`. `locked_paths` resolves to the
+/// files of its globs that exist on the base side.
+fn resolve_scope_paths(
     cwd: &Path,
     root: &Path,
-) -> anyhow::Result<Option<crate::guards::PathFilter>> {
-    let mut patterns: Vec<String> = Vec::new();
+) -> anyhow::Result<(Option<crate::guards::PathFilter>, Option<LockedFiles>)> {
+    let mut forbidden: Vec<String> = Vec::new();
+    let mut locked: Vec<String> = Vec::new();
+    let mut add = |s: &crate::config::ScopeConfinementGate| {
+        if s.enabled {
+            for p in &s.forbidden_paths {
+                if !forbidden.contains(p) {
+                    forbidden.push(p.clone());
+                }
+            }
+            for p in &s.locked_paths {
+                if !locked.contains(p) {
+                    locked.push(p.clone());
+                }
+            }
+        }
+    };
     if let Some(base_cfg) =
         crate::hook::base_discipline_config(cwd, &crate::hook::CheckSide::Default)
     {
-        let s = &base_cfg.gates.scope_confinement;
-        if s.enabled {
-            patterns.extend(s.forbidden_paths.iter().cloned());
-        }
+        add(&base_cfg.gates.scope_confinement);
     }
     let config = root.join("discipline.toml");
     if config.is_file() {
         let c = crate::config::DisciplineConfig::load_from_file(&config)?;
-        let s = &c.gates.scope_confinement;
-        if s.enabled {
-            for p in &s.forbidden_paths {
-                if !patterns.contains(p) {
-                    patterns.push(p.clone());
-                }
-            }
-        }
+        add(&c.gates.scope_confinement);
     }
-    if patterns.is_empty() {
-        Ok(None)
+    let forbidden = if forbidden.is_empty() {
+        None
     } else {
-        Ok(Some(crate::guards::PathFilter::new(&patterns)?))
-    }
+        Some(crate::guards::PathFilter::new(&forbidden)?)
+    };
+    let locked = if locked.is_empty() {
+        None
+    } else {
+        let filter = crate::guards::PathFilter::new(&locked)?;
+        Some(LockedFiles(crate::hook::base_side_paths(
+            cwd,
+            &crate::hook::CheckSide::Default,
+            &filter,
+        )?))
+    };
+    Ok((forbidden, locked))
 }
 
 /// Checks `[hooks.tool-loop]` (`#701`): updates consecutive identical tool-call count in
@@ -722,11 +777,12 @@ pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -
             .into_iter()
             .filter(|(_, l)| l.is_live(now))
             .collect();
-        let forbidden = resolve_forbidden_paths(&cwd, &here.root)?;
+        let (forbidden, locked) = resolve_scope_paths(&cwd, &here.root)?;
         let scene = Scene {
             worktrees: &wts,
             leases: &leases,
             forbidden: forbidden.as_ref(),
+            locked: locked.as_ref(),
             branch: here.branch.as_deref(),
         };
         Ok((judge(&call, &cwd, &scene), Some(here.root)))
@@ -993,7 +1049,9 @@ fn judge_shell_depth(cmd: &str, cwd: &Path, scene: &Scene, depth: usize) -> Verd
         (Some(key) != here.as_ref()).then(|| (key.clone(), root.clone()))
     };
     let forbidden_in = |p: &str, dir: &Path| -> Option<Verdict> {
-        let f = scene.forbidden?;
+        if scene.forbidden.is_none() && scene.locked.is_none() {
+            return None;
+        }
         let path = resolve(p, dir);
         let (_, root) = scene.worktrees.owner(&path)?;
         let rel = path.strip_prefix(root).ok()?;
@@ -1001,13 +1059,19 @@ fn judge_shell_depth(cmd: &str, cwd: &Path, scene: &Scene, depth: usize) -> Verd
         if rel.is_empty() {
             return None;
         }
-        let dir_probe = format!("{}/_", rel.trim_end_matches('/'));
-        (f.matches(&rel) || f.matches(&dir_probe)).then(|| {
-            Verdict::Deny(format!(
-                "{} matches `scope-confinement`'s forbidden_paths; this repository does not let an agent edit it",
-                q(&rel)
-            ))
-        })
+        if let Some(f) = scene.forbidden {
+            let dir_probe = format!("{}/_", rel.trim_end_matches('/'));
+            if f.matches(&rel) || f.matches(&dir_probe) {
+                return Some(Verdict::Deny(format!(
+                    "{} matches `scope-confinement`'s forbidden_paths; this repository does not let an agent edit it",
+                    q(&rel)
+                )));
+            }
+        }
+        scene
+            .locked
+            .filter(|l| l.locks(&rel))
+            .map(|_| LockedFiles::refusal(&rel))
     };
     let dynamic = |what: &str| {
         Verdict::Deny(format!(
@@ -2107,6 +2171,7 @@ mod tests {
             worktrees: &wts,
             leases: &[],
             forbidden: None,
+            locked: None,
             branch: None,
         };
         let cwd = main.canonicalize().unwrap();
@@ -2163,6 +2228,7 @@ mod tests {
             worktrees: &wts,
             leases: &leases,
             forbidden: None,
+            locked: None,
             branch: None,
         };
         let v = judge(&edit("a.txt", "s-me"), &cwd, &scene);
@@ -2180,6 +2246,7 @@ mod tests {
             worktrees: &wts,
             leases: &leases,
             forbidden: None,
+            locked: None,
             branch: None,
         };
         assert_eq!(judge(&edit("a.txt", "s-me"), &cwd, &scene), Verdict::Allow);
@@ -2194,6 +2261,7 @@ mod tests {
             worktrees: &wts,
             leases: &[],
             forbidden: Some(&f),
+            locked: None,
             branch: None,
         };
         let cwd = d.path().canonicalize().unwrap();
@@ -2202,6 +2270,63 @@ mod tests {
             Verdict::Deny(_)
         ));
         assert_eq!(judge(&edit("src/ci.rs", "s"), &cwd, &scene), Verdict::Allow);
+    }
+
+    #[test]
+    fn locked_paths_refuse_a_base_side_file_and_let_a_new_one_through() {
+        let d = tempfile::tempdir().unwrap();
+        let wts = scene_with(&[("main", d.path())], "main");
+        let l = LockedFiles(
+            ["tests/test_a.py", "tests/unit/test_b.py"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        );
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &[],
+            forbidden: None,
+            locked: Some(&l),
+            branch: None,
+        };
+        let cwd = d.path().canonicalize().unwrap();
+        let locked = |v: &Verdict| matches!(v, Verdict::Deny(r) if r.contains("locked_paths"));
+        assert!(locked(&judge(&edit("tests/test_a.py", "s"), &cwd, &scene)));
+        assert!(locked(&judge(
+            &edit("tests/unit/test_b.py", "s"),
+            &cwd,
+            &scene
+        )));
+        // A new file under the same glob, and a file outside it, pass.
+        assert_eq!(
+            judge(&edit("tests/test_new.py", "s"), &cwd, &scene),
+            Verdict::Allow
+        );
+        assert_eq!(judge(&edit("src/a.py", "s"), &cwd, &scene), Verdict::Allow);
+        // A name that only shares a prefix with a locked file is not under it.
+        assert_eq!(
+            judge(&edit("tests/test_a.py2", "s"), &cwd, &scene),
+            Verdict::Allow
+        );
+        for c in [
+            "echo x > tests/test_a.py",
+            "rm tests/test_a.py",
+            "mv tests/test_a.py tests/test_c.py",
+            "sed -i 's/a/b/' tests/unit/test_b.py",
+            "rm -r tests/unit",
+            "rm -r tests",
+        ] {
+            assert!(locked(&judge_shell(c, &cwd, &scene)), "{c}");
+        }
+        for c in [
+            "echo x > tests/test_c.py",
+            "touch tests/unit/test_d.py",
+            "mkdir tests/new",
+            "rm -r tests/other",
+            "cat tests/test_a.py",
+        ] {
+            assert_eq!(judge_shell(c, &cwd, &scene), Verdict::Allow, "{c}");
+        }
     }
 
     #[test]
@@ -2243,6 +2368,7 @@ mod tests {
             worktrees: &wts,
             leases: &leases,
             forbidden: None,
+            locked: None,
             branch: Some("work"),
         };
         let cwd = main.canonicalize().unwrap();
@@ -2409,6 +2535,7 @@ mod tests {
             worktrees: &worktrees,
             leases: &[],
             forbidden: None,
+            locked: None,
             branch: Some("main"),
         };
         // The calls of the `pretool_payload` fuzz target, on its crash input.
@@ -2458,6 +2585,7 @@ mod tests {
             worktrees: &wts,
             leases: &[],
             forbidden: None,
+            locked: None,
             branch: None,
         };
         let cwd = main.canonicalize().unwrap();
@@ -2486,6 +2614,7 @@ mod tests {
             worktrees: &wts,
             leases: &[],
             forbidden: None,
+            locked: None,
             branch: None,
         };
         let cwd = main.canonicalize().unwrap();
@@ -2604,6 +2733,7 @@ mod tests {
             worktrees: &wts,
             leases: &leases,
             forbidden: None,
+            locked: None,
             branch: Some("work"),
         };
         let cwd = main.canonicalize().unwrap();
@@ -2720,6 +2850,7 @@ mod tests {
             worktrees: &wts,
             leases: &[],
             forbidden: None,
+            locked: None,
             branch: None,
         };
         let cwd = main.canonicalize().unwrap();
@@ -2771,6 +2902,7 @@ mod tests {
             worktrees: &wts,
             leases: &[],
             forbidden: Some(&f),
+            locked: None,
             branch: None,
         };
         let v = judge(&edit("wt\u{e9}/r\u{e9}sum\u{e9}.txt", "s"), &cwd, &scene);
@@ -2792,6 +2924,7 @@ mod tests {
             worktrees: &wts,
             leases: &leases,
             forbidden: None,
+            locked: None,
             branch: None,
         };
         let v = judge(&edit("r\u{e9}sum\u{e9}.txt", "s-me"), &cwd, &leased);
@@ -2843,6 +2976,7 @@ mod tests {
             worktrees: &wts,
             leases: &leased_here,
             forbidden: Some(&f),
+            locked: None,
             branch: Some("work"),
         };
         let shell_call = ToolCall {
@@ -2864,6 +2998,7 @@ mod tests {
             worktrees: &wts,
             leases: &other_leases,
             forbidden: Some(&f),
+            locked: None,
             branch: Some("work"),
         };
         #[cfg(unix)]
@@ -2985,6 +3120,7 @@ mod tests {
             worktrees: &wts,
             leases: &other_leases,
             forbidden: Some(&f),
+            locked: None,
             branch: Some("work"),
         };
         let cwd = main.canonicalize().unwrap();

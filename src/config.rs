@@ -2662,6 +2662,9 @@ pub struct ScopeConfinementGate {
     pub exempt_paths: Vec<String>,
     pub allowed_paths: Vec<String>,
     pub forbidden_paths: Vec<String>,
+    /// Globs of paths whose files present on the base side may not be modified, deleted
+    /// or renamed; a file added there passes (the test oracle lock, #1074).
+    pub locked_paths: Vec<String>,
     pub check_plans: bool,
     pub plan_paths: Vec<String>,
     pub require_declared_outputs: bool,
@@ -2675,6 +2678,7 @@ impl Default for ScopeConfinementGate {
             exempt_paths: Vec::new(),
             allowed_paths: Vec::new(),
             forbidden_paths: Vec::new(),
+            locked_paths: Vec::new(),
             check_plans: false,
             plan_paths: vec![
                 "plans/**/*.md".to_string(),

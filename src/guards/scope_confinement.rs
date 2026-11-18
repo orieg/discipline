@@ -16,6 +16,8 @@ pub struct ScopeRules {
     pub allowed: PathFilter,
     pub has_allowed: bool,
     pub forbidden: PathFilter,
+    /// `locked_paths`: binds only a file that exists on the base side.
+    pub locked: PathFilter,
 }
 
 impl ScopeRules {
@@ -27,18 +29,39 @@ impl ScopeRules {
             allowed: PathFilter::new(allowed)?,
             has_allowed: !allowed.is_empty(),
             forbidden: PathFilter::new(forbidden)?,
+            locked: PathFilter::new(&[])?,
         })
     }
 
-    /// `"forbidden"`, `"outside-allowed"`, or `None` for a path inside the scope.
+    /// The same rules with `locked_paths` compiled in.
+    pub fn with_locked(mut self, locked: &[String]) -> Result<Self> {
+        self.locked = PathFilter::new(locked)?;
+        Ok(self)
+    }
+
+    /// `"forbidden"`, `"outside-allowed"`, or `None` for a path inside the scope, judged
+    /// as a file the base side does not have (`locked_paths` does not bind it).
     pub fn breach(&self, path: &str) -> Option<&'static str> {
-        check_path_confinement(
-            path,
-            &self.exempt,
-            &self.allowed,
-            self.has_allowed,
-            &self.forbidden,
-        )
+        self.judge(path, false)
+    }
+
+    /// As [`Self::breach`], for a file that exists on the base side when `on_base`: it is
+    /// `"locked"` inside `locked_paths`. `forbidden_paths` is judged first, `allowed_paths`
+    /// last, and `exempt_paths` lifts all three.
+    pub fn judge(&self, path: &str, on_base: bool) -> Option<&'static str> {
+        if self.exempt.matches(path) {
+            return None;
+        }
+        if self.forbidden.matches(path) {
+            return Some("forbidden");
+        }
+        if on_base && self.locked.matches(path) {
+            return Some("locked");
+        }
+        if self.has_allowed && !self.allowed.matches(path) {
+            return Some("outside-allowed");
+        }
+        None
     }
 }
 
@@ -55,9 +78,13 @@ pub struct PathBreach {
 
 /// The paths of `file` that leave the scope. A change lands at its path; a rename also
 /// removes its source, which is judged the same as a deletion of it would be.
+///
+/// A modified or deleted file, and the source of a rename, exist on the base side; an
+/// added file and the destination of a rename do not.
 pub fn changed_file_breaches(file: &ChangedFile, rules: &ScopeRules) -> Vec<PathBreach> {
     let mut out = Vec::new();
-    if let Some(breach) = rules.breach(&file.path) {
+    let on_base = matches!(file.kind, ChangeKind::Modified | ChangeKind::Deleted);
+    if let Some(breach) = rules.judge(&file.path, on_base) {
         out.push(PathBreach {
             path: file.path.clone(),
             breach,
@@ -65,7 +92,7 @@ pub fn changed_file_breaches(file: &ChangedFile, rules: &ScopeRules) -> Vec<Path
         });
     }
     if matches!(file.kind, ChangeKind::Renamed) && file.old_path != file.path {
-        if let Some(breach) = rules.breach(&file.old_path) {
+        if let Some(breach) = rules.judge(&file.old_path, true) {
             out.push(PathBreach {
                 path: file.old_path.clone(),
                 breach,
@@ -104,7 +131,8 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
         &settings.exempt_paths,
         &settings.allowed_paths,
         &settings.forbidden_paths,
-    )?;
+    )?
+    .with_locked(&settings.locked_paths)?;
 
     for file in &changed {
         for b in changed_file_breaches(file, &rules) {
@@ -113,6 +141,11 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
                     &crate::findings::FILE_IN_FORBIDDEN_SCOPE,
                     "inside forbidden scope",
                     "changes to this path are forbidden by [gates.scope-confinement.forbidden_paths]; use `discipline:allow(scope-confinement): <reason>` to waive",
+                ),
+                "locked" => (
+                    &crate::findings::LOCKED_FILE_CHANGED,
+                    "locked: it exists on the base side and matches [gates.scope-confinement.locked_paths]",
+                    "a file may be added under locked_paths, not changed, deleted or renamed; write a new file instead, or use `allow-scope: <path> <reason>` to waive",
                 ),
                 _ => (
                     &crate::findings::FILE_OUTSIDE_AUTHORIZED_SCOPE,
@@ -127,10 +160,10 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
                 .unwrap_or_default();
             if let Some(ov) = ctx.find_override(GATE, kind, ALLOW_SCOPE, &b.path) {
                 out.overrides.push(ov.clone());
-                let label = if b.breach == "forbidden" {
-                    "forbidden"
-                } else {
-                    "out-of-scope"
+                let label = match b.breach {
+                    "forbidden" => "forbidden",
+                    "locked" => "locked",
+                    _ => "out-of-scope",
                 };
                 out.notes.push(format!(
                     "override applied: `{}: {}` for {label} file `{}`{moved} ({})",
@@ -498,6 +531,64 @@ mod tests {
             kind: crate::gitctx::ChangeKind::Renamed,
             added_lines: Default::default(),
         }
+    }
+
+    fn change(path: &str, kind: crate::gitctx::ChangeKind) -> crate::gitctx::ChangedFile {
+        crate::gitctx::ChangedFile {
+            path: path.to_string(),
+            old_path: path.to_string(),
+            kind,
+            added_lines: Default::default(),
+        }
+    }
+
+    #[test]
+    fn locked_paths_bind_only_a_file_the_base_side_has() {
+        use super::{changed_file_breaches, ScopeRules};
+        use crate::gitctx::ChangeKind::{Added, Deleted, Modified};
+        let rules = ScopeRules::new(
+            &["tests/fixtures/**".to_string()],
+            &[],
+            &["tests/secret/**".to_string()],
+        )
+        .unwrap()
+        .with_locked(&["tests/**".to_string()])
+        .unwrap();
+        let breach = |f: &crate::gitctx::ChangedFile| {
+            changed_file_breaches(f, &rules)
+                .into_iter()
+                .map(|b| (b.path, b.breach))
+                .collect::<Vec<_>>()
+        };
+        let locked = |p: &str| vec![(p.to_string(), "locked")];
+        assert_eq!(
+            breach(&change("tests/t.py", Modified)),
+            locked("tests/t.py")
+        );
+        assert_eq!(breach(&change("tests/t.py", Deleted)), locked("tests/t.py"));
+        // An added test passes; so does a change outside the glob.
+        assert!(breach(&change("tests/new.py", Added)).is_empty());
+        assert!(breach(&change("src/a.py", Modified)).is_empty());
+        // A rename out of the glob, or inside it, removes a base-side file there; a rename
+        // into it adds one.
+        assert_eq!(
+            breach(&renamed("tests/t.py", "src/t.py")),
+            locked("tests/t.py")
+        );
+        assert_eq!(
+            breach(&renamed("tests/t.py", "tests/u.py")),
+            locked("tests/t.py")
+        );
+        assert!(breach(&renamed("src/t.py", "tests/t.py")).is_empty());
+        // `forbidden_paths` comes first, and `exempt_paths` lifts the lock.
+        assert_eq!(
+            breach(&change("tests/secret/k", Added)),
+            vec![("tests/secret/k".to_string(), "forbidden")]
+        );
+        assert!(breach(&change("tests/fixtures/f.json", Modified)).is_empty());
+        // Without `locked_paths`, nothing is locked.
+        let open = ScopeRules::new(&[], &[], &[]).unwrap();
+        assert!(changed_file_breaches(&change("tests/t.py", Modified), &open).is_empty());
     }
 
     #[test]
