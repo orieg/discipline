@@ -11949,6 +11949,87 @@ enabled = false
     );
 }
 
+/// The base side's `fail_on_overrides` and its actor list hold under the default policy
+/// side: a change cannot switch the sign-off off, or add the run's own login to the
+/// list, with a waiver it writes itself (#1066).
+#[test]
+fn a_change_cannot_lift_the_base_sides_sign_off() {
+    const BASE: &str = "[meta]\nversion = 1\nname = \"t\"\n[directives]\nfail_on_overrides = true\nallowed_override_actors = [\"owner\"]\n[gates.test-floor]\nenabled = false\n";
+    // The change removes a test with a `removes:` waiver, and edits the policy with
+    // `head_cfg` under an `allow-gate-weakening: directives` line it writes itself.
+    let change = |head_cfg: Option<&str>| {
+        let repo = repo_with_base_config(BASE);
+        repo.write(
+            "tests/a.rs",
+            &GOOD_TEST.replace(
+                "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+                "",
+            ),
+        );
+        let mut message =
+            "test: remove orders\n\nremoves: tests/a.rs orders moved to proptest".to_string();
+        if let Some(cfg) = head_cfg {
+            repo.write("discipline.toml", cfg);
+            message.push_str("\nallow-gate-weakening: directives the sign-off moves to review");
+        }
+        repo.commit(&message);
+        repo
+    };
+    let notes = |run: &Run| -> String {
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+        v["directive_notes"].to_string()
+    };
+
+    // Control: the policy untouched, the waiver needs sign-off, and no floor note.
+    let run = change(None).check(&["--actor", "agent"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert!(
+        !notes(&run).contains("fail_on_overrides"),
+        "{}",
+        notes(&run)
+    );
+
+    // A: the change switches `fail_on_overrides` off.
+    let off = BASE.replace("fail_on_overrides = true", "fail_on_overrides = false");
+    let run = change(Some(&off)).check(&["--actor", "agent"]);
+    assert_eq!(run.code, 1, "A: {}\n{}", run.stdout, run.stderr);
+    assert!(
+        notes(&run).contains("`fail_on_overrides` kept on: the base branch sets it"),
+        "A: {}",
+        notes(&run)
+    );
+
+    // B: the change adds the run's own login to the actor list.
+    let added = BASE.replace("[\"owner\"]", "[\"owner\", \"agent\"]");
+    let run = change(Some(&added)).check(&["--actor", "agent"]);
+    assert_eq!(run.code, 1, "B: {}\n{}", run.stdout, run.stderr);
+    assert!(
+        notes(&run)
+            .contains("in this change's `allowed_override_actors` but not the base branch's")
+            && !notes(&run).contains("`fail_on_overrides` not applied"),
+        "B: {}",
+        notes(&run)
+    );
+
+    // An actor on both sides' lists keeps the bypass.
+    let run = change(Some(&added)).check(&["--actor", "owner"]);
+    assert_eq!(run.code, 0, "owner: {}\n{}", run.stdout, run.stderr);
+
+    // A base without the sign-off sets no floor: the change may leave it off.
+    let base_off = BASE.replace("fail_on_overrides = true", "fail_on_overrides = false");
+    let repo = repo_with_base_config(&base_off);
+    repo.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
+    );
+    repo.commit("test: remove orders\n\nremoves: tests/a.rs orders moved to proptest");
+    let run = repo.check(&["--actor", "agent"]);
+    assert_eq!(run.code, 0, "base off: {}\n{}", run.stdout, run.stderr);
+}
+
 /// A refused hidden directive whose name matches no gate's own words is still noted once,
 /// on its directive's gate, and never with its reason (#362).
 /// #362: a refused hidden directive's reason is text a reviewer cannot see in the rendered

@@ -1257,6 +1257,28 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "overrides: a change cannot switch the base's fail_on_overrides off or add its own bypass actor (#1066)",
+        || {
+            use crate::config::DirectivesConfig;
+            use crate::policy_floor::{bypass_actors, stricter_directives};
+            let base = DirectivesConfig {
+                fail_on_overrides: true,
+                allowed_override_actors: vec!["owner".into()],
+                ..Default::default()
+            };
+            let head = DirectivesConfig {
+                fail_on_overrides: false,
+                allowed_override_actors: vec!["Owner".into(), "agent".into()],
+                ..Default::default()
+            };
+            let open = DirectivesConfig::default();
+            Ok(stricter_directives(&head, Some(&base)).fail_on_overrides
+                && !stricter_directives(&head, Some(&open)).fail_on_overrides
+                && bypass_actors(&head, Some(&base)) == vec!["Owner".to_string()]
+                && bypass_actors(&head, None).len() == 2)
+        },
+    ),
+    (
         "overrides: the inline override budget refuses the marker past it, not the one at it",
         || {
             use crate::config::DirectivesConfig;

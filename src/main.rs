@@ -1003,7 +1003,16 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         discipline::timings::phase("review-routing", || discipline::routing::compute(&ctx))
             .map_err(|e| tag(Reason::Repository, e))?;
 
-    let raw_fail_on_overrides = config.directives.fail_on_overrides;
+    // Read from the floored value: a `fail_on_overrides` the base sets, and the base's
+    // actor list, hold whichever side judges the change (#1066).
+    let raw_fail_on_overrides = directives.fail_on_overrides;
+    if raw_fail_on_overrides && !config.directives.fail_on_overrides {
+        summary.directive_notes.push(
+            "`fail_on_overrides` kept on: the base branch sets it, and the change cannot switch it off".to_string(),
+        );
+    }
+    let bypass =
+        discipline::policy_floor::bypass_actors(&config.directives, floor.base_directives.as_ref());
     let actor = args
         .actor
         .clone()
@@ -1014,14 +1023,20 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         .or_else(|| std::env::var("GITLAB_USER_LOGIN").ok())
         .filter(|s| !s.trim().is_empty());
 
-    let actor_authorized = match &actor {
-        Some(act) => config
-            .directives
-            .allowed_override_actors
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(act)),
-        None => false,
+    let listed = |list: &[String]| {
+        actor
+            .as_ref()
+            .is_some_and(|act| list.iter().any(|allowed| allowed.eq_ignore_ascii_case(act)))
     };
+    let actor_authorized = listed(&bypass);
+    if raw_fail_on_overrides
+        && !actor_authorized
+        && listed(&config.directives.allowed_override_actors)
+    {
+        summary.directive_notes.push(
+            "`fail_on_overrides` applied: the run's actor is in this change's `allowed_override_actors` but not the base branch's".to_string(),
+        );
+    }
 
     let fail_on_overrides = if raw_fail_on_overrides && actor_authorized {
         false

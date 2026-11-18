@@ -243,7 +243,8 @@ pub fn disarms(base: &DisciplineConfig, head: &DisciplineConfig, config_path: &s
 
 /// The `[directives]` the run's budgets and approval rule are judged by: the side in
 /// force, held to the base side's floor. A budget is the lower of the two; an approval
-/// rule the base sets stays, with the base's reviewers, so a change cannot name its own.
+/// rule the base sets stays, with the base's reviewers, so a change cannot name its own;
+/// a `fail_on_overrides` the base sets stays on (#1066).
 pub fn stricter_directives(
     in_force: &DirectivesConfig,
     base: Option<&DirectivesConfig>,
@@ -262,7 +263,27 @@ pub fn stricter_directives(
         out.require_approval = true;
         out.allowed_override_actors = base.allowed_override_actors.clone();
     }
+    out.fail_on_overrides |= base.fail_on_overrides;
     out
+}
+
+/// The run actors for whom `fail_on_overrides` is not applied: the side in force's
+/// `allowed_override_actors`, less any login the base side's list does not hold, so a
+/// change cannot add its own (#1066). Without a base configuration the side in force
+/// decides alone.
+pub fn bypass_actors(in_force: &DirectivesConfig, base: Option<&DirectivesConfig>) -> Vec<String> {
+    in_force
+        .allowed_override_actors
+        .iter()
+        .filter(|a| {
+            base.is_none_or(|b| {
+                b.allowed_override_actors
+                    .iter()
+                    .any(|x| x.eq_ignore_ascii_case(a))
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -485,5 +506,30 @@ mod tests {
         );
         // No base configuration: the side in force decides alone.
         assert_eq!(stricter_directives(&head, None).max_overrides, None);
+    }
+
+    #[test]
+    fn the_base_sign_off_and_its_actor_list_hold_against_the_change() {
+        let base = DirectivesConfig {
+            fail_on_overrides: true,
+            allowed_override_actors: vec!["owner".into()],
+            ..DirectivesConfig::default()
+        };
+        let head = DirectivesConfig {
+            fail_on_overrides: false,
+            allowed_override_actors: vec!["OWNER".into(), "agent".into()],
+            ..DirectivesConfig::default()
+        };
+        // The base's sign-off stays on; a base without it sets no floor.
+        assert!(stricter_directives(&head, Some(&base)).fail_on_overrides);
+        let open = DirectivesConfig::default();
+        assert!(!stricter_directives(&head, Some(&open)).fail_on_overrides);
+        assert!(stricter_directives(&base, Some(&open)).fail_on_overrides);
+        // A login the change adds does not bypass; one on both lists does, in any case.
+        assert_eq!(bypass_actors(&head, Some(&base)), vec!["OWNER".to_string()]);
+        // A login the change removes no longer bypasses either.
+        assert!(bypass_actors(&open, Some(&base)).is_empty());
+        // No base configuration: the side in force decides alone.
+        assert_eq!(bypass_actors(&head, None).len(), 2);
     }
 }
