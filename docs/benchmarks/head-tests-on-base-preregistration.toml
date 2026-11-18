@@ -1,0 +1,153 @@
+# Pre-registration for `head-tests-on-base-v1` (#1071): how many tests that merged coding-agent
+# pull requests added pass on the code as it was before the change, and why.
+#
+# Status `draft`. The owner locks it by changing the status to `locked-pre-data` in a commit
+# made before any test of the population runs at its base commit. Before the lock only the
+# population scan has run (`population.json`), which reads file lists and no test result.
+# Any later change to the population, the outcomes, the classes, the rater prompt or the
+# verdict rule relabels the verdict `INTERMEDIATE_amended_threshold_redesign`.
+#
+# Why this study: #1071 proposes a `command` preset, the mirror of `base-tests`, that runs the
+# head side's test files against the base side's code and reports each test the change added
+# that passes there. The owner's decision on #1071 is to measure first: run the mirror over
+# the merged agent pull requests of the precision studies, count its reports by class, and
+# add no preset or finding code until that count is in. A report on a backfill test (coverage
+# for behaviour the change does not alter) or on a refactor is noise by design; a report on a
+# test of the changed behaviour that passes without the change is the signal.
+#
+# Scale: an exploratory characterisation for a go/no-go on one opt-in preset. One blinded LLM
+# rater labels each report; there is no second rater and no human review.
+#
+# Design source: written by one coding agent from #1071 and the existing pre-registrations; no
+# review panel, synthetic or human, has read it.
+
+[study]
+id = "head-tests-on-base-v1"
+status = "draft"
+novelty_tier_claimed = "Characterisation"
+tier_justification = """
+Counts, on a fixed population of merged coding-agent pull requests, the added tests that pass
+on the base code, and the share of those pull requests whose passing tests are backfill or
+refactor tests, with 95% Wilson intervals. A measured property of one proposed check on one
+corpus, not a claim about agent behaviour in general.
+"""
+issue = 1071
+
+[population]
+source_manifest = "docs/benchmarks/results-v6/manifest.json"
+source_study = "agent-pr-precision-v6"
+description = """
+The 232 merged coding-agent pull requests of the precision studies v2 to v6, at the base and
+head commits the v6 manifest fixes. A pull request is in the population when it adds,
+modifies or renames at least one test source file and changes at least one non-test source
+file. A test file is one under the test-path rule the `base-tests` preset overlays
+(`test_path` in `src/ast/functions.rs`, mirrored in `scripts/head_tests_on_base.py`); a source
+file has one of the extensions in `SOURCE_EXTENSIONS` there. The scan is
+`python3 scripts/head_tests_on_base.py population`; its output is
+`docs/benchmarks/results-head-tests-on-base/population.json`.
+"""
+total_pull_requests = 232
+in_population = 60 # (measured, RUN) population.json
+in_population_per_repo = { "vitejs/vite" = 27, "denoland/deno" = 19, "astral-sh/ruff" = 10, "tokio-rs/tokio" = 1, "fastapi/fastapi" = 1, "golang/go" = 1, "junit-team/junit5" = 1, "BurntSushi/ripgrep" = 0 }
+known_limits = [
+  "The test-path rule counts test inputs as test files: fixtures (ruff's `resources/test/fixtures/*.py`), spec directories and `testdata/`. A pull request whose only test-side change is such an input, read by a test case written inside a source file, has no case the mirror can run: outcome `no-runnable-case`.",
+  "The rule also counts a source directory named `test` (deno's `cli/tools/test/`, the implementation of `deno test`). The mirror overlays it as the preset would; the run records what that does.",
+  "Tests written inside source files (Rust `#[cfg(test)]` modules, ruff's `#[test_case]` rules) are not overlaid, as in `base-tests`.",
+  "An existing test case whose body the change edited is not in scope: v1 counts only cases new on the head side.",
+]
+
+[procedure]
+overlay = """
+The mirror tree for a pull request: the base commit's checkout, with every file under the
+test-path rule that the change adds, modifies or renames written at its head version (any
+extension, so a spec directory's expected-output files come with it), and every such file the
+change removes deleted.
+"""
+runs = """
+For each pull request in the population, in that repository's pinned toolchain container, with
+no network once dependencies are fetched:
+- H (head): the head commit, running the changed test files.
+- B (base): the base commit, running the base versions of the modified test files.
+- M (mirror): the mirror tree, running the same test files as H.
+Each run reads per-case results (JUnit XML or the runner's JSON). A case id is the runner's
+own name, mapped to its file by the adapter.
+"""
+adapters = """
+One adapter per repository runs that repository's own test command restricted to the changed
+test files (vite: vitest, with the playground runner for `playground/**/__tests__`; deno: the
+built binary's `deno test` for unit tests and the spec runner for a spec directory, `cargo
+test --test` for Rust integration tests; ruff, tokio: `cargo test --test`; fastapi: pytest; go:
+`go test` of the package; junit5: Gradle for the test class). Adapters are written and checked
+on H runs only; no B or M run happens before every adapter's H runs are recorded.
+"""
+in_scope_case = """
+A case is in scope when it passes in H and its id is not among B's cases (every case of an
+added file is in scope). A case that fails or errors in H is excluded (flaky, environment, or
+broken at head) and counted.
+"""
+host = "One lab host, under the host-wide benchmark lock, run sequentially. The outcome is pass or fail, not a timing, so load does not change it; the lock keeps the suites from slowing other sessions' timed runs."
+
+[outcomes]
+per_pull_request = [
+  "reported: at least one in-scope case passes in M.",
+  "not-reported: every in-scope case fails or errors in M.",
+  "build-failure: M does not build, import or collect the in-scope cases (a test for new behaviour that does not compile against base code). Counted on its own and listed under both readings of #1071's open question: as a failure (not reported) and as could-not-check (out of the denominator).",
+  "no-runnable-case: H has no in-scope case (inputs-only changes, inline tests, a file the adapter cannot run).",
+  "run-error: H, B or M could not run at all (dependency fetch, toolchain). Out of every denominator, listed by cause.",
+]
+primary = "Classes of the reported pull requests, from the rater's labels."
+secondary = [
+  "Report rate: reported over pull requests with an in-scope case, with its Wilson interval, under both readings of build-failure.",
+  "In-scope cases passing in M over all in-scope cases, per repository (descriptive; cases cluster within a pull request).",
+]
+
+[labels]
+rater_kind = "llm-subagent"
+raters = 1
+classes = [
+  "backfill: the passing tests cover behaviour the change does not alter.",
+  "refactor: the change is meant to keep behaviour (rename, restructure, performance, dependency bump) and the tests pass on both sides by design.",
+  "non-discriminating: the change alters behaviour the passing tests are written to cover, yet they pass without it.",
+  "other: none of the above, or the material does not say.",
+]
+blinding = "The rater sees one pull request at a time: its title, body, diff, and the source of each in-scope case that passed in M. It does not see other pull requests' labels, the counts, or the verdict rule."
+rater_prompt = """
+A merged pull request changed source code and added tests. The tests listed below pass when
+run against the code as it was before this pull request. Read the pull request and the tests,
+then answer with exactly one class and one sentence of reason:
+backfill (the tests cover behaviour this pull request does not change), refactor (the pull
+request is meant to keep behaviour and the tests pass either way by design),
+non-discriminating (the pull request changes behaviour these tests are written to check, yet
+they pass without the change), or other.
+"""
+
+[verdict]
+rule = """
+Over the reported pull requests (n), with 95% Wilson intervals
+(`verdict` in `scripts/head_tests_on_base.py`):
+- INSUFFICIENT_N when n < 5.
+- DROP when the lower bound of (backfill + refactor) / n is above 0.5: most reports are noise
+  by design; #1071 is closed with no preset.
+- DESIGN_PRESET when the lower bound of non-discriminating / n is above 0.5: the preset goes to
+  design, with this run's build-failure handling and false-positive classes as its input.
+- INTERMEDIATE otherwise: no preset; the counts are recorded on #1071.
+"""
+majority_threshold = { "5" = 5, "10" = 9, "20" = 15, "30" = 21, "60" = 38 } # (computed, RUN) majority_threshold(n), pinned by --test
+note = "With 20 reports a class needs 15 to count as most of them; with 10 it needs 9. A split near the middle stays INTERMEDIATE, which leaves #1071 without a preset."
+
+[threats]
+items = [
+  "Single LLM rater, no human review: labels can be wrong and the classes overlap at the edges (a backfill test written alongside a behaviour change). Synthetic labels are not peer review.",
+  "Population is the precision-study corpus, chosen for discipline's blocking findings, not at random; three repositories hold 56 of the 60.",
+  "Flaky cases: a case passing in H and in M may pass by chance in either. Cases failing in H are excluded; no rerun rule is applied.",
+  "Adapters decide what runs; an adapter that runs too little turns reports into no-runnable-case.",
+]
+
+[outputs]
+directory = "docs/benchmarks/results-head-tests-on-base/"
+files = [
+  "population.json: the scan (committed with this draft).",
+  "runs.json: per pull request, the H, B and M outcome and per-case results.",
+  "labels.json: the rater's class and reason per reported pull request, with the packet it saw.",
+  "summary.json: counts, intervals, verdict.",
+]
