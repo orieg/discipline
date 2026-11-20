@@ -123,6 +123,48 @@ pub fn built_binary_bytes() -> Vec<u8> {
     std::fs::read(discipline_bin()).unwrap()
 }
 
+/// How many times [`spawn_written_executable`] starts a command before it lets
+/// `ExecutableFileBusy` through.
+pub const TEXT_FILE_BUSY_ATTEMPTS: u32 = 20;
+
+/// The pause before the first retry; each further retry waits one more of it.
+pub const TEXT_FILE_BUSY_PAUSE: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Spawns `cmd`, whose program this test process has just written (a copy of the built
+/// binary, a stub), retrying while Linux reports `ETXTBSY`.
+///
+/// Why it happens: while a test thread holds the new file open for writing, another test
+/// thread in the same process may fork. The child inherits that write descriptor and only
+/// drops it at its own `exec` (`O_CLOEXEC`), so an `execve` of the file in that window
+/// fails with "Text file busy". Renaming the file does not help (the descriptor follows
+/// the inode). The window closes once every such child has exec'd, so a short bounded
+/// retry is enough; any other error is returned unchanged.
+pub fn spawn_written_executable(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+    retry_text_file_busy(TEXT_FILE_BUSY_ATTEMPTS, TEXT_FILE_BUSY_PAUSE, || {
+        cmd.spawn()
+    })
+}
+
+/// `start`, again up to `attempts` times in all while it fails with `ExecutableFileBusy`,
+/// waiting `pause`, then twice `pause`, and so on between attempts. The first other
+/// result, or the last `ExecutableFileBusy`, is returned as is.
+pub fn retry_text_file_busy<T>(
+    attempts: u32,
+    pause: std::time::Duration,
+    mut start: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut attempt = 1;
+    loop {
+        match start() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < attempts => {
+                std::thread::sleep(pause * attempt);
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Removes from `cmd` every inherited variable that could change what the binary, or a
 /// program it runs, does, and sets the few the harness controls. Applied to every
 /// `discipline` and every `git` a test spawns.

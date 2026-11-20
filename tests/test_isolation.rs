@@ -529,3 +529,46 @@ fn every_spawn_of_the_binary_and_of_git_goes_through_the_harness() {
          and a script through common::script_command (file, what, occurrences): {unlisted:#?}\nSPAWN_ALLOW_LIST entries that no longer match: {stale:#?}"
     );
 }
+
+/// `common::spawn_written_executable` retries only `ExecutableFileBusy` (ETXTBSY), and a
+/// bounded number of times. The race itself (a fork in another test thread holding a just
+/// written file open for writing until its `exec`) cannot be produced on demand, so the
+/// errors are injected through the closure the retry wraps.
+#[test]
+fn a_spawn_of_a_written_executable_retries_text_file_busy_and_nothing_else() {
+    use std::io::{Error, ErrorKind};
+    use std::time::Duration;
+    let busy = || Error::from(ErrorKind::ExecutableFileBusy);
+
+    // Busy twice, then started: the third attempt's result comes back.
+    let mut calls = 0;
+    let started = common::retry_text_file_busy(5, Duration::ZERO, || {
+        calls += 1;
+        if calls < 3 {
+            Err(busy())
+        } else {
+            Ok(calls)
+        }
+    });
+    assert_eq!(started.unwrap(), 3);
+
+    // Always busy: bounded, and the last error is returned.
+    let mut calls = 0;
+    let gave_up: std::io::Result<()> = common::retry_text_file_busy(5, Duration::ZERO, || {
+        calls += 1;
+        Err(busy())
+    });
+    assert_eq!(gave_up.unwrap_err().kind(), ErrorKind::ExecutableFileBusy);
+    assert_eq!(calls, 5);
+
+    // Any other error passes through on the first attempt.
+    for kind in [ErrorKind::NotFound, ErrorKind::PermissionDenied] {
+        let mut calls = 0;
+        let failed: std::io::Result<()> = common::retry_text_file_busy(5, Duration::ZERO, || {
+            calls += 1;
+            Err(Error::from(kind))
+        });
+        assert_eq!(failed.unwrap_err().kind(), kind);
+        assert_eq!(calls, 1, "{kind:?} was retried");
+    }
+}
