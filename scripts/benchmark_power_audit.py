@@ -1051,7 +1051,7 @@ def generate_prevention_audit_lines() -> list[str]:
     ]
 
 
-# base-tests study (`docs/benchmarks/base-tests-preregistration.toml`, #1052): Q2 is a ceiling
+# base-tests study (`docs/benchmarks/base-tests-preregistration.toml`, #1052): Part 2 is a ceiling
 # on the share of honest gold pull requests the preset blocks, shown by the Wilson upper bound.
 # Confidence 0.95, power 0.80. `available` is the confirmatory SWE-bench instance count of #838
 # (`scripts/recall_lab/confirmatory-ids-swe.txt`); the pilot instances check the runners only.
@@ -1104,7 +1104,7 @@ def generate_base_tests_audit_lines() -> list[str]:
         )
     lines += [
         "",
-        "- Q2 passes when the Wilson upper bound of blocked over eligible gold pull requests is at most the"
+        "- Part 2 passes when the Wilson upper bound of blocked over eligible gold pull requests is at most the"
         " ceiling; the requirement is the start of the last unbroken run of qualifying sizes up to n_max.",
     ]
     return lines

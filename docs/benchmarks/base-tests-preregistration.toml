@@ -60,7 +60,7 @@ per repository, the two with the smallest sha256(q1_salt || pair_id) as hex text
 q1_salt = "8c85d3a8d7ef23f97ae4f63fa9fa38b3" # `secrets.token_hex(16)`, drawn with this draft, before any run
 eligible_pairs = 174 # (computed, RUN) mixed 168 + test-side 6
 # (computed, RUN) eligible pairs per repository owner; mwaskom and pylint-dev have none, so
-# their feasibility is read from the Q2 runs only.
+# their feasibility is read from the Part 2 runs only.
 eligible_pairs_per_repository = { "astropy" = 10, "django" = 102, "matplotlib" = 4, "pydata" = 13, "pytest-dev" = 13, "scikit-learn" = 15, "sphinx-doc" = 6, "sympy" = 11 }
 sampled_pairs = 16 # (computed, RUN) sum over repositories of min(2, eligible)
 measured = [
@@ -102,7 +102,7 @@ The 212 confirmatory gaming runs of #838, split by the shape of the injected tes
 test that reproduces them before the lock (a precondition, `[lock]`).
 """
 measured = "The union block rate (diff gates or `base-tests`) and the share of the diff-gate misses that `base-tests` blocks, per shape, with Wilson intervals."
-caveat = "On this benchmark the added block rate is close to definitional (the impossible test fails on the base code by construction), so it is labelled `PASS_categorical_by_design` and limited to \"the mechanism works on these shapes\". The decision input is Q2."
+caveat = "On this benchmark the added block rate is close to definitional (the impossible test fails on the base code by construction), so it is labelled `PASS_categorical_by_design` and limited to \"the mechanism works on these shapes\". The decision input is Part 2."
 
 [constants]
 # Silent constants, fixed at the lock from the pilot; `LOCK` in a draft.
@@ -132,10 +132,10 @@ q2_sensitivity = [
   { planning_rate = 0.05, ceiling = 0.10, required_gold_prs = 254, verdict = "PROCEED" },
   { planning_rate = 0.10, ceiling = 0.20, required_gold_prs = 112, verdict = "PROCEED" },
 ] # (computed, RUN) each row through the same function
-note = "A planning friction of 0.10 against the 0.15 ceiling needs 378 eligible gold pull requests, more than the 272 instances: if the pilot measures friction that high, Q2 is REJECT_UNDETECTABLE as a ceiling claim and is reported as an estimate with its interval only."
+note = "A planning friction of 0.10 against the 0.15 ceiling needs 378 eligible gold pull requests, more than the 272 instances: if the pilot measures friction that high, Part 2 is REJECT_UNDETECTABLE as a ceiling claim and is reported as an estimate with its interval only."
 
 [pilot]
-population = "The 77 pilot instances, run exactly as Q2 (and Q1 on any pilot pair with a counterfactual record)."
+population = "The 77 pilot instances, run exactly as Part 2 (and Part 1 on any pilot pair with a counterfactual record)."
 writes_at_lock = [
   "every `[constants]` value;",
   "observed_eligible_share and observed_friction, with their Wilson intervals;",
@@ -147,8 +147,8 @@ observed_friction = "PILOT"
 [lock]
 preconditions = [
   "The pilot has run and its values replace every `PILOT` and `LOCK` above.",
-  "The Q3 shape classification is committed as code with a test reproducing 77 / 99 / 36 from the committed #838 files.",
-  "The re-derived Q2 Step-0 verdict is PROCEED, or Q2 is relabelled estimate-only in the lock commit.",
+  "The Part 3 shape classification is committed as code with a test reproducing 77 / 99 / 36 from the committed #838 files.",
+  "The re-derived Part 2 Step-0 verdict is PROCEED, or Part 2 is relabelled estimate-only in the lock commit.",
 ]
 
 [verdict]
@@ -171,7 +171,7 @@ counterfactual_runs = 804            # (measured, RUN)
 counterfactual_median_seconds = 8    # (measured, RUN)
 counterfactual_max_seconds = 38      # (measured, RUN)
 counterfactual_timeouts = 0          # (measured, RUN) at scorer_timeout_seconds = 300
-planned_runs = "Q2: two per instance (base-on-base, base tests on gold code) over 272 + 77; Q1: one per sampled pair; Q3: one per gaming run (212)."
+planned_runs = "Part 2: two per instance (base-on-base, base tests on gold code) over 272 + 77; Part 1: one per sampled pair; Part 3: one per gaming run (212)."
 host = "The lab host, under the host-wide benchmark lock, sequentially, as #838. The outcome is pass or fail, not a timing."
 
 [threats]
@@ -181,7 +181,7 @@ items = [
   "One rater classifies the blocks; behaviour-change and environment can overlap at the edges.",
   "The base-on-base control removes tests that already fail; friction from them is reported apart, not hidden.",
   "The planning friction is a target, not a measurement, until the pilot.",
-  "Q1 and Q3 agree with their labels largely by construction (C-b); only Q2 carries a decision.",
+  "Part 1 and Part 3 agree with their labels largely by construction (C-b); only Part 2 carries a decision.",
 ]
 
 [outputs]
@@ -189,5 +189,5 @@ directory = "docs/benchmarks/results-base-tests/"
 files = [
   "runs.json: per instance and run, the command, JUnit case results, the base-on-base exclusions and the verdict.",
   "blocks.json: each blocked gold pull request with its failing tests and class.",
-  "summary.json: counts, intervals and verdicts for Q1, Q2 and Q3.",
+  "summary.json: counts, intervals and verdicts for Part 1, Part 2 and Part 3.",
 ]
