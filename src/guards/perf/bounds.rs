@@ -735,6 +735,99 @@ pub fn sample_size_for_wilson_lower_bound_power(
     )
 }
 
+/// Exact probability that the Wilson upper bound of `k / n` stays within `ceiling` when
+/// `k ~ Binomial(n, true_p)`.
+///
+/// "Within" is `upper <= ceiling`, the rule of a pre-registered rate ceiling (a friction or
+/// false-positive rate that must be shown small). The Wilson upper bound is increasing in
+/// `k`, so the event is `k <= k_max` with `k_max` the largest count within the ceiling (found
+/// by bisection), and the probability is the binomial lower tail up to `k_max` (0.0 when even
+/// `k = 0` exceeds it). It is the mirror image of [`wilson_pass_probability`]: the score
+/// interval of `(n - k) / n` is `(1 - upper, 1 - lower)`.
+///
+/// Errors when `n` is 0 or a proportion is outside `(0, 1)`.
+///
+/// Reference: Wilson, E. B. (1927). "Probable inference, the law of succession, and statistical inference".
+/// Journal of the American Statistical Association, 22(158), 209-212.
+pub fn wilson_upper_pass_probability(
+    n: usize,
+    true_p: f64,
+    ceiling: f64,
+    confidence_level: f64,
+) -> Result<f64> {
+    if n == 0 {
+        bail!("sample size n must be greater than 0");
+    }
+    check_unit_interval("true proportion", true_p)?;
+    check_unit_interval("ceiling", ceiling)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    if wilson_score_interval(0, n, confidence_level)?.1 > ceiling {
+        return Ok(0.0);
+    }
+    // The upper bound is increasing in k: bisect for the largest count within the ceiling.
+    let (mut lo, mut hi) = (0usize, n);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if wilson_score_interval(mid, n, confidence_level)?.1 <= ceiling {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let k_max = lo;
+    let ln_fact = ln_factorial_table(n);
+    let (ln_p, ln_q) = (true_p.ln(), (-true_p).ln_1p());
+    let tail: f64 = (0..=k_max)
+        .map(|k| {
+            let ln_pmf =
+                ln_fact[n] - ln_fact[k] - ln_fact[n - k] + k as f64 * ln_p + (n - k) as f64 * ln_q;
+            ln_pmf.exp()
+        })
+        .sum();
+    Ok(tail.min(1.0))
+}
+
+/// Smallest `n` such that every `n'` in `[n, n_max]` has
+/// `wilson_upper_pass_probability(n', expected, ceiling, confidence_level) >= power`.
+///
+/// The ceiling counterpart of [`sample_size_for_wilson_lower_bound_power`], with the same
+/// monotonicity choice: the start of the last unbroken run of sizes meeting `power` that
+/// ends at `n_max`.
+///
+/// Errors when an input is out of range, when `ceiling <= expected`, or when `n_max` itself
+/// falls short of `power`.
+///
+/// Reference: Wilson, E. B. (1927). "Probable inference, the law of succession, and statistical inference".
+/// Journal of the American Statistical Association, 22(158), 209-212; the pass probability
+/// is the exact binomial tail ([`wilson_upper_pass_probability`]).
+pub fn sample_size_for_wilson_upper_bound_power(
+    expected: f64,
+    ceiling: f64,
+    confidence_level: f64,
+    power: f64,
+    n_max: usize,
+) -> Result<usize> {
+    check_unit_interval("expected proportion", expected)?;
+    check_unit_interval("ceiling", ceiling)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    check_unit_interval("power", power)?;
+    if ceiling <= expected {
+        bail!("ceiling ({ceiling}) must be above the expected proportion ({expected})");
+    }
+    if n_max == 0 {
+        bail!("n_max must be a positive integer, got 0");
+    }
+    last_unbroken_run_start(
+        n_max,
+        |m| Ok(wilson_upper_pass_probability(m, expected, ceiling, confidence_level)? >= power),
+        || {
+            format!(
+                "n_max ({n_max}) has pass probability below {power} at expected {expected}, ceiling {ceiling}"
+            )
+        },
+    )
+}
+
 /// Agent runs needed to yield `n_pos` in-scope positives:
 /// `ceil(n_pos / (pass_rate * in_scope_share * valid_share))`.
 ///
