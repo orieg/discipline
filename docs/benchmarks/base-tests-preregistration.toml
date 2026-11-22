@@ -1,0 +1,193 @@
+# Pre-registration for `base-tests-v1` (#1052): whether the `base-tests` preset of the `command`
+# gate runs on real repositories' runners, how often it blocks an honest change, and what it
+# adds over the diff gates on the #838 gaming runs.
+#
+# Status `draft`: nothing below has been run. The lock commit changes the status to
+# `locked-pre-data` after the pilot (`[pilot]`) has fixed the silent constants and measured the
+# eligible share and the planning friction; it is made before any confirmatory run starts.
+# Any later change to the ceiling, the population, the eligibility rule, the block classes, the
+# constants or the verdict rule relabels every affected verdict
+# `INTERMEDIATE_amended_threshold_redesign`.
+#
+# Every sample size below is returned by `sample_size_for_wilson_upper_bound_power` and
+# `wilson_upper_pass_probability` in `src/guards/perf/bounds.rs`, mirrored in
+# `scripts/benchmark_power_audit.py` (`--base-tests-bounds-json`), and checked against both by
+# `tests/test_benchmark_power_bounds_base_tests.rs`. Every population count is recomputed from
+# the committed #838 files by the same test. None is hand-computed.
+#
+# Why this study: the #838 replays ran the diff gates only, so the 44 of 212 gaming runs
+# blocked at 9df9b947 is a diff-only figure. `base-tests` (#387) runs the base side's test
+# files against the head code and has never been measured. Its cost is the number that decides
+# whether it can be recommended: how often an honest change that alters tested behaviour is
+# blocked and needs `allow-behavior-change:`.
+#
+# Design source: written by one coding agent from #1052, #1051 and the existing
+# pre-registrations; no review panel, synthetic or human, has read it.
+
+[study]
+id = "base-tests-v1"
+status = "draft"
+issue = 1052
+novelty_tier_claimed = "Characterisation"
+tier_justification = """
+Measures, with 95% Wilson intervals, the share of honest SWE-bench gold pull requests that the
+`base-tests` preset blocks, on a fixed population, and whether the preset runs per repository.
+A measured property of one opt-in preset on one benchmark's repositories, not a claim about CI
+friction in general.
+"""
+
+[binary]
+release = "LOCK"   # the discipline release evaluated, fixed at the lock
+sha256 = "LOCK"    # of the static Linux binary run in every container
+
+[population]
+source = "SWE-bench instances of ImpossibleBench used by #838 (`docs/benchmarks/recall-preregistration.toml`)"
+confirmatory_ids = "scripts/recall_lab/confirmatory-ids-swe.txt"
+pilot_ids = "scripts/recall_lab/pilot-ids-swe.txt"
+confirmatory_instances = 272 # (computed, RUN) lines of confirmatory_ids
+pilot_instances = 77         # (computed, RUN) lines of pilot_ids
+# (computed, RUN) confirmatory instances per repository owner, from the id prefix
+confirmatory_per_repository = { "astropy" = 13, "django" = 135, "matplotlib" = 8, "mwaskom" = 1, "pydata" = 16, "pylint-dev" = 5, "pytest-dev" = 12, "scikit-learn" = 18, "sphinx-doc" = 20, "sympy" = 44 }
+split_rule = "The #838 split (`population_split` in `scripts/recall_pairs.py`, its committed salt) is reused: pilot instances fix the runners and constants and never enter a verdict."
+
+[q1_feasibility]
+question = "Does the preset run on each repository's runner, in the instance's SWE-bench image?"
+population = """
+#838 confirmatory pairs whose counterfactual stratum is `mixed` or `test-side`
+(`docs/benchmarks/results-recall-confirmatory/strata.json`, `counterfactual.pairs`): up to two
+per repository, the two with the smallest sha256(q1_salt || pair_id) as hex text.
+"""
+q1_salt = "8c85d3a8d7ef23f97ae4f63fa9fa38b3" # `secrets.token_hex(16)`, drawn with this draft, before any run
+eligible_pairs = 174 # (computed, RUN) mixed 168 + test-side 6
+# (computed, RUN) eligible pairs per repository owner; mwaskom and pylint-dev have none, so
+# their feasibility is read from the Part 2 runs only.
+eligible_pairs_per_repository = { "astropy" = 10, "django" = 102, "matplotlib" = 4, "pydata" = 13, "pytest-dev" = 13, "scikit-learn" = 15, "sphinx-doc" = 6, "sympy" = 11 }
+sampled_pairs = 16 # (computed, RUN) sum over repositories of min(2, eligible)
+measured = [
+  "the command runs and writes JUnit with at least one case;",
+  "the `[tests] paths` globs the layout needs;",
+  "the verdict agrees with the pair's counterfactual stratum.",
+]
+caveat = "Agreement is expected by construction: the `test-side` and `mixed` labels come from the same revert-the-test-files run. Agreement validates the pipeline, not recall; a block rate on this population is labelled `PASS_categorical_by_design`."
+
+[q2_friction]
+question = "How often does the preset block an honest change?"
+population = """
+The gold patch of every confirmatory instance: base = `base_commit`, head = `base_commit` +
+gold patch + test patch, in the instance's image. A gold pull request is eligible when its
+test patch modifies at least one test file that exists at `base_commit` and at least one test
+of those files passes in the base-on-base control. The others are counted as not eligible, by
+reason, and leave the denominator.
+"""
+base_on_base_control = """
+Each instance first runs the base test files against the base code. Only tests passing there
+count. The share of tests and of instances excluded this way is reported as its own friction
+source, since the repository's own CI would see those failures too.
+"""
+blocked = "an eligible gold pull request with at least one counted base test failing against the gold code"
+block_classes = [
+  "behaviour-change: the failing base test asserts the behaviour the gold patch intends to change (needs `allow-behavior-change:`).",
+  "environment: the test fails on the gold code for a reason unrelated to the change (image, flaky, order).",
+  "other: neither, or the material does not say.",
+]
+classification = "By hand, from the failing test's source and the gold patch; one rater, disclosed. The rater sees no other instance's class and no count."
+secondary = "The 432 honest `original`-split runs of #838 (`access_full`), run the same way and reported apart; expected near zero, never the headline."
+
+[q3_added_value]
+question = "What does the preset add over the diff gates on #838's gaming runs?"
+population = """
+The 212 confirmatory gaming runs of #838, split by the shape of the injected test file as in the
+2026-11-09 breakdown on #838: well-formed (77), broken by the injection (99), no test-file hunk
+(36). Those counts come from an issue comment; the classification is committed as code with a
+test that reproduces them before the lock (a precondition, `[lock]`).
+"""
+measured = "The union block rate (diff gates or `base-tests`) and the share of the diff-gate misses that `base-tests` blocks, per shape, with Wilson intervals."
+caveat = "On this benchmark the added block rate is close to definitional (the impossible test fails on the base code by construction), so it is labelled `PASS_categorical_by_design` and limited to \"the mechanism works on these shapes\". The decision input is Part 2."
+
+[constants]
+# Silent constants, fixed at the lock from the pilot; `LOCK` in a draft.
+runner_command_per_repository = "LOCK"
+junit_options_per_repository = "LOCK"
+tests_paths_globs_per_repository = "LOCK"
+timeout_seconds = "LOCK"
+flaky_rerun_policy = "LOCK"
+image_digests = "LOCK" # read from the #838 counterfactual records where the instance has one
+container_memory = "LOCK"
+
+[power_and_bounds]
+confidence_level = 0.95
+statistical_power = 0.80
+upper_bound_n_max = 2000
+q2_planning_rate = 0.05 # (target) planning friction; no measurement exists, the pilot replaces it at the lock
+q2_ceiling = 0.15       # (target) the friction a CI preset may cost and still be recommended
+q2_available = 272      # confirmatory instances
+q2_required_gold_prs = 83          # (computed, RUN) sample_size_for_wilson_upper_bound_power(0.05, 0.15, 0.95, 0.80, 2000)
+q2_power_at_available = 0.99995    # (computed, RUN) wilson_upper_pass_probability(272, 0.05, 0.15, 0.95)
+q2_min_eligible_share = 0.305      # (computed, RUN) 83 / 272: below it, too few eligible gold pull requests remain
+q2_step0_verdict = "PROCEED"       # at the planning rate; re-derived at the pilot rate by the lock
+q2_sensitivity = [
+  { planning_rate = 0.02, ceiling = 0.15, required_gold_prs = 45, verdict = "PROCEED" },
+  { planning_rate = 0.05, ceiling = 0.15, required_gold_prs = 83, verdict = "PROCEED" },
+  { planning_rate = 0.10, ceiling = 0.15, required_gold_prs = 378, verdict = "REJECT_UNDETECTABLE" },
+  { planning_rate = 0.05, ceiling = 0.10, required_gold_prs = 254, verdict = "PROCEED" },
+  { planning_rate = 0.10, ceiling = 0.20, required_gold_prs = 112, verdict = "PROCEED" },
+] # (computed, RUN) each row through the same function
+note = "A planning friction of 0.10 against the 0.15 ceiling needs 378 eligible gold pull requests, more than the 272 instances: if the pilot measures friction that high, Part 2 is REJECT_UNDETECTABLE as a ceiling claim and is reported as an estimate with its interval only."
+
+[pilot]
+population = "The 77 pilot instances, run exactly as Part 2 (and Part 1 on any pilot pair with a counterfactual record)."
+writes_at_lock = [
+  "every `[constants]` value;",
+  "observed_eligible_share and observed_friction, with their Wilson intervals;",
+  "q2 required gold pull requests re-derived at the Wilson upper bound of observed_friction, and the Step-0 verdict at that rate against observed_eligible_share x 272.",
+]
+observed_eligible_share = "PILOT"
+observed_friction = "PILOT"
+
+[lock]
+preconditions = [
+  "The pilot has run and its values replace every `PILOT` and `LOCK` above.",
+  "The Part 3 shape classification is committed as code with a test reproducing 77 / 99 / 36 from the committed #838 files.",
+  "The re-derived Part 2 Step-0 verdict is PROCEED, or Part 2 is relabelled estimate-only in the lock commit.",
+]
+
+[verdict]
+q2_rule = """
+Over eligible gold pull requests (n), blocked count k, 95% Wilson interval:
+- LOW_FRICTION when the upper bound of k / n is at most the ceiling: the preset can be
+  recommended, with the block classes as its cost.
+- HIGH_FRICTION when the lower bound of k / n is above the ceiling: the preset stays opt-in and
+  documented as costly; the behaviour-change class says how much of that is the preset working.
+- INTERMEDIATE otherwise: the counts are recorded on #1052 with no recommendation.
+"""
+q1_rule = "Per repository: RUNS (JUnit with at least one case on every sampled pair), RUNS_WITH_PATHS (only with non-default `[tests] paths`) or DOES_NOT_RUN (with the cause). Descriptive; no rate claim."
+q3_rule = "Descriptive, `PASS_categorical_by_design`; no verdict feeds a recommendation."
+
+[compute]
+# Measured on the #838 counterfactual runner (`strata.json`, `counterfactual.pairs[].runs[]`),
+# which runs an instance's FAIL_TO_PASS tests in its image: the base-tests runs run whole test
+# files, so these are a lower bound per run.
+counterfactual_runs = 804            # (measured, RUN)
+counterfactual_median_seconds = 8    # (measured, RUN)
+counterfactual_max_seconds = 38      # (measured, RUN)
+counterfactual_timeouts = 0          # (measured, RUN) at scorer_timeout_seconds = 300
+planned_runs = "Part 2: two per instance (base-on-base, base tests on gold code) over 272 + 77; Part 1: one per sampled pair; Part 3: one per gaming run (212)."
+host = "The lab host, under the host-wide benchmark lock, sequentially, as #838. The outcome is pass or fail, not a timing."
+
+[threats]
+items = [
+  "SWE-bench gold patches are bug fixes chosen for a benchmark, not a random sample of a repository's changes; friction on feature work may differ.",
+  "django holds 135 of the 272 instances: per-repository counts are reported beside the pooled rate.",
+  "One rater classifies the blocks; behaviour-change and environment can overlap at the edges.",
+  "The base-on-base control removes tests that already fail; friction from them is reported apart, not hidden.",
+  "The planning friction is a target, not a measurement, until the pilot.",
+  "Part 1 and Part 3 agree with their labels largely by construction (C-b); only Part 2 carries a decision.",
+]
+
+[outputs]
+directory = "docs/benchmarks/results-base-tests/"
+files = [
+  "runs.json: per instance and run, the command, JUnit case results, the base-on-base exclusions and the verdict.",
+  "blocks.json: each blocked gold pull request with its failing tests and class.",
+  "summary.json: counts, intervals and verdicts for Part 1, Part 2 and Part 3.",
+]
