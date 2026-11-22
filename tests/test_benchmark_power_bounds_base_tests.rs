@@ -128,7 +128,14 @@ fn ceiling_bounds_reject_invalid_inputs() {
     assert!(wilson_upper_pass_probability(10, 0.05, 1.0, 0.95).is_err());
     assert!(wilson_upper_pass_probability(10, 0.05, 0.15, f64::NAN).is_err());
     // The ceiling must sit above the planning rate, and n_max must reach the power.
-    assert!(sample_size_for_wilson_upper_bound_power(0.15, 0.15, 0.95, 0.80, 2000).is_err());
+    // A ceiling at the planning rate is refused by its own guard, not by the power search.
+    let err = sample_size_for_wilson_upper_bound_power(0.15, 0.15, 0.95, 0.80, 2000)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("must be above the expected proportion"),
+        "{err}"
+    );
     assert!(sample_size_for_wilson_upper_bound_power(0.05, 0.15, 0.95, 0.80, 50).is_err());
     assert!(sample_size_for_wilson_upper_bound_power(0.05, 0.15, 0.95, 0.80, 0).is_err());
     assert!(sample_size_for_wilson_upper_bound_power(0.05, 0.15, 0.95, 1.0, 2000).is_err());

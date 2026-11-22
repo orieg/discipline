@@ -717,6 +717,8 @@ class TestStatisticalBounds(unittest.TestCase):
         self.assertAlmostEqual(
             wilson_upper_pass_probability(112, 0.10, 0.20, 0.95), wilson_pass_probability(112, 0.90, 0.80, 0.95), places=10
         )
+        with self.assertRaisesRegex(ValueError, "must be above the expected proportion"):
+            sample_size_for_wilson_upper_bound_power(0.15, 0.15, 0.95, 0.80, 2000)
         self.assertEqual(sample_size_for_wilson_upper_bound_power(0.05, 0.15, 0.95, 0.80, 2000), 83)
         self.assertEqual(sample_size_for_wilson_upper_bound_power(0.10, 0.20, 0.95, 0.80, 2000), 112)
         self.assertEqual(sample_size_for_wilson_upper_bound_power(0.10, 0.15, 0.95, 0.80, 2000), 378)
@@ -726,7 +728,6 @@ class TestStatisticalBounds(unittest.TestCase):
         for bad in [
             lambda: wilson_upper_pass_probability(0, 0.05, 0.15),
             lambda: wilson_upper_pass_probability(10, 0.05, 1.0),
-            lambda: sample_size_for_wilson_upper_bound_power(0.15, 0.15, 0.95, 0.80, 2000),
             lambda: sample_size_for_wilson_upper_bound_power(0.05, 0.15, 0.95, 0.80, 50),
         ]:
             with self.assertRaises(ValueError):
