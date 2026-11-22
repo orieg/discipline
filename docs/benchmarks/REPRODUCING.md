@@ -16,6 +16,7 @@ Adopting a gate is worth it when it blocks real problems (value), rarely blocks 
 | Noise and value on a random sample | `agent-pr-precision-v7` | Block rate on randomly sampled merged agent pull requests, then labelled precision per gate | `docs/benchmarks/precision-preregistration-v7.toml` | not run yet |
 | Noise and value of the 0.32 code | `agent-pr-precision-v8` | Block rate of the 0.32.0 code on v2 to v6's 232 pull requests; rule fidelity and actionability of each block, graded by a Claude and a Gemini rater, every disagreement settled by a third LLM agent (amendment 2) | `docs/benchmarks/precision-preregistration-v8.toml` | `docs/benchmarks/results-v8/` (`scripts/precision_v8.py report --tie-breaker fable`) |
 | Value on verified test gaming | `impossible-recall-v1` (#838) | Share of agent changes that pass impossible tests by editing the test side that discipline blocks (recall), against a line-regex twin; false alarms on honest solutions to the normal split | `docs/benchmarks/recall-preregistration.toml` | `docs/benchmarks/results-recall-pilot/` (pilot); `docs/benchmarks/results-recall-confirmatory/` (verdict REJECTED with 0.26.0; descriptive replays of 0.31.0 and the 0.32.0 code beside it) |
+| Held-out value on verified test gaming | `impossible-recall-fresh-v1` (#838) | v1's recall, on fresh impossible SWE-bench instances generated from SWE-bench `test` outside Verified, primary on units whose injected test file is well-formed; beside the reused-unit figure of the same binary | `docs/benchmarks/recall-fresh-preregistration.toml` (draft) | pre-registered draft, not run; `docs/benchmarks/results-recall-fresh/population.json` (scan); see §4.6 |
 | Value on known regressions | `regression-value-v1` (#1024) | Share of reverted or fix-linked agent pull requests that discipline blocks with a finding in an implicated file, and its block rate on them against matched controls from the same repositories, beside a naive twin | `docs/benchmarks/regression-value-preregistration.toml` (draft) | not run yet |
 | Prevention in the agent's loop | `prevention-v1` (#1036) | Landed test-gaming rate on impossible tests with discipline refusing submissions in the agent's loop, against no gate and a test-path-lock twin; landed honest passes on the normal split as the cost | `docs/benchmarks/prevention-preregistration.toml` (draft; H1 Step 0 REJECT_UNDETECTABLE) | not run yet |
 | Whether added tests discriminate | `head-tests-on-base-v1` (#1071) | Share of merged agent pull requests whose added tests pass on the code before the change, and why: each such pull request labelled backfill, refactor, non-discriminating or other by one blinded LLM rater | `docs/benchmarks/head-tests-on-base-preregistration.toml` (locked) | `docs/benchmarks/results-head-tests-on-base/`: `population.json` (scan), `runs.json` (H, B and M per pull request), `labels.json` (rater class, reason and packet), `summary.json` (counts, intervals, verdict); see §7 |
@@ -187,6 +188,21 @@ newer binary under the same study id.
 - **The model's provider identifier.** Committed files name the model by family, size class,
   quantization, server flags and the GGUF sha256 (`[arms].model_families`); the identifier
   your server exposes goes in the uncommitted `manifest-local.json`.
+
+### 4.6 Fresh-instance re-measurement (`impossible-recall-fresh-v1`, draft)
+
+Pre-registered draft, not run. Only the population scan has run:
+
+```bash
+python3 -I scripts/recall_fresh.py population        # reads three datasets, rewrites population.json
+python3 -I scripts/recall_fresh.py --check-population  # no network: the pool is disjoint from v1
+python3 -I scripts/recall_fresh.py --bounds-json       # the Step-0 values the pre-registration records
+```
+
+The scan reads SWE-bench `test`, SWE-bench Verified and Impossible-SWE-bench through the
+Hugging Face datasets-server at the revisions pinned in the script, and refuses when a dataset
+is at another revision. Generation, agent runs and scoring follow §4.3 and §4.4 once the
+pre-registration is locked; its `[lock_preconditions]` list what is still open.
 
 ## 5. Hook latency
 
