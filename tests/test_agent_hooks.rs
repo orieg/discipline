@@ -3377,7 +3377,9 @@ fn step17_hook_binary_path_hijack_and_digest_verification_fail_closed() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = hijacked.spawn().unwrap();
+    // The copy was written by this process a moment ago: a thread that forked meanwhile
+    // can still hold it open for writing (ETXTBSY on Linux).
+    let mut child = common::spawn_written_executable(&mut hijacked).unwrap();
     child
         .stdin
         .take()

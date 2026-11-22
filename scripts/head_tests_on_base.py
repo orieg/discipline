@@ -172,6 +172,107 @@ def verdict(counts: dict[str, int]) -> str:
     return "INTERMEDIATE"
 
 
+def pr_outcome(h: dict[str, Any] | None, b: dict[str, Any] | None, m: dict[str, Any] | None) -> dict[str, Any]:
+    """The pre-registered per-pull-request outcome from its H, B and M results.
+
+    A side result (from `scripts/head_tests_on_base_lab.py`) carries `units` (what ran),
+    `failed_step` (`deps`, `build`, or None when every non-test step passed) and `cases`
+    (case id -> {status, file}, only cases of the changed test files). In-scope cases pass
+    in H and are absent from B. A failure of M's dependency step is a run-error; a failure
+    of its build, or in-scope cases missing from its results, is a build-failure.
+    """
+    if h is None or not h.get("units"):
+        return {"outcome": "no-runnable-case", "cause": "no runnable test file"}
+    if h.get("failed_step"):
+        return {"outcome": "run-error", "cause": f"H {h['failed_step']}"}
+    if b is None or m is None:
+        return {"outcome": "pending", "cause": "B or M not run"}
+    if b.get("failed_step"):
+        return {"outcome": "run-error", "cause": f"B {b['failed_step']}"}
+    new = [c for c in h["cases"] if c not in b["cases"]]
+    in_scope = sorted(c for c in new if h["cases"][c]["status"] == "passed")
+    excluded = sorted(c for c in new if h["cases"][c]["status"] != "passed")
+    base = {"in_scope": in_scope, "excluded_in_h": excluded}
+    if not in_scope:
+        return {"outcome": "no-runnable-case", "cause": "no in-scope case", **base}
+    if m.get("failed_step") == "deps":
+        return {"outcome": "run-error", "cause": "M deps", **base}
+    if m.get("failed_step"):
+        return {"outcome": "build-failure", "cause": f"M {m['failed_step']}", **base}
+    present = [c for c in in_scope if c in m["cases"]]
+    if not present:
+        return {"outcome": "build-failure", "cause": "in-scope cases not collected in M", **base}
+    passed = [c for c in in_scope if m["cases"].get(c, {}).get("status") == "passed"]
+    return {
+        "outcome": "reported" if passed else "not-reported",
+        "cause": "",
+        "passed_in_m": passed,
+        **base,
+    }
+
+
+CLASSES = ("backfill", "refactor", "non-discriminating", "other")
+
+
+def summarize(runs: dict[str, Any], labels: dict[str, Any]) -> dict[str, Any]:
+    """`summary.json` from `runs.json` and `labels.json`: per-pull-request outcomes, the
+    counts and 95% Wilson intervals the pre-registration names, and the verdict.
+
+    Fails (ValueError) unless the labels cover exactly the reported pull requests, each
+    with one of the pre-registered classes.
+    """
+    rows = []
+    for e in runs["runs"]:
+        o = pr_outcome(e["H"], e["B"], e["M"])
+        rows.append(
+            {
+                "repo": e["repo"],
+                "pr_number": e["pr_number"],
+                "outcome": o["outcome"],
+                "cause": o.get("cause", ""),
+                "in_scope_cases": len(o.get("in_scope", [])),
+                "excluded_in_h_cases": len(o.get("excluded_in_h", [])),
+                "in_scope_passing_in_m": len(o.get("passed_in_m", [])),
+            }
+        )
+    reported = {(r["repo"], r["pr_number"]) for r in rows if r["outcome"] == "reported"}
+    labelled = {(x["repo"], x["pr_number"]): x["class"] for x in labels["labels"]}
+    if set(labelled) != reported:
+        raise ValueError(f"labels cover {sorted(labelled)}, reported are {sorted(reported)}")
+    bad = sorted(c for c in labelled.values() if c not in CLASSES)
+    if bad:
+        raise ValueError(f"labels outside the pre-registered classes: {bad}")
+    outcomes = {k: sum(r["outcome"] == k for r in rows) for k in ("reported", "not-reported", "build-failure", "no-runnable-case", "run-error")}
+    n = outcomes["reported"]
+    classes = {c: sum(v == c for v in labelled.values()) for c in CLASSES}
+
+    def share(k: int, d: int) -> dict[str, Any]:
+        lo, hi = wilson_interval(k, d) if d else (None, None)
+        return {"k": k, "n": d, "wilson_95": [lo, hi]}
+
+    per_repo: dict[str, dict[str, int]] = {}
+    for r in rows:
+        t = per_repo.setdefault(r["repo"], {"in_scope_cases": 0, "in_scope_passing_in_m": 0})
+        t["in_scope_cases"] += r["in_scope_cases"]
+        t["in_scope_passing_in_m"] += r["in_scope_passing_in_m"]
+    return {
+        "study_id": "head-tests-on-base-v1",
+        "pull_requests": len(rows),
+        "outcomes": outcomes,
+        "report_rate": {
+            "build_failure_as_not_reported": share(n, n + outcomes["not-reported"] + outcomes["build-failure"]),
+            "build_failure_out_of_denominator": share(n, n + outcomes["not-reported"]),
+        },
+        "classes": {c: share(k, n) for c, k in classes.items()},
+        "by_design": share(classes["backfill"] + classes["refactor"], n),
+        "verdict": verdict(classes),
+        "excluded_in_h_cases": sum(r["excluded_in_h_cases"] for r in rows),
+        "in_scope_cases_per_repo": per_repo,
+        "run_errors": [{"repo": r["repo"], "pr_number": r["pr_number"], "cause": r["cause"]} for r in rows if r["outcome"] == "run-error"],
+        "pull_request_outcomes": rows,
+    }
+
+
 def changed_files(pr: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     """The pull request's changed files from the forge, then the base...head comparison.
 
@@ -310,7 +411,66 @@ def self_test() -> int:
         if verdict(counts) != expected:
             failures.append(f"verdict({counts})")
             print(f"FAIL verdict({counts}) = {verdict(counts)}, expected {expected}")
-    total = len(yes) + len(no) + len(cases) + len(pinned) + 1 + len(verdicts)
+    def side(cases: dict[str, str], failed: str | None = None, units: bool = True) -> dict[str, Any]:
+        return {
+            "units": [{"kind": "x"}] if units else [],
+            "failed_step": failed,
+            "cases": {c: {"status": st, "file": "f"} for c, st in cases.items()},
+        }
+
+    outcomes = [
+        ((side({}, units=False), None, None), "no-runnable-case"),
+        ((side({}, "build"), side({}), side({})), "run-error"),
+        ((side({"a": "passed"}), side({}, "build"), side({})), "run-error"),
+        ((side({"a": "passed"}), side({"a": "passed"}), side({"a": "passed"})), "no-runnable-case"),
+        ((side({"a": "failed"}), side({}), side({"a": "passed"})), "no-runnable-case"),
+        ((side({"a": "passed"}), side({}), side({}, "deps")), "run-error"),
+        ((side({"a": "passed"}), side({}), side({}, "build")), "build-failure"),
+        ((side({"a": "passed"}), side({}), side({"z": "passed"})), "build-failure"),
+        ((side({"a": "passed", "b": "passed"}), side({}), side({"a": "failed", "b": "passed"})), "reported"),
+        ((side({"a": "passed"}), side({}), side({"a": "failed"})), "not-reported"),
+        ((side({"a": "passed"}), side({}), side({"a": "skipped"})), "not-reported"),
+    ]
+    for (h, b, m), expected in outcomes:
+        got = pr_outcome(h, b, m)["outcome"]
+        if got != expected:
+            failures.append(f"pr_outcome {expected}")
+            print(f"FAIL pr_outcome: {got} != {expected} for {h, b, m}")
+    # summarize: two reported, one not-reported, one build-failure.
+    runs = {
+        "runs": [
+            {"repo": "r", "pr_number": i, "H": h, "B": b, "M": m}
+            for i, (h, b, m) in enumerate(
+                [
+                    (side({"a": "passed"}), side({}), side({"a": "passed"})),
+                    (side({"a": "passed"}), side({}), side({"a": "passed"})),
+                    (side({"a": "passed"}), side({}), side({"a": "failed"})),
+                    (side({"a": "passed"}), side({}), side({}, "build")),
+                ]
+            )
+        ]
+    }
+    lab = {"labels": [{"repo": "r", "pr_number": 0, "class": "backfill"}, {"repo": "r", "pr_number": 1, "class": "refactor"}]}
+    sm = summarize(runs, lab)
+    got_sm = (
+        sm["outcomes"]["reported"],
+        sm["report_rate"]["build_failure_as_not_reported"]["n"],
+        sm["report_rate"]["build_failure_out_of_denominator"]["n"],
+        sm["by_design"]["k"],
+        sm["verdict"],
+    )
+    summary_checks = [(got_sm, (2, 4, 3, 2, "INSUFFICIENT_N"))]
+    for bad_labels in ({"labels": lab["labels"][:1]}, {"labels": [lab["labels"][0], {"repo": "r", "pr_number": 1, "class": "noise"}]}):
+        try:
+            summarize(runs, bad_labels)
+            summary_checks.append(("accepted", "refused"))
+        except ValueError:
+            summary_checks.append(("refused", "refused"))
+    for got, want in summary_checks:
+        if got != want:
+            failures.append("summarize")
+            print(f"FAIL summarize: {got} != {want}")
+    total = len(yes) + len(no) + len(cases) + len(pinned) + 1 + len(verdicts) + len(outcomes) + len(summary_checks)
     print(f"{'FAILED' if failures else 'ok'}: {total} checks")
     return 1 if failures else 0
 
@@ -323,7 +483,16 @@ def main() -> int:
     pop = sub.add_parser("population", help="write the study population from a manifest")
     pop.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     pop.add_argument("--out", type=Path, default=RESULTS_DIR / "population.json")
+    sm = sub.add_parser("summarize", help="write summary.json from runs.json and labels.json")
+    sm.add_argument("--runs", type=Path, default=RESULTS_DIR / "runs.json")
+    sm.add_argument("--labels", type=Path, default=RESULTS_DIR / "labels.json")
+    sm.add_argument("--out", type=Path, default=RESULTS_DIR / "summary.json")
     args = parser.parse_args()
+    if args.cmd == "summarize":
+        result = summarize(json.loads(args.runs.read_text(encoding="utf-8")), json.loads(args.labels.read_text(encoding="utf-8")))
+        args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(f"{result['outcomes']}; classes {dict((c, v['k']) for c, v in result['classes'].items())}; verdict {result['verdict']}")
+        return 0
     if args.cmd == "population":
         result = population(args.manifest.resolve(), args.out.resolve())
         print(f"{result['in_population']} of {result['total_pull_requests']} in population")

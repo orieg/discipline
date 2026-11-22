@@ -35,6 +35,22 @@ fn head_tests_on_base_script_passes_its_self_checks() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn head_tests_on_base_lab_runner_passes_its_self_checks() {
+    let out = common::script_command("python3")
+        .args(["-I", "scripts/head_tests_on_base_lab.py", "--test"])
+        .current_dir(root())
+        .output()
+        .expect("run python3");
+    assert!(
+        out.status.success(),
+        "head_tests_on_base_lab.py --test failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// The population counts in the pre-registration are those of `population.json`.
 #[test]
 fn recorded_population_matches_the_committed_scan() {

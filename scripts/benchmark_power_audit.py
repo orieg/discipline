@@ -15,11 +15,15 @@ Implements the math-first derivations for Phase B2 of the erosion benchmark (Ref
   6. Prevention study Step 0 (`docs/benchmarks/prevention-preregistration.toml`, #1036): the exact
      probability that a Newcombe upper bound stays within a non-inferiority margin, and the runs
      per arm at which it does so with a given power.
+  7. base-tests study Step 0 (`docs/benchmarks/base-tests-preregistration.toml`, #1052): the exact
+     probability that a Wilson upper bound stays within a friction ceiling, and the gold pull
+     requests at which it does so with a given power.
 
 When run with `--test` (or `--self-check`), executes self-contained unit tests pinning known reference values.
 With `--recall-bounds-json`, prints the recall study's Step-0 values as JSON.
 With `--regression-bounds-json`, prints the regression-value study's Step-0 values as JSON.
 With `--prevention-bounds-json`, prints the prevention study's Step-0 values as JSON.
+With `--base-tests-bounds-json`, prints the base-tests study's Step-0 values as JSON.
 When run without either, computes and prints the audit table for the erosion benchmark and the recall study.
 
 References:
@@ -258,6 +262,68 @@ def sample_size_for_wilson_lower_bound_power(
 
     if not meets(n_max):
         raise ValueError(f"n_max ({n_max}) has pass probability below {power} at expected {expected}, floor {floor}")
+    n = n_max
+    while n > 1 and meets(n - 1):
+        n -= 1
+    return n
+
+
+def wilson_upper_pass_probability(n: int, true_p: float, ceiling: float, confidence_level: float = 0.95) -> float:
+    """Exact probability that the Wilson upper bound of k/n stays within `ceiling` when k ~ Binomial(n, true_p).
+
+    "Within" is `upper <= ceiling`, the rule of a pre-registered rate ceiling (a friction or
+    false-positive rate that must be shown small). The Wilson upper bound is increasing in k,
+    so the event is k <= k_max with k_max the largest count that stays within, and the
+    probability is the binomial lower tail up to k_max (0.0 when even k = 0 exceeds it).
+    This is the mirror image of `wilson_pass_probability`: the score interval of (n - k)/n is
+    (1 - upper, 1 - lower), so the two agree on (1 - true_p, 1 - ceiling) up to rounding.
+
+    Reference: Wilson (1927), the score interval `wilson_score_interval` implements.
+    """
+    if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+        raise ValueError(f"sample size n must be a positive integer, got {n}")
+    _validate_unit_interval("true proportion", true_p)
+    _validate_unit_interval("ceiling", ceiling)
+    _validate_unit_interval("confidence level", confidence_level)
+    if wilson_score_interval(0, n, confidence_level)[1] > ceiling:
+        return 0.0
+    lo, hi = 0, n  # the upper bound is increasing in k: bisect for the largest k within the ceiling
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if wilson_score_interval(mid, n, confidence_level)[1] <= ceiling:
+            lo = mid
+        else:
+            hi = mid - 1
+    k_max = lo
+    return min(1.0, sum(_binomial_pmf(k, n, true_p) for k in range(0, k_max + 1)))
+
+
+def sample_size_for_wilson_upper_bound_power(
+    expected: float, ceiling: float, confidence_level: float, power: float, n_max: int
+) -> int:
+    """Smallest n such that every n' in [n, n_max] has `wilson_upper_pass_probability(n', expected, ceiling) >= power`.
+
+    The ceiling counterpart of `sample_size_for_wilson_lower_bound_power`, with the same
+    monotonicity choice (the start of the last unbroken run of sizes meeting `power` that
+    ends at n_max). Requires expected < ceiling. Raises ValueError when n_max falls short.
+
+    Reference: Wilson (1927), the score interval `wilson_score_interval` implements; the
+    pass probability is the exact binomial tail (`wilson_upper_pass_probability`).
+    """
+    _validate_unit_interval("expected proportion", expected)
+    _validate_unit_interval("ceiling", ceiling)
+    _validate_unit_interval("confidence level", confidence_level)
+    _validate_unit_interval("power", power)
+    if ceiling <= expected:
+        raise ValueError(f"ceiling ({ceiling}) must be above the expected proportion ({expected})")
+    if not isinstance(n_max, int) or isinstance(n_max, bool) or n_max <= 0:
+        raise ValueError(f"n_max must be a positive integer, got {n_max}")
+
+    def meets(m: int) -> bool:
+        return wilson_upper_pass_probability(m, expected, ceiling, confidence_level) >= power
+
+    if not meets(n_max):
+        raise ValueError(f"n_max ({n_max}) has pass probability below {power} at expected {expected}, ceiling {ceiling}")
     n = n_max
     while n > 1 and meets(n - 1):
         n -= 1
@@ -637,6 +703,36 @@ class TestStatisticalBounds(unittest.TestCase):
         self.assertLess(wilson_pass_probability(111, 0.90, 0.80, 0.95), 0.80)
         self.assertEqual(sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 0.80, 500), 112)
 
+    def test_wilson_upper_bound_power_pinned_reference_values(self):
+        # Exact binomial tails cross-checked with `fractions.Fraction` and `math.comb`.
+        for n, p, ceiling, expected in [
+            (83, 0.05, 0.15, 0.8784816732695292),
+            (82, 0.05, 0.15, 0.7730899722104323),
+            (272, 0.10, 0.15, 0.6864592876744563),
+            (272, 0.05, 0.10, 0.8601618166189456),
+        ]:
+            self.assertAlmostEqual(wilson_upper_pass_probability(n, p, ceiling, 0.95), expected, places=10)
+        self.assertEqual(wilson_upper_pass_probability(5, 0.01, 0.10, 0.95), 0.0)
+        # The mirror image of the lower-bound tail: (0.10, 0.20) is (0.90, 0.80) reflected.
+        self.assertAlmostEqual(
+            wilson_upper_pass_probability(112, 0.10, 0.20, 0.95), wilson_pass_probability(112, 0.90, 0.80, 0.95), places=10
+        )
+        with self.assertRaisesRegex(ValueError, "must be above the expected proportion"):
+            sample_size_for_wilson_upper_bound_power(0.15, 0.15, 0.95, 0.80, 2000)
+        self.assertEqual(sample_size_for_wilson_upper_bound_power(0.05, 0.15, 0.95, 0.80, 2000), 83)
+        self.assertEqual(sample_size_for_wilson_upper_bound_power(0.10, 0.20, 0.95, 0.80, 2000), 112)
+        self.assertEqual(sample_size_for_wilson_upper_bound_power(0.10, 0.15, 0.95, 0.80, 2000), 378)
+        # The sawtooth: 74-78 meet the power, 79-82 fall below it again.
+        self.assertGreaterEqual(wilson_upper_pass_probability(78, 0.05, 0.15, 0.95), 0.80)
+        self.assertLess(wilson_upper_pass_probability(82, 0.05, 0.15, 0.95), 0.80)
+        for bad in [
+            lambda: wilson_upper_pass_probability(0, 0.05, 0.15),
+            lambda: wilson_upper_pass_probability(10, 0.05, 1.0),
+            lambda: sample_size_for_wilson_upper_bound_power(0.05, 0.15, 0.95, 0.80, 50),
+        ]:
+            with self.assertRaises(ValueError):
+                bad()
+
     def test_trajectories_required_pinned_reference_values(self):
         self.assertEqual(trajectories_required(112, 0.30, 0.50, 0.90), 830)
         self.assertEqual(trajectories_required(100, 0.50, 0.50, 1.0), 400)
@@ -772,6 +868,8 @@ def generate_power_audit() -> str:
     lines.extend(generate_regression_audit_lines())
     lines.append("")
     lines.extend(generate_prevention_audit_lines())
+    lines.append("")
+    lines.extend(generate_base_tests_audit_lines())
     return "\n".join(lines)
 
 
@@ -953,6 +1051,65 @@ def generate_prevention_audit_lines() -> list[str]:
     ]
 
 
+# base-tests study (`docs/benchmarks/base-tests-preregistration.toml`, #1052): Part 2 is a ceiling
+# on the share of honest gold pull requests the preset blocks, shown by the Wilson upper bound.
+# Confidence 0.95, power 0.80. `available` is the confirmatory SWE-bench instance count of #838
+# (`scripts/recall_lab/confirmatory-ids-swe.txt`); the pilot instances check the runners only.
+BASE_TESTS_CONFIDENCE = 0.95
+BASE_TESTS_POWER = 0.80
+BASE_TESTS_Q2 = {"planning_rate": 0.05, "ceiling": 0.15, "available": 272, "n_max": 2000}
+# (planning friction, ceiling) cells around the primary one, for the sensitivity table.
+BASE_TESTS_Q2_GRID = [(0.02, 0.15), (0.05, 0.15), (0.10, 0.15), (0.05, 0.10), (0.10, 0.20)]
+
+
+def base_tests_q2_cell(planning_rate: float, ceiling: float) -> dict[str, float | int | str]:
+    """Required gold pull requests for one (planning friction, ceiling) cell, and its Step-0 verdict."""
+    q2 = BASE_TESTS_Q2
+    required = sample_size_for_wilson_upper_bound_power(
+        planning_rate, ceiling, BASE_TESTS_CONFIDENCE, BASE_TESTS_POWER, q2["n_max"]
+    )
+    return {
+        "planning_rate": planning_rate,
+        "ceiling": ceiling,
+        "required_gold_prs": required,
+        "power_at_available": wilson_upper_pass_probability(
+            q2["available"], planning_rate, ceiling, BASE_TESTS_CONFIDENCE
+        ),
+        "min_eligible_share": required / q2["available"],
+        "verdict": "PROCEED" if required <= q2["available"] else "REJECT_UNDETECTABLE",
+    }
+
+
+def base_tests_bound_values() -> dict[str, object]:
+    """The base-tests study's Step-0 values, as the pre-registration records them."""
+    q2 = BASE_TESTS_Q2
+    return {
+        "q2_primary": {**q2, **base_tests_q2_cell(q2["planning_rate"], q2["ceiling"])},
+        "q2_grid": [base_tests_q2_cell(p, c) for p, c in BASE_TESTS_Q2_GRID],
+    }
+
+
+def generate_base_tests_audit_lines() -> list[str]:
+    values = base_tests_bound_values()
+    lines = [
+        "## base-tests study (`base-tests-v1`, #1052)",
+        "",
+        "| Planning friction | Ceiling | Required gold PRs (power >= 0.80) | Power at 272 | Verdict |",
+        "|---|---|---|---|---|",
+    ]
+    for cell in values["q2_grid"]:
+        lines.append(
+            f"| {cell['planning_rate']:.2f} | {cell['ceiling']:.2f} | {cell['required_gold_prs']} "
+            f"| {cell['power_at_available']:.3f} | `{cell['verdict']}` |"
+        )
+    lines += [
+        "",
+        "- Part 2 passes when the Wilson upper bound of blocked over eligible gold pull requests is at most the"
+        " ceiling; the requirement is the start of the last unbroken run of qualifying sizes up to n_max.",
+    ]
+    return lines
+
+
 if __name__ == "__main__":
     if "--test" in sys.argv or "--self-check" in sys.argv:
         sys.argv = [a for a in sys.argv if a not in ("--test", "--self-check")]
@@ -963,5 +1120,7 @@ if __name__ == "__main__":
         print(json.dumps(regression_bound_values(), indent=2))
     elif "--prevention-bounds-json" in sys.argv:
         print(json.dumps(prevention_bound_values(), indent=2))
+    elif "--base-tests-bounds-json" in sys.argv:
+        print(json.dumps(base_tests_bound_values(), indent=2))
     else:
         print(generate_power_audit())
