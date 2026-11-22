@@ -1,0 +1,652 @@
+{
+  "study_id": "head-tests-on-base-v1",
+  "pull_requests": 60,
+  "outcomes": {
+    "reported": 9,
+    "not-reported": 28,
+    "build-failure": 1,
+    "no-runnable-case": 21,
+    "run-error": 1
+  },
+  "report_rate": {
+    "build_failure_as_not_reported": {
+      "k": 9,
+      "n": 38,
+      "wilson_95": [
+        0.1299370701705408,
+        0.39206812363239807
+      ]
+    },
+    "build_failure_out_of_denominator": {
+      "k": 9,
+      "n": 37,
+      "wilson_95": [
+        0.13361352989116398,
+        0.40117292121442655
+      ]
+    }
+  },
+  "classes": {
+    "backfill": {
+      "k": 4,
+      "n": 9,
+      "wilson_95": [
+        0.18877852109766458,
+        0.7333487065045069
+      ]
+    },
+    "refactor": {
+      "k": 1,
+      "n": 9,
+      "wilson_95": [
+        0.019890887638544935,
+        0.434999705576656
+      ]
+    },
+    "non-discriminating": {
+      "k": 4,
+      "n": 9,
+      "wilson_95": [
+        0.18877852109766458,
+        0.7333487065045069
+      ]
+    },
+    "other": {
+      "k": 0,
+      "n": 9,
+      "wilson_95": [
+        2.7755575615628914e-17,
+        0.29914504841954404
+      ]
+    }
+  },
+  "by_design": {
+    "k": 5,
+    "n": 9,
+    "wilson_95": [
+      0.2666512934954931,
+      0.8112214789023354
+    ]
+  },
+  "verdict": "INTERMEDIATE",
+  "excluded_in_h_cases": 20,
+  "in_scope_cases_per_repo": {
+    "astral-sh/ruff": {
+      "in_scope_cases": 4,
+      "in_scope_passing_in_m": 1
+    },
+    "denoland/deno": {
+      "in_scope_cases": 35,
+      "in_scope_passing_in_m": 5
+    },
+    "tokio-rs/tokio": {
+      "in_scope_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    "fastapi/fastapi": {
+      "in_scope_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    "vitejs/vite": {
+      "in_scope_cases": 52,
+      "in_scope_passing_in_m": 4
+    },
+    "golang/go": {
+      "in_scope_cases": 1,
+      "in_scope_passing_in_m": 0
+    },
+    "junit-team/junit5": {
+      "in_scope_cases": 0,
+      "in_scope_passing_in_m": 0
+    }
+  },
+  "run_errors": [
+    {
+      "repo": "denoland/deno",
+      "pr_number": 33274,
+      "cause": "M deps"
+    }
+  ],
+  "pull_request_outcomes": [
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 25410,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 3,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 24644,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 25152,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 23583,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 23737,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 23631,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 23630,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 23275,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 22469,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "astral-sh/ruff",
+      "pr_number": 22994,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 1
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 35795,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 35993,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 1,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 35796,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 35791,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 35706,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 1
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 35561,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 33313,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 4,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 2
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 35095,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 35200,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 34966,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 1
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 34000,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 34770,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 3,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 1
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 34741,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 34257,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 6,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 33164,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 4,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 30562,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 14,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 33274,
+      "outcome": "run-error",
+      "cause": "M deps",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 32596,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "denoland/deno",
+      "pr_number": 33443,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "tokio-rs/tokio",
+      "pr_number": 8263,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "fastapi/fastapi",
+      "pr_number": 15116,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 23510,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 1,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 23026,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 23265,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 2,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 22945,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 2,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 22039,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 22191,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 22150,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 1
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 22019,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 21886,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 21800,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 4,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20916,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 6,
+      "excluded_in_h_cases": 4,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 18457,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 2,
+      "excluded_in_h_cases": 2,
+      "in_scope_passing_in_m": 1
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 21652,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 1,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 21519,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 4,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 21325,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 2,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 21312,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 21001,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 3,
+      "excluded_in_h_cases": 1,
+      "in_scope_passing_in_m": 1
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20998,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 2,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20522,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 3,
+      "excluded_in_h_cases": 3,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20972,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 2,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20830,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 1,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20468,
+      "outcome": "reported",
+      "cause": "",
+      "in_scope_cases": 2,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 1
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20519,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20800,
+      "outcome": "no-runnable-case",
+      "cause": "no runnable test file",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20644,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 2,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 20638,
+      "outcome": "not-reported",
+      "cause": "",
+      "in_scope_cases": 8,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "vitejs/vite",
+      "pr_number": 23602,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "golang/go",
+      "pr_number": 819641,
+      "outcome": "build-failure",
+      "cause": "in-scope cases not collected in M",
+      "in_scope_cases": 1,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    },
+    {
+      "repo": "junit-team/junit5",
+      "pr_number": 6154,
+      "outcome": "no-runnable-case",
+      "cause": "no in-scope case",
+      "in_scope_cases": 0,
+      "excluded_in_h_cases": 0,
+      "in_scope_passing_in_m": 0
+    }
+  ]
+}

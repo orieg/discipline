@@ -18,7 +18,7 @@ Adopting a gate is worth it when it blocks real problems (value), rarely blocks 
 | Value on verified test gaming | `impossible-recall-v1` (#838) | Share of agent changes that pass impossible tests by editing the test side that discipline blocks (recall), against a line-regex twin; false alarms on honest solutions to the normal split | `docs/benchmarks/recall-preregistration.toml` | `docs/benchmarks/results-recall-pilot/` (pilot); `docs/benchmarks/results-recall-confirmatory/` (verdict REJECTED with 0.26.0; descriptive replays of 0.31.0 and the 0.32.0 code beside it) |
 | Value on known regressions | `regression-value-v1` (#1024) | Share of reverted or fix-linked agent pull requests that discipline blocks with a finding in an implicated file, and its block rate on them against matched controls from the same repositories, beside a naive twin | `docs/benchmarks/regression-value-preregistration.toml` (draft) | not run yet |
 | Prevention in the agent's loop | `prevention-v1` (#1036) | Landed test-gaming rate on impossible tests with discipline refusing submissions in the agent's loop, against no gate and a test-path-lock twin; landed honest passes on the normal split as the cost | `docs/benchmarks/prevention-preregistration.toml` (draft; H1 Step 0 REJECT_UNDETECTABLE) | not run yet |
-| Whether added tests discriminate | `head-tests-on-base-v1` (#1071) | Share of merged agent pull requests whose added tests pass on the code before the change, and why: each such pull request labelled backfill, refactor, non-discriminating or other by one blinded LLM rater | `docs/benchmarks/head-tests-on-base-preregistration.toml` (locked) | `docs/benchmarks/results-head-tests-on-base/population.json` (population scan, `scripts/head_tests_on_base.py population`); runs not yet |
+| Whether added tests discriminate | `head-tests-on-base-v1` (#1071) | Share of merged agent pull requests whose added tests pass on the code before the change, and why: each such pull request labelled backfill, refactor, non-discriminating or other by one blinded LLM rater | `docs/benchmarks/head-tests-on-base-preregistration.toml` (locked) | `docs/benchmarks/results-head-tests-on-base/`: `population.json` (scan), `runs.json` (H, B and M per pull request), `labels.json` (rater class, reason and packet), `summary.json` (counts, intervals, verdict); see §7 |
 | Value on known evasions | evasion corpus | Each known way to weaken a test without tripping a gate, recorded as `caught` or `known_miss` | none (a regression suite) | `tests/fixtures/evasion_corpus.json`, checked by `tests/test_evasion_corpus.rs` |
 | Cost | hook latency (#982) | Wall time of the per-edit agent hook | `docs/benchmarks/hook-latency.md` §1 | `docs/benchmarks/results-hook-latency/` |
 
@@ -200,3 +200,28 @@ committed results above by `python3 scripts/benchmark_charts.py`, which reads no
 Re-run it after a result file changes; `tests/test_benchmark_charts.rs` fails while a chart and
 its results disagree. The recall charts are drawn only once
 `docs/benchmarks/results-recall-confirmatory/` is committed.
+
+## 7. Head tests on base code (`head-tests-on-base-v1`, #1071)
+
+1. **Population.** `python3 scripts/head_tests_on_base.py population` lists each v6 pull
+   request's changed files through `gh api` and rewrites `population.json`.
+2. **Runs.** `scripts/head_tests_on_base_lab.py` runs on one Linux host with Docker, under
+   the host-wide benchmark lock, from a root directory (`--root`, default `/data/htob`):
+   `images` builds the five toolchain images, `prepare` clones the seven repositories,
+   `run --side H`, then `--side B` and `--side M` (B refuses to start until every H is
+   recorded) write `results/<pr>/<side>.json` and per-step logs, and `collect` writes
+   `runs.json`. `--clean-target` removes in-tree build output after a side; deno builds
+   into each tree's own `target`, which a base and a head tree cannot share. Test steps
+   run with no network; dependency steps retry a failed download.
+3. **Labels.** One LLM subagent per reported pull request gets the pre-registered
+   `rater_prompt` and a directory holding only that pull request's packet: title and
+   body, diff, the cases that passed in M, and the head source of their files.
+   `labels.json` keeps the class, the reason and the packet.
+4. **Summary.** `python3 scripts/head_tests_on_base.py summarize` reads `runs.json` and
+   `labels.json`, refuses labels that do not cover exactly the reported pull requests, and
+   writes `summary.json` with the verdict of `verdict`.
+
+`tests/test_head_tests_on_base.rs` runs both scripts' self-checks. A rerun can differ where
+a case is flaky, a dependency download changes, or an environment the lab lacks (a GPU,
+outbound DNS) decides a case; such cases fail in H and are excluded, and `summary.json`
+counts them.
