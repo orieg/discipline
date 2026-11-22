@@ -14292,7 +14292,7 @@
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
-          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.192.168.0.152, DNS:192.168.0.152": {
+          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.<lan-ip>, DNS:<lan-ip>": {
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
@@ -14820,7 +14820,7 @@
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
-          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.192.168.0.152, DNS:192.168.0.152": {
+          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.<lan-ip>, DNS:<lan-ip>": {
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
@@ -15345,7 +15345,7 @@
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
-          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.192.168.0.152, DNS:192.168.0.152": {
+          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.<lan-ip>, DNS:<lan-ip>": {
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
@@ -19517,7 +19517,7 @@
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
-          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.192.168.0.152, DNS:192.168.0.152": {
+          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.<lan-ip>, DNS:<lan-ip>": {
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
@@ -20402,7 +20402,7 @@
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
-          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.192.168.0.152, DNS:192.168.0.152": {
+          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.<lan-ip>, DNS:<lan-ip>": {
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
@@ -21289,7 +21289,7 @@
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
-          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.192.168.0.152, DNS:192.168.0.152": {
+          "packages/vite/src/node/__tests__/utils.spec.ts::extractHostnamesFromSubjectAltName should extract names from subjectAltName: DNS:*.<lan-ip>, DNS:<lan-ip>": {
             "status": "passed",
             "file": "packages/vite/src/node/__tests__/utils.spec.ts"
           },
@@ -35289,5 +35289,6 @@
         "raw_case_count": 0
       }
     }
-  ]
+  ],
+  "lan_ips_redacted": 12
 }

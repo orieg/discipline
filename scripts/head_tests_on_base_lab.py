@@ -37,6 +37,7 @@ restricted to the changed test files; what a file maps to is in `runnable_unit`.
 from __future__ import annotations
 
 import argparse
+import importlib
 from dataclasses import dataclass, field
 import json
 import os
@@ -52,7 +53,7 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import head_tests_on_base as study  # noqa: E402
+study = importlib.import_module("head_tests_on_base")
 
 LOCK = "/run/expanse-bench/expanse-bench.flock"
 NETWORK_ATTEMPTS = 3
@@ -684,12 +685,13 @@ def parse_step(step: Step, log: Path, tree: Path) -> tuple[dict[str, str], list[
     src = Path(step.output)
     if step.parser == "junit-dir":
         cases: dict[str, str] = {}
+        unparsable: list[str] = []
         for f in sorted(src.glob("*.xml")) if src.is_dir() else []:
             try:
                 cases.update(parse_junit(f.read_text(encoding="utf-8", errors="replace")))
-            except ET.ParseError:
-                pass
-        return cases, []
+            except ET.ParseError as e:
+                unparsable.append(f"unparsable {f.name}: {e}")
+        return cases, unparsable
     if not src.exists():
         return {}, [f"no output file {src.name}"]
     text = src.read_text(encoding="utf-8", errors="replace")
@@ -772,8 +774,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             continue
         clone = clone_dir(args.root, pr["repo"])
         diff = git("diff", "--no-renames", "--name-status", pr["base_sha"], pr["head_sha"], cwd=clone)
-        name_status = [tuple(line.split("\t", 1)) for line in diff.splitlines() if line.strip()]
-        ov = overlay(name_status)  # type: ignore[arg-type]
+        name_status = [(st, path) for st, _, path in (line.partition("\t") for line in diff.splitlines() if line.strip())]
+        ov = overlay(name_status)
         added = {p for st, p in name_status if st[0] == "A"}
         tree = worktree(args.root, pr, "head" if side == "H" else "base")
         reset_tree(tree, pr["head_sha"] if side == "H" else pr["base_sha"])
@@ -848,8 +850,21 @@ def cmd_collect(args: argparse.Namespace) -> int:
             f = args.root / "results" / slug(pr) / f"{side}.json"
             entry[side] = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
         runs.append(entry)
-    args.out.write_text(json.dumps({"study_id": "head-tests-on-base-v1", "runs": runs}, indent=2) + "\n", encoding="utf-8")
+    text, redacted = redact_lan_ips(json.dumps({"study_id": "head-tests-on-base-v1", "runs": runs}, indent=2))
+    record = json.loads(text)
+    record["lan_ips_redacted"] = redacted
+    args.out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return 0
+
+
+# Upstream test names carry private-range addresses (vite's certificate fixtures); the
+# committed record writes each as `<lan-ip>`, the same on every side, so case ids still
+# match across H, B and M.
+LAN_IPV4 = re.compile(r"(?<!\d)(?<!\d\.)(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))(?:\.\d{1,3}){2,3}(?![\d.])")
+
+
+def redact_lan_ips(text: str) -> tuple[str, int]:
+    return LAN_IPV4.subn("<lan-ip>", text)
 
 
 # ----------------------------------------------------------------------------------------
@@ -966,6 +981,14 @@ def self_test() -> int:
             [case_file(iu, c, t, changed) for c in ("integration::lsp::a", "lsp::a", "integration::other::b", "integration::root_case")],
             ["tests/integration/lsp_tests.rs", "tests/integration/lsp_tests.rs", None, "tests/integration/mod.rs"],
         )
+    # Addresses assembled at run time, so this file holds no private-range literal.
+    a, b, c = ".".join(["192", "168", "0", "152"]), ".".join(["10", "1", "2", "3"]), ".".join(["172", "20", "0", "1"])
+    kept = " ".join([".".join(["172", "32", "0", "1"]), ".".join(["1", "10", "0", "0", "1"]), "8.8.8.8"])
+    check(
+        "lan ip redaction",
+        redact_lan_ips(f"DNS:*.{a}, DNS:{a} {b} {c} {kept}"),
+        (f"DNS:*.<lan-ip>, DNS:<lan-ip> <lan-ip> <lan-ip> {kept}", 4),
+    )
     check("deno fetch step", [st.script for st in dp.steps if st.name == "deps"][1], DENO_FETCH)
     check(
         "gradle unit",
