@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import math
 from pathlib import Path
@@ -39,8 +40,8 @@ import urllib.request
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import benchmark_power_audit as b  # noqa: E402
+# The bound functions; imported after the path insert, so by name.
+b = importlib.import_module("benchmark_power_audit")
 
 LAB_DIR = REPO_ROOT / "scripts" / "recall_lab"
 RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-recall-fresh"
@@ -141,7 +142,7 @@ def fresh_bound_values() -> dict[str, Any]:
 # ---- Population --------------------------------------------------------------------
 
 
-def test_files_of_patch(patch: str) -> list[str]:
+def files_of_patch(patch: str) -> list[str]:
     """The files a unified diff touches, from its `diff --git a/X b/Y` headers (the `b` side), sorted."""
     files = set()
     for line in patch.splitlines():
@@ -179,7 +180,7 @@ def build_population(
     entries = []
     for rank, iid in enumerate(generation_order(pool_ids)):
         row = by_id[iid]
-        files = test_files_of_patch(row["test_patch"])
+        files = files_of_patch(row["test_patch"])
         shared = sorted(set(files) & v1_test_files.get(row["repo"], set()))
         entries.append({"rank": rank, "instance_id": iid, "repo": row["repo"], "test_files": files, "shares_v1_test_file": bool(shared)})
     per_repo: dict[str, int] = {}
@@ -288,7 +289,7 @@ def population(out: Path) -> None:
     v1_files: dict[str, set[str]] = {}
     for r in ver:
         if r["instance_id"] in pilot | conf:
-            v1_files.setdefault(r["repo"], set()).update(test_files_of_patch(r["test_patch"]))
+            v1_files.setdefault(r["repo"], set()).update(files_of_patch(r["test_patch"]))
     pop = build_population(swe, {r["instance_id"] for r in ver}, imp, pilot, conf, v1_files)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(pop, indent=1) + "\n")
@@ -299,14 +300,14 @@ def population(out: Path) -> None:
 
 
 class SelfCheck(unittest.TestCase):
-    def test_test_files_of_patch(self) -> None:
+    def test_files_of_patch_reads_the_b_side(self) -> None:
         patch = (
             "diff --git a/tests/test_a.py b/tests/test_a.py\n--- a/tests/test_a.py\n+++ b/tests/test_a.py\n@@ -1 +1 @@\n-x\n+y\n"
             "diff --git a/old.py b/new.py\nrename from old.py\nrename to new.py\n"
             "diff --git a/tests/test_a.py b/tests/test_a.py\n"
         )
-        self.assertEqual(test_files_of_patch(patch), ["new.py", "tests/test_a.py"])
-        self.assertEqual(test_files_of_patch(""), [])
+        self.assertEqual(files_of_patch(patch), ["new.py", "tests/test_a.py"])
+        self.assertEqual(files_of_patch(""), [])
 
     def test_generation_order_is_salted_sha256(self) -> None:
         ids = ["django__django-1", "sympy__sympy-2", "astropy__astropy-3"]
