@@ -78,6 +78,112 @@ fn the_planning_rates_are_the_838_counts() {
     );
 }
 
+/// Pass counts of #838's confirmatory family-1 runs, recomputed from the committed manifest:
+/// `(passed, runs)` for (`access_full` impossible splits, `access_readonly` impossible
+/// splits, `access_full` `original`, `access_readonly` `original`). An excluded pair is not a
+/// run; the `mockllm` pairs are the harness's dummy runs, not the agent.
+fn confirmatory_family1_counts() -> [(usize, usize); 4] {
+    let path = root().join("docs/benchmarks/results-recall-confirmatory/manifest.json");
+    let raw = std::fs::read_to_string(path).expect("confirmatory manifest exists");
+    let manifest: Value = serde_json::from_str(&raw).expect("manifest parses");
+    let mut counts = [(0usize, 0usize); 4];
+    for pair in manifest["pairs"].as_array().expect("a pairs array") {
+        if pair["population_split"] != "confirmatory"
+            || pair["model"] != "family-1"
+            || !pair["exclusion"].is_null()
+        {
+            continue;
+        }
+        let impossible = match pair["split"].as_str().expect("a split") {
+            "oneoff" | "conflicting" => true,
+            "original" => false,
+            other => panic!("unexpected split {other}"),
+        };
+        let slot = match (pair["arm"].as_str().expect("an arm"), impossible) {
+            ("access_full", true) => 0,
+            ("access_readonly", true) => 1,
+            ("access_full", false) => 2,
+            ("access_readonly", false) => 3,
+            (other, _) => panic!("unexpected arm {other}"),
+        };
+        counts[slot].1 += 1;
+        if pair["passed"]
+            .as_bool()
+            .expect("a scored pair has `passed`")
+        {
+            counts[slot].0 += 1;
+        }
+    }
+    counts
+}
+
+#[test]
+fn the_planning_rates_are_recomputed_from_the_confirmatory_manifest() {
+    let counts = confirmatory_family1_counts();
+    assert_eq!(counts, [(212, 1069), (20, 533), (432, 536), (212, 266)]);
+    let pb = &prereg()["power_and_bounds"];
+    let rate = |(k, n): (usize, usize)| k as f64 / n as f64;
+    assert!((float(&pb["h1_off_rate"]) - rate(counts[0])).abs() < 5e-4);
+    assert!((float(&pb["h2_rate"]) - rate(counts[2])).abs() < 5e-4);
+}
+
+/// H1's measured block rate, recomputed from the replay `h1_step0_block_source` names: of the
+/// confirmatory family-1 `access_full` runs that passed with no gate, how many the primary
+/// configuration arm blocks (any `error` finding), as `(blocked, passes)` for the impossible
+/// splits and for `original`.
+#[test]
+fn the_h1_block_rate_is_recomputed_from_the_replay_it_cites() {
+    const REPLAY: &str = "replay-main-9df9b947.json.gz";
+    let pb = &prereg()["power_and_bounds"];
+    let source = pb["h1_step0_block_source"].as_str().unwrap();
+    assert!(source.contains(REPLAY), "the source names {REPLAY}");
+    let dir = root().join("docs/benchmarks/results-recall-confirmatory");
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    let passed: std::collections::HashSet<&str> = manifest["pairs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["exclusion"].is_null() && p["passed"] == true)
+        .map(|p| p["pair_id"].as_str().unwrap())
+        .collect();
+    let gz = std::fs::File::open(dir.join(REPLAY)).expect("the cited replay exists");
+    let replay: Value = serde_json::from_reader(flate2::read::GzDecoder::new(gz)).unwrap();
+    let (mut impossible, mut original) = ((0usize, 0usize), (0usize, 0usize));
+    for pair in replay["pairs"].as_array().unwrap() {
+        if pair["arm"] != "access_full"
+            || pair["model"] != "family-1"
+            || pair["population_split"] != "confirmatory"
+            || !passed.contains(pair["pair_id"].as_str().unwrap())
+        {
+            continue;
+        }
+        let slot = if pair["split"] == "original" {
+            &mut original
+        } else {
+            &mut impossible
+        };
+        slot.1 += 1;
+        let blocked = pair["config_arms"]["primary"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["severity"] == "error");
+        if blocked {
+            slot.0 += 1;
+        }
+    }
+    assert_eq!(
+        impossible,
+        (int(&pb["h1_step0_block_k"]), int(&pb["h1_step0_block_n"]))
+    );
+    assert_eq!(original, (8, 432));
+    assert!(
+        source.contains("8 of 432"),
+        "the source quotes the honest-pass count"
+    );
+}
+
 #[test]
 fn h1_sample_sizes_match_rust_bounds() {
     let pb = &prereg()["power_and_bounds"];
