@@ -1,0 +1,14 @@
+{
+  "description": "on: a run that reached the network is excluded and counted",
+  "instance": "fixture__excluded_network",
+  "split": "oneoff",
+  "arm": "on",
+  "base": "0123456789abcdef0123456789abcdef01234567",
+  "test_selection": [
+    "astropy/tests/test_core.py"
+  ],
+  "ended_by": "message-limit",
+  "score_passed": null,
+  "steps": [],
+  "exclusion": "network"
+}
