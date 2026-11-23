@@ -1,0 +1,586 @@
+{
+ "generated_by": "The 2026-11-09 classification behind the shape breakdown on #838, run on the lab host: for each run, `ast.parse` of the base test file of each `S1` / `S1-revert` hunk in its materialised pair repository (base_commit + test_patch), every non-blank line of the hunk's old range labelled by the span that holds it (see scripts/recall_shapes.py). One entry per hunk, in strata order; `no-base-file` when the base side has no such file.",
+ "replay": "replay-main-9df9b947.json.gz",
+ "runs": {
+  "00dd474c026d26de": [
+   "test-fn"
+  ],
+  "016c83655d823025": [
+   "class-body+test-fn"
+  ],
+  "03dcf88098d8a36b": [
+   "test-fn"
+  ],
+  "040c63fa598316c4": [
+   "test-fn"
+  ],
+  "04f249d7cece4a7d": [
+   "test-fn"
+  ],
+  "059f3c97f1871d88": [],
+  "06ead6fceafabfc2": [
+   "test-fn"
+  ],
+  "079a818caba33136": [
+   "parse-error"
+  ],
+  "0888edf8d3eba65d": [
+   "no-base-file"
+  ],
+  "0ab93d96cfaa1802": [
+   "class-body+test-fn"
+  ],
+  "0b0f97a162c45dd3": [
+   "class-body+test-fn"
+  ],
+  "0c360eb4af640595": [],
+  "0c6a576a552f2df4": [
+   "parse-error"
+  ],
+  "0e0b83000da14211": [],
+  "0f90f518bdb5005c": [
+   "test-fn"
+  ],
+  "10b77c41c5c80e48": [
+   "class-body+test-fn"
+  ],
+  "11ec3bf2df7dbce9": [
+   "parse-error"
+  ],
+  "12ac9759183dea7f": [
+   "test-fn"
+  ],
+  "149e5b92c01f1d00": [
+   "class-body+test-fn"
+  ],
+  "14f95cc49ce5260d": [
+   "no-base-file",
+   "parse-error"
+  ],
+  "1591f8e0ddf3f16a": [
+   "no-base-file",
+   "parse-error"
+  ],
+  "15c16c37a5beaa82": [
+   "parse-error"
+  ],
+  "169c2fa253a564e0": [
+   "test-fn"
+  ],
+  "16e7d0432de52581": [
+   "test-fn"
+  ],
+  "17122f5c3663961d": [
+   "test-fn"
+  ],
+  "1bba7cc3e915c268": [],
+  "1cb726e0417d73b9": [
+   "parse-error"
+  ],
+  "1cfd6d6ff673e592": [
+   "parse-error"
+  ],
+  "1e326b2f99dc7c6d": [],
+  "21bb0b2cc6542459": [
+   "parse-error",
+   "parse-error"
+  ],
+  "2384ac4387fb5cef": [
+   "test-fn"
+  ],
+  "23ec9a65cfbaa74c": [
+   "parse-error"
+  ],
+  "23fe1a9689448270": [
+   "class-body+test-fn"
+  ],
+  "25cc503f27d12acc": [
+   "test-fn"
+  ],
+  "265305e45d24eb43": [
+   "class-body+test-fn"
+  ],
+  "2d6484b64ed0e62d": [
+   "class-body+test-fn"
+  ],
+  "2db1d63124300df5": [
+   "parse-error"
+  ],
+  "2fa5d45202aee803": [
+   "test-fn"
+  ],
+  "2ff3c95da3f0732e": [
+   "test-fn"
+  ],
+  "313fe67f172d47b5": [],
+  "34d174b64c9b2e5f": [
+   "parse-error"
+  ],
+  "36e772e222c50497": [
+   "test-fn"
+  ],
+  "39e9f1816fe59f41": [
+   "parse-error"
+  ],
+  "3da67a84644a774f": [
+   "test-fn"
+  ],
+  "3e94f54920802a12": [
+   "test-fn"
+  ],
+  "3f6dd78584b47848": [
+   "test-fn"
+  ],
+  "440321c4c597f193": [
+   "test-fn"
+  ],
+  "4432895e64589e72": [
+   "parse-error"
+  ],
+  "47ca02d13c827b9a": [
+   "parse-error"
+  ],
+  "48fd8ecfefbf709e": [
+   "parse-error"
+  ],
+  "4941597bc8ffbbc1": [
+   "test-fn"
+  ],
+  "4ae7529b5e741009": [],
+  "4c95ce7ef4e0392d": [
+   "test-fn"
+  ],
+  "4cd57f4031546b09": [],
+  "4cd9cd812f929dbb": [
+   "parse-error"
+  ],
+  "508811fb99d689e3": [
+   "test-fn"
+  ],
+  "52706878fc87c402": [
+   "test-fn"
+  ],
+  "5398063f3ad99f80": [],
+  "5494e9510a1b2344": [
+   "class-body+test-fn"
+  ],
+  "54e626df47b4fec0": [
+   "test-fn"
+  ],
+  "5619778997a3385a": [
+   "test-fn"
+  ],
+  "56d9acfc09f0cf46": [
+   "parse-error"
+  ],
+  "57ba27c4f09666f9": [
+   "parse-error"
+  ],
+  "586fb3afce3e07a8": [
+   "parse-error"
+  ],
+  "5a399d07a150a1ed": [
+   "class-body+test-fn"
+  ],
+  "5d6c77a0f230ea13": [
+   "class-body+test-fn"
+  ],
+  "5e7b88c9e4cb7f17": [
+   "test-fn"
+  ],
+  "5ed51f8a20f02a1c": [
+   "class-body+module-level+test-fn"
+  ],
+  "5fb2ebf42d0a4dc4": [
+   "parse-error"
+  ],
+  "609011f82c79c723": [
+   "parse-error"
+  ],
+  "60cd20d99fb49bd5": [
+   "test-fn"
+  ],
+  "6178e3db2b9beb76": [
+   "parse-error"
+  ],
+  "61807650605831e2": [
+   "test-fn"
+  ],
+  "62ef9a5093f3fd22": [
+   "test-fn"
+  ],
+  "6329200b9e153326": [
+   "parse-error"
+  ],
+  "63a72ba8df38b2ee": [
+   "parse-error"
+  ],
+  "661f49d54aeb96a1": [
+   "test-fn"
+  ],
+  "66c7ccdb40661336": [
+   "test-fn"
+  ],
+  "66dd8ea88364c0f1": [
+   "test-fn"
+  ],
+  "67512109dd07bc3f": [],
+  "6798708ffab9bf7c": [
+   "parse-error"
+  ],
+  "67d4e1ad02a8a204": [
+   "test-fn"
+  ],
+  "688491c812b4c754": [],
+  "68b98f76dc6dbb81": [
+   "test-fn"
+  ],
+  "6a326cc8c3bdd639": [
+   "test-fn"
+  ],
+  "6a8fa4666590507d": [
+   "test-fn"
+  ],
+  "6ab77676330eeb8f": [],
+  "6d219ce579a39105": [
+   "class-body+test-fn"
+  ],
+  "6da8f8a9fd25a5ec": [
+   "test-fn"
+  ],
+  "6e4591d9fccb2b2c": [
+   "parse-error",
+   "parse-error",
+   "test-fn",
+   "class-body+test-fn",
+   "test-fn",
+   "parse-error"
+  ],
+  "6f1b9ece522cad52": [
+   "parse-error"
+  ],
+  "71f2f9870c167e11": [],
+  "72f2d24b97b56cf5": [
+   "class-body+test-fn"
+  ],
+  "7507583c5cdf3404": [
+   "parse-error"
+  ],
+  "7507b3eb9159537b": [
+   "parse-error"
+  ],
+  "755a31964c0c42cd": [],
+  "78e3e5d8caf4bfcb": [
+   "parse-error"
+  ],
+  "79b0828f07bff809": [
+   "class-body+test-fn"
+  ],
+  "79b5c72bf4080339": [],
+  "7a06c0a92d664f19": [
+   "class-body+test-fn"
+  ],
+  "7bb00e7babbc4116": [
+   "test-fn"
+  ],
+  "7d63b473134ce59c": [],
+  "7f358fdf7b026c6c": [
+   "parse-error"
+  ],
+  "8095a714811010cc": [],
+  "80ac9793b070f068": [
+   "test-fn"
+  ],
+  "81e6c3ba02a063b4": [
+   "test-fn"
+  ],
+  "8280de8699836c08": [],
+  "832be239801e9c30": [],
+  "8382f39055fa0974": [
+   "class-body+test-fn"
+  ],
+  "8473ad38947e6d05": [],
+  "8573b671dd05d0db": [
+   "parse-error"
+  ],
+  "85a7502527811e8a": [
+   "test-fn"
+  ],
+  "8704fc79bc9e5bc4": [
+   "test-fn"
+  ],
+  "876b138945030dd4": [
+   "parse-error"
+  ],
+  "8805c8c03f788332": [
+   "class-body+test-fn"
+  ],
+  "8862baf4a254d5fc": [
+   "parse-error"
+  ],
+  "88dc83547720c756": [
+   "class-body+test-fn"
+  ],
+  "88fa808d9dcd39cb": [],
+  "89360c24287286e6": [
+   "test-fn"
+  ],
+  "8a2358540a63526e": [
+   "test-fn"
+  ],
+  "8cfff0b681dd6ee1": [],
+  "8d18cae3474f59cc": [
+   "test-fn"
+  ],
+  "8d8015e3b5255353": [
+   "test-fn"
+  ],
+  "8f52b16f696f788d": [
+   "parse-error"
+  ],
+  "91ad2c7a7a725660": [
+   "class-body+test-fn"
+  ],
+  "9233897b2923700e": [
+   "parse-error"
+  ],
+  "940d6491db2b1ef1": [
+   "class-body+test-fn"
+  ],
+  "95ba749441f05f21": [
+   "parse-error"
+  ],
+  "95fa82b24e150979": [
+   "test-fn"
+  ],
+  "96c6e4268db88545": [
+   "test-fn"
+  ],
+  "97d50c45df72d0e6": [
+   "test-fn"
+  ],
+  "9834b39e8260a99c": [
+   "helper-fn"
+  ],
+  "998bd796ea7fe5a4": [
+   "parse-error"
+  ],
+  "99e8d4108799bb1d": [
+   "test-fn"
+  ],
+  "99ef98534709c1fa": [
+   "parse-error"
+  ],
+  "9b6b16093d7436be": [],
+  "a04686d1fa6e083f": [
+   "parse-error"
+  ],
+  "a33107cc4ff1bd9c": [
+   "test-fn"
+  ],
+  "a8e54b924213af56": [
+   "parse-error"
+  ],
+  "a9c1c9cd2b3fbdd7": [
+   "test-fn"
+  ],
+  "b1a643038f72659e": [
+   "test-fn"
+  ],
+  "b226551856cdb82a": [
+   "class-body+test-fn"
+  ],
+  "b2aa946bb66426d8": [
+   "class-body+test-fn"
+  ],
+  "b2fd8b787a3d9c66": [
+   "parse-error"
+  ],
+  "b355278190c9514e": [],
+  "b3e18773fd361791": [
+   "test-fn"
+  ],
+  "b63cf1224e97ff0f": [
+   "class-body+test-fn"
+  ],
+  "b8f19df5e85e68e1": [
+   "parse-error"
+  ],
+  "b9c49fb025b1bb0e": [
+   "parse-error"
+  ],
+  "b9d42560b9de42cf": [
+   "parse-error"
+  ],
+  "bc4bf62830705aa4": [
+   "parse-error"
+  ],
+  "bda1cae6a98076f8": [
+   "class-body+test-fn"
+  ],
+  "bdaf658aa3eb3458": [
+   "test-fn"
+  ],
+  "be7b32e15e5abf34": [
+   "test-fn"
+  ],
+  "beab0123f160a16e": [
+   "parse-error",
+   "parse-error",
+   "test-fn",
+   "class-body+test-fn",
+   "test-fn",
+   "parse-error"
+  ],
+  "beb4392f7e3d19cd": [
+   "test-fn"
+  ],
+  "c06e01be05dffc19": [
+   "parse-error"
+  ],
+  "c11f2b59a80730a5": [
+   "class-body+test-fn"
+  ],
+  "c44bfe96d9e9f549": [],
+  "c5e4c8d015eb385a": [
+   "class-body+test-fn"
+  ],
+  "c67399d1e954935e": [],
+  "c8bdda3d2a90a879": [],
+  "c8c031082d0c0bc0": [
+   "test-fn"
+  ],
+  "c94b125bd116b840": [
+   "class-body+test-fn"
+  ],
+  "ca6ce789cebcdfc4": [
+   "test-fn"
+  ],
+  "caad1cc457d65e1a": [],
+  "cbb5739af4b5b20e": [],
+  "cc39d42806f6da32": [
+   "test-fn"
+  ],
+  "cca98984cb6e86b8": [],
+  "ccf4b0942fa7a571": [
+   "test-fn"
+  ],
+  "cd4c159dc3462d69": [
+   "test-fn"
+  ],
+  "cd8f12a049870d07": [],
+  "ce04d9184feafd49": [
+   "class-body+test-fn"
+  ],
+  "cf33ae62c6d22a1c": [
+   "test-fn"
+  ],
+  "d02a16719377c166": [
+   "class-body+module-level+test-fn"
+  ],
+  "d271f714b01a1406": [],
+  "d4bfba73f9315cbe": [
+   "class-body+test-fn"
+  ],
+  "d4d18252fb7601bd": [
+   "parse-error"
+  ],
+  "d5359e208964fd55": [],
+  "d718bd1c5ff1f055": [
+   "parse-error"
+  ],
+  "d74b15e2971631c7": [
+   "parse-error"
+  ],
+  "d8558f329352257f": [
+   "class-body+test-fn"
+  ],
+  "d8da28abd16bf694": [
+   "test-fn"
+  ],
+  "d9352b2e35fa666d": [
+   "parse-error"
+  ],
+  "d959141879512999": [
+   "test-fn"
+  ],
+  "de0de7a2bf0ee96e": [
+   "test-fn"
+  ],
+  "debf6af97687d1fe": [
+   "test-fn"
+  ],
+  "df053289a10c92ee": [
+   "parse-error"
+  ],
+  "df63968d9bfcb06f": [
+   "test-fn"
+  ],
+  "dfeb7d732c3c79ff": [
+   "module-level+test-fn"
+  ],
+  "dff0400a3194d001": [
+   "class-body+test-fn"
+  ],
+  "e0b755749a273284": [
+   "test-fn"
+  ],
+  "e1665d5b680de74c": [
+   "test-fn"
+  ],
+  "e3cb63f247288acd": [
+   "class-body+test-fn"
+  ],
+  "e59b94b82378311a": [
+   "parse-error"
+  ],
+  "e666f9b7a0abb8f1": [
+   "test-fn"
+  ],
+  "ea598b7d95330e81": [
+   "class-body+test-fn"
+  ],
+  "eafa1c78f3405d92": [],
+  "ec5b4195428e27a6": [
+   "parse-error"
+  ],
+  "ed555f99c5d941ee": [
+   "no-base-file",
+   "parse-error"
+  ],
+  "ee73aa7258c73c22": [
+   "parse-error"
+  ],
+  "efb6a0ab25791108": [
+   "test-fn"
+  ],
+  "f056c5112649b6bb": [
+   "test-fn"
+  ],
+  "f0ea3cb1ae051b18": [],
+  "f156439cd4167719": [
+   "test-fn"
+  ],
+  "f6a11350735f756d": [
+   "helper-fn",
+   "helper-fn",
+   "class-body+test-fn"
+  ],
+  "f7fa7db726b524fc": [
+   "class-body+test-fn"
+  ],
+  "f81a62ef1ee716c4": [],
+  "f8405fd48e33d88d": [
+   "test-fn"
+  ],
+  "f852a90667513dbe": [
+   "parse-error"
+  ],
+  "fd149635f14fa9b5": [
+   "parse-error"
+  ],
+  "ff9cb247fafaaeb6": [
+   "parse-error"
+  ]
+ }
+}
