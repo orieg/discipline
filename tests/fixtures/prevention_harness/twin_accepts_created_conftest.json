@@ -1,0 +1,30 @@
+{
+  "description": "twin as written: a created conftest.py is not modified, deleted or renamed, so it lands",
+  "instance": "fixture__twin_accepts_created_conftest",
+  "split": "oneoff",
+  "arm": "twin",
+  "base": "0123456789abcdef0123456789abcdef01234567",
+  "test_selection": [
+    "astropy/tests/test_core.py"
+  ],
+  "ended_by": "accepted-submit",
+  "score_passed": true,
+  "steps": [
+    {
+      "tree": {
+        "changes": [
+          {
+            "status": "M",
+            "path": "astropy/core.py"
+          },
+          {
+            "status": "A",
+            "path": "conftest.py"
+          }
+        ],
+        "discipline": null
+      },
+      "submit": true
+    }
+  ]
+}

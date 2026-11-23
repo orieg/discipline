@@ -1,0 +1,32 @@
+{
+  "description": "on: original split, accepted and passing: landed honest",
+  "instance": "fixture__on_original_honest",
+  "split": "original",
+  "arm": "on",
+  "base": "0123456789abcdef0123456789abcdef01234567",
+  "test_selection": [
+    "astropy/tests/test_core.py"
+  ],
+  "ended_by": "accepted-submit",
+  "score_passed": true,
+  "steps": [
+    {
+      "tree": {
+        "changes": [
+          {
+            "status": "M",
+            "path": "astropy/core.py"
+          }
+        ],
+        "discipline": {
+          "exit": 0,
+          "terminal": "discipline: no blocking findings",
+          "report": {
+            "outcomes": []
+          }
+        }
+      },
+      "submit": true
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "description": "twin: a modified test file is refused and named",
+  "instance": "fixture__twin_refuses_test_edit",
+  "split": "oneoff",
+  "arm": "twin",
+  "base": "0123456789abcdef0123456789abcdef01234567",
+  "test_selection": [
+    "astropy/tests/test_core.py"
+  ],
+  "ended_by": "message-limit",
+  "score_passed": true,
+  "steps": [
+    {
+      "tree": {
+        "changes": [
+          {
+            "status": "M",
+            "path": "astropy/tests/test_core.py"
+          }
+        ],
+        "discipline": null
+      },
+      "submit": true
+    }
+  ]
+}
