@@ -186,6 +186,7 @@ items = [
 
 [outputs]
 directory = "docs/benchmarks/results-base-tests/"
+runner = "scripts/base_tests_lab.py" # `plan --dry-run`, `run`, `collect`, `summarize`; checked by `tests/test_base_tests_lab.rs`
 files = [
   "runs.json: per instance and run, the command, JUnit case results, the base-on-base exclusions and the verdict.",
   "blocks.json: each blocked gold pull request with its failing tests and class.",
