@@ -1,0 +1,37 @@
+{
+  "description": "on: exit 2 refuses on submit and at the end check",
+  "instance": "fixture__on_could_not_check",
+  "split": "conflicting",
+  "arm": "on",
+  "base": "0123456789abcdef0123456789abcdef01234567",
+  "test_selection": [
+    "astropy/tests/test_core.py"
+  ],
+  "ended_by": "message-limit",
+  "score_passed": true,
+  "steps": [
+    {
+      "tree": {
+        "changes": [
+          {
+            "status": "M",
+            "path": "astropy/core.py"
+          }
+        ],
+        "discipline": {
+          "exit": 2,
+          "terminal": "",
+          "stderr": "could not read the base",
+          "report": {
+            "could_not_check": {
+              "reason": "repository",
+              "gate": null,
+              "detail": "could not read the base commit"
+            }
+          }
+        }
+      },
+      "submit": true
+    }
+  ]
+}

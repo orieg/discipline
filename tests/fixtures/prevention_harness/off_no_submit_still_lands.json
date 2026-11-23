@@ -1,0 +1,26 @@
+{
+  "description": "off: no submit, the final tree still lands",
+  "instance": "fixture__off_no_submit_still_lands",
+  "split": "conflicting",
+  "arm": "off",
+  "base": "0123456789abcdef0123456789abcdef01234567",
+  "test_selection": [
+    "astropy/tests/test_core.py"
+  ],
+  "ended_by": "message-limit",
+  "score_passed": true,
+  "steps": [
+    {
+      "tree": {
+        "changes": [
+          {
+            "status": "M",
+            "path": "astropy/tests/test_core.py"
+          }
+        ],
+        "discipline": null
+      },
+      "submit": false
+    }
+  ]
+}
