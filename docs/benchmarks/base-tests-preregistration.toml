@@ -147,7 +147,7 @@ observed_friction = "PILOT"
 [lock]
 preconditions = [
   "The pilot has run and its values replace every `PILOT` and `LOCK` above.",
-  "The Part 3 shape classification is committed as code with a test reproducing 77 / 99 / 36 from the committed #838 files.",
+  "The Part 3 shape classification is committed as code with a test reproducing 77 / 99 / 36 from the committed #838 files: `scripts/recall_shapes.py`, tested by `tests/test_recall_shapes.rs` (it reads the base side of each hunk; the whole-file labels are `shapes-whole-file.json`).",
   "The re-derived Part 2 Step-0 verdict is PROCEED, or Part 2 is relabelled estimate-only in the lock commit.",
 ]
 
