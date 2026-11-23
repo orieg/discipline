@@ -1,0 +1,284 @@
+//! The fresh-instance recall re-measurement (#838,
+//! `docs/benchmarks/recall-fresh-preregistration.toml`, status `draft`): the study script's
+//! self-checks run, the committed population scan is disjoint from v1's instances, and the
+//! Step-0 values the pre-registration records are the ones the Rust bound functions and
+//! their Python mirrors give.
+
+mod common;
+
+use discipline::guards::perf::bounds::{
+    minimum_detectable_difference, sample_size_for_interval, trajectories_required,
+    wilson_pass_probability,
+};
+use serde_json::Value;
+use std::collections::HashSet;
+use std::path::Path;
+
+fn root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn prereg() -> toml::Value {
+    let text =
+        std::fs::read_to_string(root().join("docs/benchmarks/recall-fresh-preregistration.toml"))
+            .expect("read pre-registration");
+    toml::from_str(&text).expect("parse pre-registration")
+}
+
+fn population() -> Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(
+            root().join("docs/benchmarks/results-recall-fresh/population.json"),
+        )
+        .expect("read population.json"),
+    )
+    .expect("parse population.json")
+}
+
+fn ids(path: &str) -> HashSet<String> {
+    std::fs::read_to_string(root().join(path))
+        .expect("read id list")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn int(v: &toml::Value, key: &str) -> i64 {
+    v[key]
+        .as_integer()
+        .unwrap_or_else(|| panic!("{key} is not an integer"))
+}
+
+fn float(v: &toml::Value, key: &str) -> f64 {
+    v[key]
+        .as_float()
+        .unwrap_or_else(|| panic!("{key} is not a float"))
+}
+
+/// The rate a `[a, b]` pair in the pre-registration stands for.
+fn ratio(v: &toml::Value, key: &str) -> f64 {
+    let pair = v[key].as_array().expect("pair");
+    pair[0].as_integer().unwrap() as f64 / pair[1].as_integer().unwrap() as f64
+}
+
+fn script(args: &[&str]) -> std::process::Output {
+    let mut all = vec!["-I", "scripts/recall_fresh.py"];
+    all.extend_from_slice(args);
+    common::script_command("python3")
+        .args(all)
+        .current_dir(root())
+        .output()
+        .expect("run python3")
+}
+
+#[cfg(unix)]
+#[test]
+fn recall_fresh_script_passes_its_self_checks() {
+    for args in [&["--test"][..], &["--check-population"][..]] {
+        let out = script(args);
+        assert!(
+            out.status.success(),
+            "recall_fresh.py {args:?} failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn the_pre_registration_is_an_unlocked_draft() {
+    let pre = prereg();
+    assert_eq!(pre["study"]["status"].as_str(), Some("draft"));
+    assert_eq!(
+        pre["study"]["parent_study"].as_str(),
+        Some("impossible-recall-v1")
+    );
+    assert!(!pre["lock_preconditions"]["items"]
+        .as_array()
+        .expect("lock_preconditions")
+        .is_empty());
+}
+
+/// The pinned Impossible-SWE-bench holds only v1's instances, and the fresh pool shares no
+/// id with them: checked here from the committed files, apart from the script.
+#[test]
+fn the_fresh_pool_is_disjoint_from_v1() {
+    let pop = population();
+    let pilot = ids("scripts/recall_lab/pilot-ids-swe.txt");
+    let confirmatory = ids("scripts/recall_lab/confirmatory-ids-swe.txt");
+    assert!(pilot.is_disjoint(&confirmatory));
+    let pool: Vec<&str> = pop["pool"]
+        .as_array()
+        .expect("pool")
+        .iter()
+        .map(|e| e["instance_id"].as_str().expect("instance_id"))
+        .collect();
+    let unique: HashSet<&str> = pool.iter().copied().collect();
+    assert_eq!(unique.len(), pool.len(), "duplicate pool ids");
+    let in_v1: Vec<&&str> = pool
+        .iter()
+        .filter(|i| pilot.contains(**i) || confirmatory.contains(**i))
+        .collect();
+    assert!(
+        in_v1.is_empty(),
+        "pool ids that are v1 instances: {in_v1:?}"
+    );
+    for (check, held) in pop["checks"].as_object().expect("checks") {
+        assert_eq!(held, &Value::Bool(true), "{check}");
+    }
+    let counts = &pop["counts"];
+    assert_eq!(counts["v1_pilot"], Value::from(pilot.len()));
+    assert_eq!(counts["v1_confirmatory"], Value::from(confirmatory.len()));
+    assert_eq!(
+        counts["impossible"],
+        Value::from(pilot.len() + confirmatory.len())
+    );
+    for (rank, e) in pop["pool"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(e["rank"], Value::from(rank));
+    }
+}
+
+/// Every count `[population]` records is the committed scan's.
+#[test]
+fn recorded_population_matches_the_committed_scan() {
+    let pre = prereg();
+    let p = &pre["population"];
+    let pop = population();
+    let counts = &pop["counts"];
+    for (toml_key, json_key) in [
+        ("swebench_test", "swebench_test"),
+        ("verified", "verified"),
+        ("impossible", "impossible"),
+        ("v1_pilot", "v1_pilot"),
+        ("v1_confirmatory", "v1_confirmatory"),
+        ("pool", "pool"),
+        ("pool_sharing_a_v1_test_file", "pool_sharing_a_v1_test_file"),
+    ] {
+        assert_eq!(
+            Value::from(int(p, toml_key)),
+            counts[json_key],
+            "{toml_key}"
+        );
+    }
+    assert_eq!(
+        p["generation_salt"].as_str(),
+        pop["generation_salt"].as_str()
+    );
+    let pool_len = pop["pool"].as_array().unwrap().len() as i64;
+    assert_eq!(int(p, "pool"), pool_len);
+    let per_repo: i64 = pop["pool_per_repo"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|v| v.as_i64().unwrap())
+        .sum();
+    assert_eq!(per_repo, pool_len);
+}
+
+/// The Step-0 values in `[power_and_bounds]` are the Rust bound functions' values, with
+/// reference values pinned here.
+#[test]
+fn recorded_step0_values_are_the_rust_bounds() {
+    let pre = prereg();
+    let pb = &pre["power_and_bounds"];
+    let conf = float(pb, "confidence_level");
+    let power = float(pb, "statistical_power");
+
+    let precision = &pb["precision"];
+    let n_wf = sample_size_for_interval(
+        float(precision, "planning_p"),
+        float(precision, "half_width"),
+        conf,
+    )
+    .unwrap();
+    assert_eq!(n_wf, 93);
+    assert_eq!(int(precision, "n_well_formed_units"), n_wf as i64);
+    let units = (n_wf as f64 * float(precision, "design_effect")).ceil() as usize;
+    assert_eq!(units, 99);
+    assert_eq!(int(precision, "required_units"), units as i64);
+
+    let y = &pb["yield"];
+    let per_instance = ratio(y, "well_formed_units_per_instance");
+    let validated = trajectories_required(units, per_instance, 1.0, 1.0).unwrap();
+    let to_generate =
+        trajectories_required(units, per_instance, 1.0, ratio(y, "generation_yield")).unwrap();
+    assert_eq!((validated, to_generate), (428, 613));
+    assert_eq!(int(y, "validated_instances_required"), validated as i64);
+    assert_eq!(int(y, "instances_to_generate"), to_generate as i64);
+    assert_eq!(int(y, "agent_runs"), (validated * 2 * 2) as i64);
+    assert!(
+        int(&pre["population"], "pool") >= to_generate as i64,
+        "the pool is smaller than the instances to generate"
+    );
+
+    let floor = &pb["floor"];
+    let f = float(floor, "recall_floor");
+    for (key, planning) in [
+        ("pass_probability_at_0_333", 21.0 / 63.0),
+        ("pass_probability_at_0_5", 0.5),
+    ] {
+        let got = wilson_pass_probability(units, planning, f, conf).unwrap();
+        assert!(got < 1e-12, "{key}: {got}");
+        let recorded = float(floor, key);
+        assert!(
+            (got - recorded).abs() <= 0.05 * recorded,
+            "{key}: recorded {recorded}, computed {got}"
+        );
+    }
+    assert_eq!(floor["verdict"].as_str(), Some("REJECT_INFEASIBLE"));
+
+    let g = &pb["generalisation"];
+    let mdd = minimum_detectable_difference(
+        int(g, "reused_units") as usize,
+        int(g, "fresh_units") as usize,
+        21.0 / 63.0,
+        conf,
+        power,
+    )
+    .unwrap();
+    assert!((mdd - 0.2175).abs() < 1e-4, "{mdd}");
+    assert!((float(g, "minimum_detectable_drop") - mdd).abs() < 5e-4);
+    assert_eq!(int(g, "fresh_units"), units as i64);
+}
+
+/// The Python mirror (`--bounds-json`) gives the same values as the Rust functions.
+#[cfg(unix)]
+#[test]
+fn python_step0_values_match_the_rust_bounds() {
+    let out = script(&["--bounds-json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    let units = v["precision"]["required_units"].as_u64().unwrap() as usize;
+    assert_eq!(
+        v["precision"]["n_well_formed_units"],
+        Value::from(sample_size_for_interval(0.5, 0.10, 0.95).unwrap())
+    );
+    assert_eq!(
+        v["yield"]["instances_to_generate"],
+        Value::from(trajectories_required(units, 63.0 / 272.0, 1.0, 349.0 / 500.0).unwrap())
+    );
+    assert_eq!(
+        v["yield"]["validated_instances_required"],
+        Value::from(trajectories_required(units, 63.0 / 272.0, 1.0, 1.0).unwrap())
+    );
+    let mdd = minimum_detectable_difference(63, units, 21.0 / 63.0, 0.95, 0.80).unwrap();
+    let py = v["generalisation"]["minimum_detectable_drop"]
+        .as_f64()
+        .unwrap();
+    assert!((py - mdd).abs() < 1e-12, "python {py}, rust {mdd}");
+    for row in v["floor"]["pass_probability"].as_array().unwrap() {
+        let p = row["planning_recall"].as_f64().unwrap();
+        let rust = wilson_pass_probability(units, p, 0.80, 0.95).unwrap();
+        let py = row["value"].as_f64().unwrap();
+        assert!(
+            (py - rust).abs() <= 1e-9 * rust.max(1e-300),
+            "{p}: python {py}, rust {rust}"
+        );
+    }
+}
