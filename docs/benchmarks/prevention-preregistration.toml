@@ -128,6 +128,7 @@ The submit wrapper and the end-of-episode check are committed in `scripts/` afte
 and before the pilot; a rule here that the wrapper cannot implement as written is amended here
 first. The wrapper is identical across arms except for the gate it calls.
 """
+harness = "scripts/prevention_harness.py (offline checks: tests/test_prevention_harness.rs)"
 twin_winning_regime = """
 H1. On SWE-bench the harness applies the instance's tests itself, so an honest fix needs no
 test edit, and every shortcut that edits a test file is refused by the twin. The twin can
