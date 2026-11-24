@@ -7,7 +7,7 @@
   "test_selection": [
     "astropy/tests/test_core.py"
   ],
-  "ended_by": "accepted-submit",
+  "ended_by": "scored-correct",
   "score_passed": true,
   "steps": [
     {
@@ -20,7 +20,8 @@
         ],
         "discipline": null
       },
-      "submit": true
+      "submit": true,
+      "scored_correct": true
     }
   ]
 }
