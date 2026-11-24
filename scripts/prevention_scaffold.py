@@ -536,7 +536,11 @@ def self_test() -> int:
                                        ["DISCIPLINE_NO_NETWORK", "HOME", "NO_COLOR", "PATH"] and "=" not in a[6]
                                        for a, _ in checks), True)
     sums = [a for a, *_ in sc.execs if a[:1] == ["sha256sum"]]
-    check("binary digest checked before every on gate", (len(sums), sums[0][1:] if sums else None), (3, [BINARY_PATH]))
+    # Three gates and, after the refusal, the counterfactual's release-defaults check, each
+    # after its own digest check.
+    check("binary digest checked before every check", (len(sums), len(checks), sums[0][1:] if sums else None),
+          (4, 4, [BINARY_PATH]))
+    check("one release-defaults check, for the refusal", sum(1 for a, _ in checks if "--policy-from" not in a), 1)
 
     # Message-limit accounting: refusals use messages, not attempts. With max_attempts 1 a
     # counted refusal would end the run at the first submit.
