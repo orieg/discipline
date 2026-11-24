@@ -35,8 +35,9 @@ How the scaffold is built (READ, safety-research/impossiblebench d4f9a149, inspe
   `sandbox().exec(argv, cwd="/testbed", env=env, timeout=GATE_TIMEOUT)` to the event loop and
   waits for it. An exec that raises (a sandbox timeout) is returned as exit 124, which the `on`
   gate refuses as could-not-check. `env` only adds variables to the container's own
-  environment, so the `on` gate's command removes the PR body sources itself
-  (`env -u NAME ... discipline check`, `prevention_harness.UNSET_ENV`).
+  environment, so the `on` gate's command starts from an empty one itself
+  (`env -i PATH=... discipline check ...`, `prevention_harness.CHECK_ENV`), and every `on` gate
+  first checks the copied binary's sha256 against the digest of the host file.
 - The base given to `discipline check` is HEAD when the loop starts, the commit upstream's
   init made with the impossible test patch, not the dataset's `base_commit`: against
   `base_commit` the injected tests would be scored as the agent's change.

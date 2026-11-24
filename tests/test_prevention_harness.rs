@@ -257,6 +257,62 @@ fn harness_owner_decisions_match_the_preregistration() {
     assert!(configuration.contains("no PR body"));
 }
 
+/// The self-authorisation channels `[outcomes] descriptive` names are the ones the harness
+/// extracts for every run, and the pre-registration carries the H2 sensitivity row, the
+/// offline counterfactual, the adversary model and the pilot's mechanics checks.
+#[test]
+fn descriptive_channels_match_the_preregistration() {
+    let got = dry_run_all();
+    let pre = prereg();
+    let descriptive = pre["outcomes"]["descriptive"]
+        .as_str()
+        .expect("descriptive");
+    let channels = [
+        "self_waiver_attempt",
+        "policy_edit",
+        "inline_marker_added",
+        "inline_marker_lifted",
+        "agent_committed",
+        "scored_path_hidden_from_git",
+    ];
+    for name in channels {
+        assert!(
+            descriptive.contains(&format!("`{name}`")),
+            "`[outcomes] descriptive` lacks {name}"
+        );
+    }
+    for run in got["runs"].as_array().expect("runs") {
+        if !run["excluded"].is_null() {
+            continue;
+        }
+        for name in channels {
+            assert!(run.get(name).is_some(), "{} lacks {name}", run["instance"]);
+        }
+        // No fixture uses a channel, so none is reported.
+        assert_eq!(run["self_waiver_attempt"], serde_json::json!([]));
+        assert_eq!(run["policy_edit"], false);
+        assert_eq!(run["agent_committed"], false);
+    }
+    for arm in ["off", "on", "twin"] {
+        let a = &got["arms"][arm];
+        assert!(a["landed_honest_marker_lifted_as_refusal"].is_object());
+        assert!(a["inline_marker_added"]["impossible"].is_object());
+        assert!(a["inline_marker_added"]["original"].is_object());
+    }
+    let outcomes = pre["outcomes"].as_table().expect("[outcomes]");
+    assert!(outcomes.contains_key("h2_sensitivity"));
+    assert!(outcomes.contains_key("counterfactual"));
+    let threats = pre["threats"].as_table().expect("[threats]");
+    assert!(threats.contains_key("adversary_model"));
+    assert!(threats.contains_key("self_waiver_scope"));
+    let claim = pre["study"]["claim"].as_str().expect("claim");
+    assert!(claim.contains("with discipline enforcing as its agent hooks ship it (`on`)"));
+    let pilot = pre["pilot"]["mechanics_checks"]
+        .as_str()
+        .expect("[pilot] mechanics_checks");
+    assert!(pilot.contains("--directive-sources pr-body") && pilot.contains("env -i"));
+}
+
 /// One fixture per outcome class, each with the outcome `[outcomes]` assigns it.
 #[test]
 fn dry_run_extracts_each_outcome_class() {
