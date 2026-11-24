@@ -1,7 +1,7 @@
 //! The `base-tests-v1` lab runner (#1052, `scripts/base_tests_lab.py`): its self-checks pass,
 //! its dry-run plan draws the Part 1 sample the pre-registration records (recomputed here
 //! independently, with this crate's own SHA-256), plans the Part 2 runs per instance, and
-//! confirmatory mode refuses while any `LOCK` value remains.
+//! confirmatory mode is open once the lock has written every `LOCK` value.
 
 mod common;
 
@@ -166,35 +166,40 @@ fn dry_run_plans_part2_control_then_gold_per_instance() {
     assert_eq!(per_repo, toml_counts(&pop["confirmatory_per_repository"]));
 }
 
-/// While any `[constants]` or `[binary]` value is `LOCK`, confirmatory mode exits 2 naming
-/// them, before it asks for a dataset or a binary (nothing else is given here).
+/// Once the lock commit has written every `[constants]` and `[binary]` value and set the status
+/// to `locked-pre-data`, the plan names no `LOCK` value and confirmatory mode is not refused.
+/// The refusal itself (a draft, a `LOCK` value, an overlay) is in the runner's self-checks.
 #[cfg(unix)]
 #[test]
-fn confirmatory_mode_refuses_while_a_lock_value_remains() {
+fn confirmatory_mode_is_open_once_the_lock_has_written_every_value() {
     let p = prereg();
-    let lock: Vec<String> = p["constants"]
-        .as_table()
-        .unwrap()
-        .iter()
-        .filter(|(_, v)| v.as_str() == Some("LOCK"))
-        .map(|(k, _)| format!("constants.{k}"))
-        .collect();
-    assert!(
-        !lock.is_empty(),
-        "the draft has LOCK values; once locked this test checks nothing"
-    );
+    assert_eq!(p["study"]["status"].as_str(), Some("locked-pre-data"));
+    for table in ["constants", "binary"] {
+        for (k, v) in p[table].as_table().unwrap() {
+            assert_ne!(v.as_str(), Some("LOCK"), "{table}.{k} still LOCK");
+        }
+    }
     let out = run_script(&["run", "--mode", "confirmatory", "--part", "2"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "{stderr}");
     assert!(
-        stderr.contains("refusing confirmatory run: values still LOCK"),
+        !stderr.contains("refusing confirmatory run"),
+        "a locked study is refused: {stderr}"
+    );
+    assert!(
+        stderr.contains("run needs --dataset and --binary"),
         "{stderr}"
     );
-    for key in &lock {
-        assert!(stderr.contains(key.as_str()), "{key} not named: {stderr}");
-    }
     let plan = dry_run();
-    assert!(plan["confirmatory_refusal"]
-        .as_str()
-        .is_some_and(|r| r.contains("LOCK")));
+    assert_eq!(plan["status"].as_str(), Some("locked-pre-data"));
+    assert_eq!(
+        plan["lock_values_remaining"].as_array().map(Vec::len),
+        Some(0),
+        "{}",
+        plan["lock_values_remaining"]
+    );
+    assert!(
+        plan["confirmatory_refusal"].is_null(),
+        "{}",
+        plan["confirmatory_refusal"]
+    );
 }

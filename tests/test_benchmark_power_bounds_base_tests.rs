@@ -455,3 +455,69 @@ fn the_pilot_constants_cover_every_confirmatory_repository() {
         }
     }
 }
+
+/// The lock commit writes the pilot's values unchanged: every `[constants]` value is the one in
+/// `constants.json` the pilot ran with, `[binary]` is the binary `provenance.json` records, the
+/// `[pilot]` figures are `pilot-values.json`'s, every confirmatory instance has a pinned image,
+/// and Part 2 is labelled estimate-only exactly when the Step-0 verdict at the pilot rate is
+/// `REJECT_UNDETECTABLE` (`[lock]`), with the 0.15 ceiling left where it was.
+#[test]
+fn the_lock_writes_the_pilot_values_and_the_estimate_only_label() {
+    let p = prereg();
+    assert_eq!(p["study"]["status"].as_str(), Some("locked-pre-data"));
+    let constants = serde_json::to_value(&p["constants"]).expect("constants convert");
+    assert_eq!(constants, pilot_json("constants.json"));
+
+    let prov = &pilot_json("provenance.json")["binary"];
+    for key in ["release", "sha256", "tarball_sha256"] {
+        assert_eq!(
+            p["binary"][key].as_str(),
+            prov[key].as_str(),
+            "binary.{key}"
+        );
+    }
+
+    let v = pilot_json("pilot-values.json");
+    let pilot = &p["pilot"];
+    for key in ["observed_eligible_share", "observed_friction"] {
+        close(&v[key]["point"], float(&pilot[key]), key);
+        let ci = pilot[format!("{key}_wilson_95").as_str()]
+            .as_array()
+            .expect("an interval");
+        close(&v[key]["wilson_95"][0], float(&ci[0]), key);
+        close(&v[key]["wilson_95"][1], float(&ci[1]), key);
+    }
+    close(
+        &v["q2_planning_rate_at_lock"],
+        float(&pilot["q2_planning_rate_at_lock"]),
+        "planning rate at the lock",
+    );
+    let verdict = pilot["q2_step0_verdict_at_lock"].as_str();
+    assert_eq!(verdict, v["q2_step0_verdict"].as_str());
+    let label = p["q2_friction"].get("label").and_then(toml::Value::as_str);
+    match verdict {
+        Some("REJECT_UNDETECTABLE") => assert_eq!(label, Some("estimate-only")),
+        Some("PROCEED") => assert_eq!(label, None),
+        other => panic!("unexpected Step-0 verdict {other:?}"),
+    }
+    assert!((float(&p["power_and_bounds"]["q2_ceiling"]) - 0.15).abs() < 1e-12);
+
+    let digests = p["constants"]["image_digests"].as_table().expect("a table");
+    let strata = strata();
+    let pinned: std::collections::BTreeSet<&str> = strata["counterfactual"]["pairs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["image_digest"].as_str().is_some_and(|d| !d.is_empty()))
+        .filter_map(|r| r["instance_id"].as_str())
+        .collect();
+    let ids =
+        std::fs::read_to_string(root().join(p["population"]["confirmatory_ids"].as_str().unwrap()))
+            .expect("confirmatory ids exist");
+    for id in ids.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        assert!(
+            pinned.contains(id) || digests.contains_key(id),
+            "{id} has no pinned image"
+        );
+    }
+}
