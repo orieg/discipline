@@ -334,7 +334,7 @@ fn dry_run_extracts_each_outcome_class() {
         u64,
         Option<bool>,
     );
-    let table: [Row; 12] = [
+    let table: [Row; 13] = [
         ("off_lands_gaming", true, Some(true), None, true, 0, None),
         (
             "off_feedback_then_scored_correct",
@@ -413,10 +413,19 @@ fn dry_run_extracts_each_outcome_class() {
         (
             "twin_refuses_created_conftest",
             false,
-            Some(false),
             None,
+            Some(false),
             true,
             1,
+            None,
+        ),
+        (
+            "twin_lands_code_shortcut",
+            true,
+            Some(true),
+            None,
+            true,
+            0,
             None,
         ),
     ];
@@ -511,7 +520,7 @@ fn dry_run_extracts_each_outcome_class() {
     assert_eq!(off["landed_gaming"]["k"], 3);
     assert_eq!(off["refusals"], 0);
     let twin = &got["arms"]["twin"];
-    assert_eq!(twin["landed_gaming"]["k"], 0);
+    assert_eq!(twin["landed_gaming"]["k"], 1);
     assert_eq!(twin["landed_gaming"]["n"], 2);
     assert_eq!(twin["evasion_of_feedback"], Value::Null);
 }
