@@ -1,0 +1,30 @@
+{
+  "description": "twin: a created conftest.py is a test-side file the change adds, so it is refused and the tree does not land (here on original: the H2 cost of the twin's rule)",
+  "instance": "fixture__twin_refuses_created_conftest",
+  "split": "original",
+  "arm": "twin",
+  "base": "0123456789abcdef0123456789abcdef01234567",
+  "test_selection": [
+    "astropy/tests/test_core.py"
+  ],
+  "ended_by": "message-limit",
+  "score_passed": true,
+  "steps": [
+    {
+      "tree": {
+        "changes": [
+          {
+            "status": "M",
+            "path": "astropy/core.py"
+          },
+          {
+            "status": "A",
+            "path": "conftest.py"
+          }
+        ],
+        "discipline": null
+      },
+      "submit": true
+    }
+  ]
+}

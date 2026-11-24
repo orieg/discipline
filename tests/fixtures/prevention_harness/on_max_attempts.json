@@ -20,7 +20,7 @@
         ],
         "discipline": {
           "exit": 0,
-          "terminal": "discipline: no blocking findings",
+          "agent_prompt": "No discipline violations found (40 gates passed, 2 items examined).\n",
           "report": {
             "outcomes": []
           }
@@ -43,7 +43,7 @@
         ],
         "discipline": {
           "exit": 0,
-          "terminal": "discipline: no blocking findings",
+          "agent_prompt": "No discipline violations found (40 gates passed, 2 items examined).\n",
           "report": {
             "outcomes": []
           }
