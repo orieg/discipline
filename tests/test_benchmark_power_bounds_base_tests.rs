@@ -8,7 +8,7 @@ mod common;
 
 use discipline::guards::perf::bounds::{
     sample_size_for_wilson_lower_bound_power, sample_size_for_wilson_upper_bound_power,
-    wilson_pass_probability, wilson_upper_pass_probability,
+    wilson_pass_probability, wilson_score_interval, wilson_upper_pass_probability,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -16,6 +16,7 @@ use std::path::Path;
 
 const PREREG: &str = "docs/benchmarks/base-tests-preregistration.toml";
 const STRATA: &str = "docs/benchmarks/results-recall-confirmatory/strata.json";
+const PILOT: &str = "docs/benchmarks/results-base-tests/pilot";
 
 fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -336,5 +337,121 @@ fn python_base_tests_bounds_json_matches_the_preregistration() {
             (g["power_at_available"].as_f64().unwrap() - rust).abs() < 1e-9,
             "({p}, {c})"
         );
+    }
+}
+
+fn pilot_json(name: &str) -> Value {
+    let raw = std::fs::read_to_string(root().join(PILOT).join(name)).expect("pilot file exists");
+    serde_json::from_str(&raw).expect("pilot file parses")
+}
+
+fn close(got: &Value, want: f64, what: &str) {
+    let got = got.as_f64().unwrap_or_else(|| panic!("{what} is a number"));
+    assert!((got - want).abs() < 1e-9, "{what}: {got} != {want}");
+}
+
+/// `[pilot] writes_at_lock`: the eligible share and the friction of the pilot's Part 2 runs,
+/// counted here from `runs.json`, with their Wilson intervals from `bounds.rs`, and the Part 2
+/// requirement re-derived at the Wilson upper bound of the friction, with its Step-0 verdict
+/// against the eligible gold pull requests the observed share leaves of the 272.
+#[test]
+fn the_pilot_values_are_recomputed_from_the_pilot_runs() {
+    let p = prereg();
+    let pb = &p["power_and_bounds"];
+    let (conf, power) = (
+        float(&pb["confidence_level"]),
+        float(&pb["statistical_power"]),
+    );
+    let (n_max, available) = (int(&pb["upper_bound_n_max"]), int(&pb["q2_available"]));
+    let ceiling = float(&pb["q2_ceiling"]);
+    let runs = pilot_json("runs.json");
+    let rows: Vec<&Value> = runs["part2"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["population"] == "pilot")
+        .collect();
+    let n = rows.len();
+    assert_eq!(n, int(&p["population"]["pilot_instances"]));
+    let flag = |r: &&Value, key: &str| r["outcome"][key].as_bool() == Some(true);
+    let eligible = rows.iter().filter(|r| flag(r, "eligible")).count();
+    let blocked = rows.iter().filter(|r| flag(r, "blocked")).count();
+    assert!(rows
+        .iter()
+        .filter(|r| flag(r, "blocked"))
+        .all(|r| flag(r, "eligible")));
+
+    let v = pilot_json("pilot-values.json");
+    let share = &v["observed_eligible_share"];
+    assert_eq!(share["k"].as_u64(), Some(eligible as u64));
+    assert_eq!(share["n"].as_u64(), Some(n as u64));
+    let (lo, hi) = wilson_score_interval(eligible, n, conf).unwrap();
+    close(&share["wilson_95"][0], lo, "eligible share lower bound");
+    close(&share["wilson_95"][1], hi, "eligible share upper bound");
+    let friction = &v["observed_friction"];
+    assert_eq!(friction["k"].as_u64(), Some(blocked as u64));
+    assert_eq!(friction["n"].as_u64(), Some(eligible as u64));
+    let (flo, fhi) = wilson_score_interval(blocked, eligible, conf).unwrap();
+    close(&friction["wilson_95"][0], flo, "friction lower bound");
+    close(&friction["wilson_95"][1], fhi, "friction upper bound");
+    close(
+        &v["q2_planning_rate_at_lock"],
+        fhi,
+        "planning rate at the lock",
+    );
+
+    let expected_eligible = eligible * available / n;
+    assert_eq!(
+        int_json(&v["q2_expected_eligible_at_observed_share"]),
+        expected_eligible
+    );
+    let required = if fhi < ceiling {
+        sample_size_for_wilson_upper_bound_power(fhi, ceiling, conf, power, n_max).ok()
+    } else {
+        None
+    };
+    assert_eq!(
+        v["q2_required_gold_prs"].as_u64().map(|x| x as usize),
+        required
+    );
+    let verdict = match required {
+        Some(r) if r <= expected_eligible => "PROCEED",
+        _ => "REJECT_UNDETECTABLE",
+    };
+    assert_eq!(v["q2_step0_verdict"].as_str(), Some(verdict));
+}
+
+fn int_json(v: &Value) -> usize {
+    v.as_u64().expect("an integer") as usize
+}
+
+/// The candidate constants the pilot ran with leave no `LOCK` and configure every repository
+/// owner of the confirmatory population, so `--constants` can overlay all of them.
+#[test]
+fn the_pilot_constants_cover_every_confirmatory_repository() {
+    let p = prereg();
+    let c = pilot_json("constants.json");
+    let keys: Vec<&String> = p["constants"].as_table().unwrap().keys().collect();
+    let mut got: Vec<&String> = c.as_object().unwrap().keys().collect();
+    got.sort();
+    let mut want = keys.clone();
+    want.sort();
+    assert_eq!(
+        got, want,
+        "constants.json holds exactly the [constants] keys"
+    );
+    for (k, val) in c.as_object().unwrap() {
+        assert_ne!(val.as_str(), Some("LOCK"), "{k}");
+    }
+    let owners = counts_table(&p["population"]["confirmatory_per_repository"]);
+    for key in [
+        "runner_command_per_repository",
+        "junit_options_per_repository",
+        "tests_paths_globs_per_repository",
+    ] {
+        let table = c[key].as_object().unwrap();
+        for owner in owners.keys() {
+            assert!(table.contains_key(owner), "{key} has no entry for {owner}");
+        }
     }
 }

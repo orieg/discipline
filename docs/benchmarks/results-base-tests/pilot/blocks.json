@@ -1,0 +1,71 @@
+{
+  "study_id": "base-tests-v1",
+  "blocks": [
+    {
+      "population": "pilot",
+      "instance_id": "django__django-11206",
+      "failing_tests": [
+        "utils_tests.test_numberformat.TestNumberFormat::test_decimal_numbers"
+      ],
+      "class": "behaviour-change",
+      "reason": "The base test expects '1.234e-300' for a tiny Decimal at 3 decimal places; the gold patch formats such values as '0.000', and the instance's test patch changes that expectation to '0.000'."
+    },
+    {
+      "population": "pilot",
+      "instance_id": "django__django-13837",
+      "failing_tests": [
+        "utils_tests.test_autoreload.RestartWithReloaderTests::test_python_m_django",
+        "utils_tests.test_autoreload.TestChildArguments::test_run_as_module"
+      ],
+      "class": "behaviour-change",
+      "reason": "Both tests detect `python -m django` through `sys.argv[0]` being django/__main__.py; the gold patch detects it through `__main__.__spec__`, and the instance's test patch rewrites both tests to patch `sys.modules['__main__']`."
+    },
+    {
+      "population": "pilot",
+      "instance_id": "django__django-14631",
+      "failing_tests": [
+        "forms_tests.tests.test_forms.FormsTestCase::test_datetime_clean_initial_callable_disabled"
+      ],
+      "class": "behaviour-change",
+      "reason": "The base test expects a disabled DateTimeField with a callable initial to keep microseconds; the gold patch cleans through BoundField.initial, which drops them, and the instance's test patch replaces the test with one asserting microseconds are removed."
+    },
+    {
+      "population": "pilot",
+      "instance_id": "django__django-16145",
+      "failing_tests": [
+        "admin_scripts.tests.CommandTypes::test_version",
+        "admin_scripts.tests.StartProject::test_custom_project_template_from_tarball_by_url_django_user_agent"
+      ],
+      "class": "environment",
+      "reason": "Both tests compare `get_version()` ('4.2.dev' + the timestamp of the lab's own head commit) with a subprocess's version output ('4.2'); the gold patch only changes runserver's address display, and the instance's test patch does not touch these tests. The version string depends on the commit the harness makes, not on the change."
+    },
+    {
+      "population": "pilot",
+      "instance_id": "sympy__sympy-15349",
+      "failing_tests": [
+        "sympy.algebras.tests.test_quaternion::test_quaternion_conversions"
+      ],
+      "class": "behaviour-change",
+      "reason": "The base test asserts the old rotation matrix; the gold patch fixes the sign of m12, and the instance's test patch changes the expected matrices."
+    },
+    {
+      "population": "pilot",
+      "instance_id": "sympy__sympy-15976",
+      "failing_tests": [
+        "sympy.printing.tests.test_mathml::test_presentation_symbol"
+      ],
+      "class": "behaviour-change",
+      "reason": "The base test expects a symbol with a superscript wrapped in <mi>; the gold patch emits <msup> at the top level, and the instance's test patch changes the assertions to 'msup'."
+    },
+    {
+      "population": "pilot",
+      "instance_id": "sympy__sympy-18698",
+      "failing_tests": [
+        "sympy.polys.tests.test_polytools::test_factor_terms"
+      ],
+      "class": "behaviour-change",
+      "reason": "The base test expects sqf_list(x*(x + y)) to list two factors of multiplicity 1; the gold patch merges factors of equal multiplicity, and the instance's test patch changes the expectation to one factor."
+    }
+  ],
+  "rater": "One rater (the coding agent that ran the pilot), by hand from each failing test's message, the gold patch and the instance's test patch; it saw the other blocks while rating, which the pre-registration's blinding rule asks to avoid. Pilot classes calibrate the procedure and enter no verdict."
+}

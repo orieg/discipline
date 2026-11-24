@@ -20,11 +20,21 @@ over H's code, as it does in CI. The runs:
   Sampled: up to two pairs per repository owner among the `mixed` and `test-side` pairs of
   `results-recall-confirmatory/strata.json`, the two with the smallest
   sha256(q1_salt || pair_id) as hex text (`q1_sample`).
+  In pilot mode the pairs are every `mixed` or `test-side` pair of the #838 pilot's
+  counterfactual records (`results-recall-pilot/strata.json`, `pilot_part1`).
 - Part 2 (`q2_friction`), per confirmatory and pilot instance, two runs in this order:
   `control`, the runner command on B alone (base tests on base code, JUnit read by this
   script), then `gold`, H = B + gold patch + test patch. B = `base_commit`. Only tests that
   pass in the control count (`instance_outcome`); eligibility is `eligibility`.
 - Part 3 is not run here: it needs the shape classification the `[lock]` preconditions name.
+
+`/testbed` in the SWE-bench images is one `SWE-bench` setup commit past `base_commit`; B is
+built on it (as the harness evaluates on it) and the files it touches are recorded
+(`image_setup_commit`). A counted test is failed in the gold run when the preset names it, names
+its module (a `collection failure`), or reports the whole suite failed (`covered`). The django
+and sympy runner commands write JUnit through `base_tests_junit.py`, copied into each
+container under `HELPER_DIR`. `pilot-values` writes `[pilot] writes_at_lock` from the pilot's
+`summary.json` (`pilot_values`).
 
 Constants. The `[constants]` values marked `LOCK` in the pre-registration are the pilot's to
 fix. `--constants <json>` overlays candidate values in pilot mode. Confirmatory mode reads the
@@ -46,6 +56,7 @@ Subcommands:
 - `collect`: `runs.json` and `blocks.json` (each blocked gold pull request, `class` empty
   for the rater) from the result files.
 - `summarize`: `summary.json` from `runs.json` and `blocks.json`.
+- `pilot-values`: `pilot-values.json` from the pilot's `summary.json`.
 - `--test`: self-checks, no host, Docker or network.
 
 `--dataset` is a JSON-lines export of the pinned ImpossibleBench SWE-bench revision
@@ -99,6 +110,11 @@ PREREG = REPO_ROOT / "docs" / "benchmarks" / "base-tests-preregistration.toml"
 RECALL = REPO_ROOT / "docs" / "benchmarks" / "results-recall-confirmatory"
 STRATA = RECALL / "strata.json"
 MANIFEST = RECALL / "manifest.json"
+# The #838 pilot: its counterfactual records cover 40 pilot pairs; the `mixed` and `test-side`
+# ones are the pilot's Part 1 pairs (all of them, not a sample: the pilot fixes the runners).
+RECALL_PILOT = REPO_ROOT / "docs" / "benchmarks" / "results-recall-pilot"
+STRATA_PILOT = RECALL_PILOT / "strata.json"
+MANIFEST_PILOT = RECALL_PILOT / "manifest.json"
 RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-base-tests"
 STUDY_ID = "base-tests-v1"
 LOCK = "LOCK"
@@ -108,6 +124,7 @@ PER_REPOSITORY = ("runner_command_per_repository", "junit_options_per_repository
 GLOBAL_CONSTANTS = ("timeout_seconds", "flaky_rerun_policy", "image_digests", "container_memory")
 # SWE-bench images install each repository into the `testbed` conda environment.
 ENV_PREFIX = "source /opt/miniconda3/bin/activate && conda activate testbed && "
+HELPER_DIR = "/opt/base-tests"  # outside /testbed: never in the commits B and H
 BASE_TEST_FAILED = "command/base-test-failed"
 BASE_TESTS_NO_CASES = "command/base-tests-no-cases"
 FAILED_ID = re.compile(r"^Base test `(.+?)` failed when executed against head code")
@@ -207,6 +224,13 @@ def q1_sample(strata: dict[str, Any], salt: str, per_repository: int = 2) -> lis
         for p in sorted(by_owner[o], key=lambda x: x["rank"])[:per_repository]:
             out.append({"owner": o, **p})
     return out
+
+
+def pilot_part1(pilot_strata: dict[str, Any]) -> list[dict[str, Any]]:
+    """The pilot's Part 1 pairs: every `mixed` or `test-side` pilot pair with a counterfactual
+    record, in the confirmatory sample's order (owner, then sha256(q1_salt || pair_id))."""
+    salt = load_prereg()["q1_feasibility"]["q1_salt"]
+    return q1_sample(pilot_strata, salt, per_repository=len(pilot_strata["counterfactual"]["pairs"]))
 
 
 def eligible_per_owner(strata: dict[str, Any]) -> dict[str, int]:
@@ -349,6 +373,18 @@ def read_report(report: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+def covered(counted: list[str], report: dict[str, Any]) -> set[str]:
+    """The counted tests one `read_report` result fails: by id, under a failed module id
+    (`pkg.tests.test_x` covers `pkg.tests.test_x::Case::test` and `pkg.tests.test_x.Case::test`),
+    or all of them when the suite failed."""
+    if report["suite_failed"]:
+        return set(counted)
+    out = set()
+    for f in report["failed_ids"]:
+        out |= {c for c in counted if c == f or c.startswith(f + "::") or c.startswith(f + ".")}
+    return out
+
+
 def eligibility(files: list[str], control: dict[str, Any] | None) -> tuple[bool, str | None]:
     """`[q2_friction].population`: eligible when the test patch modifies a base test file and
     at least one test of those files passes in the control."""
@@ -375,10 +411,13 @@ def instance_outcome(files: list[str], control: dict[str, Any] | None, gold: dic
     if gold is None or gold.get("error"):
         return {"eligible": False, "reason": "run-error", **base}
     attempts = [read_report(a.get("report")) for a in gold.get("attempts", [])] or [read_report(None)]
-    # A block stands when a counted test fails in every attempt (`flaky_rerun_policy`).
+    # A block stands when a counted test fails in every attempt (`flaky_rerun_policy`). A
+    # failure the preset reports for a whole file (`collection failure`, id = the module) or
+    # for the whole suite (the command failed with no case) fails every counted test it
+    # covers: they did not run and the preset blocks the change.
     failing = set(counted)
     for a in attempts:
-        failing &= set(a["failed_ids"])
+        failing &= covered(counted, a)
     first = attempts[0]
     return {
         "eligible": True,
@@ -388,6 +427,7 @@ def instance_outcome(files: list[str], control: dict[str, Any] | None, gold: dic
         "failing_counted": sorted(failing),
         "failing_uncounted": sorted(set(first["failed_ids"]) - set(counted)),
         "suite_failed": first["suite_failed"],
+        "preset_failed_every_attempt": all(a["failed_ids"] or a["suite_failed"] for a in attempts),
         "attempts": len(attempts),
     }
 
@@ -571,8 +611,16 @@ class Container:
 
     def __init__(self, image: str, memory: str, binary: Path):
         self.image, self.memory, self.binary, self.cid = image, memory, binary, ""
+        self.setup_commit: dict[str, Any] | None = None
 
     def __enter__(self) -> "Container":
+        try:
+            return self._start()
+        except BaseException:
+            self.__exit__()
+            raise
+
+    def _start(self) -> "Container":
         res = cf._run(["docker", "run", "-d", "--network", "none", "--memory", self.memory, "-w", "/testbed", self.image, "sleep", "infinity"])
         self.cid = res.stdout.decode().strip()
         if not self.cid:
@@ -580,6 +628,12 @@ class Container:
         put = cf._run(["docker", "cp", str(self.binary), f"{self.cid}:/usr/local/bin/discipline"])
         if put.returncode != 0:
             raise RuntimeError("could not copy the discipline binary")
+        # The JUnit shims the django and sympy runner commands use (`base_tests_junit.py`).
+        helper = Path(__file__).resolve().parent / "base_tests_junit.py"
+        self.must(f"mkdir -p {HELPER_DIR}", "make the helper directory")
+        if cf._run(["docker", "cp", str(helper), f"{self.cid}:{HELPER_DIR}/base_tests_junit.py"]).returncode != 0:
+            raise RuntimeError("could not copy the JUnit helper")
+        self.must(f"{ENV_PREFIX}python {HELPER_DIR}/base_tests_junit.py --write-settings", "write the helper settings")
         return self
 
     def __exit__(self, *_: Any) -> None:
@@ -608,8 +662,19 @@ class Container:
 
     def setup_base(self, base_commit: str, base_patch: str, config: str) -> str:
         head = self.must("cd /testbed && git rev-parse HEAD", "read HEAD")
+        setup_commit = None
         if head != base_commit:
-            raise RuntimeError(f"/testbed is at {head}, not base_commit {base_commit}")
+            # The SWE-bench images commit their environment setup as one `SWE-bench` commit
+            # on top of `base_commit`; the harness evaluates on it, so B is built on it too and
+            # the files it touches are recorded. Anything else stops the run.
+            parent = self.must("cd /testbed && git rev-parse HEAD^", "read HEAD^")
+            subject = self.must("cd /testbed && git log -1 --format=%s", "read HEAD subject")
+            if parent != base_commit or subject != "SWE-bench":
+                raise RuntimeError(f"/testbed is at {head} ({subject!r}), neither base_commit {base_commit} nor its SWE-bench setup commit")
+            files = self.must(f"cd /testbed && git diff --name-only {base_commit} HEAD", "read the setup commit")
+            names = sorted(f for f in files.splitlines() if f)
+            setup_commit = {"sha": head, "files_changed": len(names), "first_files": names[:20]}
+        self.setup_commit = setup_commit
         self.must("cd /testbed && git status --porcelain --untracked-files=no", "status")
         self.apply(base_patch, "base patch does not apply")
         self.must("cat > /testbed/discipline.toml", "write discipline.toml", stdin=config.encode())
@@ -651,12 +716,14 @@ class Container:
         return {"exit_code": res.returncode, "timed_out": False, "report": report}
 
 
-def image_for(iid: str, constants: dict[str, Any], strata: dict[str, Any], mode: str) -> str:
-    """`image_digests`: the #838 counterfactual digest where the instance has one, else the
-    constant's table, else (pilot only) the tag. A confirmatory run with no digest stops."""
-    for p in strata["counterfactual"]["pairs"]:
-        if p["instance_id"] == iid and p.get("image_digest"):
-            return p["image_digest"]
+def image_for(iid: str, constants: dict[str, Any], strata: dict[str, Any], mode: str, more: tuple[dict[str, Any], ...] = ()) -> str:
+    """`image_digests`: the #838 counterfactual digest where the instance has one (`strata`,
+    then each of `more`), else the constant's table, else (pilot only) the tag. A
+    confirmatory run with no digest stops."""
+    for s in (strata, *more):
+        for p in s["counterfactual"]["pairs"]:
+            if p["instance_id"] == iid and p.get("image_digest"):
+                return p["image_digest"]
     table = constants.get("image_digests")
     if isinstance(table, dict) and iid in table:
         return table[iid]
@@ -680,6 +747,7 @@ def run_part2(iid: str, row: dict[str, Any], rc: dict[str, Any], constants: dict
     try:
         with Container(image, constants["container_memory"], binary) as c:
             c.setup_base(row["base_commit"], "", config)
+            result["image_setup_commit"] = c.setup_commit
             control = c.run_tests(command, timeout + 60)
         result["control"] = control
         ok, _ = eligibility(files, control)
@@ -693,7 +761,8 @@ def run_part2(iid: str, row: dict[str, Any], rc: dict[str, Any], constants: dict
                     c.apply(row["test_patch"], "test patch does not apply")
                     c.commit("gold")
                     attempts.append(c.check(b, timeout))
-                if not read_report(attempts[-1]["report"])["failed_ids"]:
+                last = read_report(attempts[-1]["report"])
+                if not last["failed_ids"] and not last["suite_failed"]:
                     break
             gold = {"attempts": attempts}
             result["gold"] = gold
@@ -715,6 +784,7 @@ def run_part1(pair: dict[str, Any], row: dict[str, Any], agent_patch: str, rc: d
         out["command"] = command
         with Container(image, constants["container_memory"], binary) as c:
             b = c.setup_base(row["base_commit"], row["test_patch"], discipline_config(command, globs, timeout))
+            out["image_setup_commit"] = c.setup_commit
             c.apply(agent_patch, "agent patch does not apply")
             c.commit("agent")
             out.update(c.check(b, timeout))
@@ -740,9 +810,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.mode == "pilot" and (why := pilot_refusal(constants)):
         print(f"refusing pilot run: {why}", file=sys.stderr)
         return 2
-    if args.part == 1 and args.mode == "pilot":
-        print("refusing: the Part 1 pairs are confirmatory; pilot instances have no counterfactual record", file=sys.stderr)
-        return 2
     if args.dataset is None or args.binary is None:
         print("run needs --dataset and --binary", file=sys.stderr)
         return 2
@@ -753,6 +820,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     dataset = load_dataset(args.dataset)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     known = manifest_test_patch_sha(manifest)
+    more: tuple[dict[str, Any], ...] = ()
+    recall_dir = RECALL
+    if args.mode == "pilot":
+        # Pilot instances are recorded in the #838 pilot files: their test patches, their
+        # counterfactual image digests and, for Part 1, their pairs and agent patches.
+        manifest = json.loads(MANIFEST_PILOT.read_text(encoding="utf-8"))
+        known = {**known, **manifest_test_patch_sha(manifest)}
+        pilot_strata = json.loads(STRATA_PILOT.read_text(encoding="utf-8"))
+        more = (pilot_strata,)
+        recall_dir = RECALL_PILOT
     lock = take_lock(args.lock_file)
     results = args.root / "results" / f"part{args.part}"
     results.mkdir(parents=True, exist_ok=True)
@@ -760,7 +837,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     meta = {"mode": args.mode, "binary_sha256": binary_sha, "constants": constants}
     if args.part == 1:
         pairs = {x["pair_id"]: x for x in manifest["pairs"]}
-        todo = [s for s in p["part1"]["sample"] if not args.only or s["pair_id"] in args.only]
+        sample = pilot_part1(more[0]) if args.mode == "pilot" else p["part1"]["sample"]
+        todo = [s for s in sample if not args.only or s["pair_id"] in args.only]
         for s in todo:
             dest = results / f"{s['pair_id']}.json"
             if dest.exists() and not args.force:
@@ -772,10 +850,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             else:
                 row = dataset[(s["instance_id"], m["split"])]
                 check_patch_sha(known, s["instance_id"], m["split"], row["test_patch"])
-                agent = (RECALL / manifest["patches_dir"] / s["pair_id"] / "agent_patch.diff").read_text(encoding="utf-8")
+                agent = (recall_dir / manifest["patches_dir"] / s["pair_id"] / "agent_patch.diff").read_text(encoding="utf-8")
                 if pairs_mod.sha256_text(agent) != m["patch_sha256"]["agent_patch"]:
                     raise RuntimeError(f"{s['pair_id']}: agent patch sha256 differs from the manifest")
-                res = run_part1(s, row, agent, rc, constants, image_for(s["instance_id"], constants, strata, args.mode), args.binary)
+                res = run_part1(s, row, agent, rc, constants, image_for(s["instance_id"], constants, strata, args.mode, more), args.binary)
             dest.write_text(json.dumps({**s, **meta, "result": res}, indent=2) + "\n", encoding="utf-8")
             print(f"{s['pair_id']} {s['instance_id']}: {pair_outcome(res)}")
     else:
@@ -791,7 +869,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             else:
                 row = dataset[(r["instance_id"], "original")]
                 check_patch_sha(known, r["instance_id"], "original", row["test_patch"])
-                res = run_part2(r["instance_id"], row, rc, constants, image_for(r["instance_id"], constants, strata, args.mode), args.binary)
+                res = run_part2(r["instance_id"], row, rc, constants, image_for(r["instance_id"], constants, strata, args.mode, more), args.binary)
             dest.write_text(json.dumps({**r, **meta, **res}, indent=2) + "\n", encoding="utf-8")
             print(f"{r['instance_id']}: {res['outcome']}")
     lock.close()
@@ -835,6 +913,66 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     s = summarize(runs, blocks, load_prereg())
     (args.out / "summary.json").write_text(json.dumps(s, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: v.get("verdict") for k, v in s["part2"].items()}))
+    return 0
+
+
+def pilot_values(summary: dict[str, Any], prereg: dict[str, Any]) -> dict[str, Any]:
+    """`[pilot] writes_at_lock` from the pilot's Part 2 counts, through the bound functions of
+    `benchmark_power_audit.py` (the Python mirror of `src/guards/perf/bounds.rs`).
+
+    The eligible share and the friction get 95% Wilson intervals. The Part 2 requirement is
+    re-derived at the Wilson upper bound of the friction against the ceiling; the Step-0
+    verdict compares it with the eligible gold pull requests expected at the observed share
+    (floor(share x confirmatory instances)). An upper bound at or above the ceiling, or a
+    requirement past `upper_bound_n_max`, is REJECT_UNDETECTABLE."""
+    bpa = _load_sibling("benchmark_power_audit")
+    pb = prereg["power_and_bounds"]
+    conf, power, n_max = pb["confidence_level"], pb["statistical_power"], pb["upper_bound_n_max"]
+    ceiling, available = pb["q2_ceiling"], pb["q2_available"]
+    pilot = summary["part2"]["pilot"]
+    n, eligible = pilot["instances"], pilot["eligible"]
+    k = pilot["friction"]["k"]
+    share_ci = list(bpa.wilson_score_interval(eligible, n, conf)) if n else [None, None]
+    friction_ci = list(bpa.wilson_score_interval(k, eligible, conf)) if eligible else [None, None]
+    expected_eligible = int(eligible * available // n) if n else 0
+    out: dict[str, Any] = {
+        "study_id": STUDY_ID,
+        "source": "summary.json (pilot), counts recomputed from runs.json by tests/test_benchmark_power_bounds_base_tests.rs",
+        "confidence_level": conf,
+        "statistical_power": power,
+        "observed_eligible_share": {"k": eligible, "n": n, "point": eligible / n if n else None, "wilson_95": share_ci},
+        "observed_friction": {"k": k, "n": eligible, "point": k / eligible if eligible else None, "wilson_95": friction_ci},
+        "q2_ceiling": ceiling,
+        "q2_available": available,
+        "q2_expected_eligible_at_observed_share": expected_eligible,
+    }
+    rate = friction_ci[1]
+    out["q2_planning_rate_at_lock"] = rate
+    if rate is None:
+        out.update(q2_required_gold_prs=None, q2_step0_verdict="REJECT_UNDETECTABLE", q2_step0_reason="no eligible pilot gold pull request")
+    elif rate >= ceiling:
+        out.update(q2_required_gold_prs=None, q2_step0_verdict="REJECT_UNDETECTABLE", q2_step0_reason=f"the friction upper bound {rate:.4f} is not below the ceiling {ceiling}")
+    else:
+        try:
+            required = bpa.sample_size_for_wilson_upper_bound_power(rate, ceiling, conf, power, n_max)
+        except ValueError as e:
+            out.update(q2_required_gold_prs=None, q2_step0_verdict="REJECT_UNDETECTABLE", q2_step0_reason=str(e))
+        else:
+            ok = required <= expected_eligible
+            out.update(
+                q2_required_gold_prs=required,
+                q2_power_at_expected_eligible=bpa.wilson_upper_pass_probability(expected_eligible, rate, ceiling, conf) if expected_eligible else 0.0,
+                q2_step0_verdict="PROCEED" if ok else "REJECT_UNDETECTABLE",
+                q2_step0_reason=f"{required} required, {expected_eligible} expected eligible",
+            )
+    return out
+
+
+def cmd_pilot_values(args: argparse.Namespace) -> int:
+    summary = json.loads((args.out / "summary.json").read_text(encoding="utf-8"))
+    v = pilot_values(summary, load_prereg())
+    (args.out / "pilot-values.json").write_text(json.dumps(v, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({k: v[k] for k in ("observed_eligible_share", "observed_friction", "q2_required_gold_prs", "q2_step0_verdict")}))
     return 0
 
 
@@ -949,6 +1087,11 @@ def self_test() -> int:
     only_uncounted = {"attempts": [{"report": report((BASE_TEST_FAILED, "Base test `b` failed when executed against head code: m"))}]}
     check("uncounted failure does not block", instance_outcome(["t.py"], ctl, only_uncounted)["blocked"], False)
     flaky = {"attempts": [gold_fail["attempts"][0], {"report": report(notes=("command: preset 'base-tests': 2 base tests passed against head code",))}]}
+    module_fail = {"attempts": [{"report": report((BASE_TEST_FAILED, "Base test `t` failed when executed against head code: collection failure"))}]}
+    ctl_mod = {"cases": {"t::A::x": "passed", "t.A::y": "passed", "tx::z": "passed", "u::w": "failed"}}
+    check("a module failure covers its counted tests", instance_outcome(["t.py"], ctl_mod, module_fail)["failing_counted"], ["t.A::y", "t::A::x"])
+    suite_fail = {"attempts": [{"report": report((BASE_TEST_FAILED, "Base test suite failed against head code (exit code Some(4)):\nE"))}]}
+    check("a suite failure covers every counted test", instance_outcome(["t.py"], ctl_mod, suite_fail)["failing_counted"], ["t.A::y", "t::A::x", "tx::z"])
     check("a rerun that passes lifts the block", instance_outcome(["t.py"], ctl, flaky)["blocked"], False)
     check("gold error", instance_outcome(["t.py"], ctl, {"error": "x"})["reason"], "run-error")
     # Verdict rule, against the ceiling 0.15.
@@ -997,6 +1140,16 @@ def self_test() -> int:
         check("confirmatory needs a digest", "accepted", "refused")
     except RuntimeError:
         check("confirmatory needs a digest", "refused", "refused")
+    # Pilot values: the re-derivation at the friction's Wilson upper bound.
+    def fake(n: int, e: int, k: int) -> dict[str, Any]:
+        return {"part2": {"pilot": {"instances": n, "eligible": e, "friction": {"k": k}}}}
+
+    pv = pilot_values(fake(77, 60, 0), prereg)
+    check("pilot k=0 upper bound", round(pv["observed_friction"]["wilson_95"][1], 4), 0.0602)
+    check("pilot k=0 proceeds", pv["q2_step0_verdict"], "PROCEED")
+    check("pilot expected eligible", pv["q2_expected_eligible_at_observed_share"], 60 * 272 // 77)
+    check("pilot upper bound past the ceiling", pilot_values(fake(77, 60, 6), prereg)["q2_step0_verdict"], "REJECT_UNDETECTABLE")
+    check("pilot no eligible", pilot_values(fake(77, 0, 0), prereg)["q2_step0_verdict"], "REJECT_UNDETECTABLE")
     print(f"{'FAILED' if failures else 'ok'}: {len(ran)} checks")
     return 1 if failures else 0
 
@@ -1028,12 +1181,14 @@ def main() -> int:
     co.add_argument("--force", action="store_true", help="overwrite blocks.json")
     sm = sub.add_parser("summarize", help="write summary.json from runs.json and blocks.json")
     sm.add_argument("--out", type=Path, default=RESULTS_DIR)
+    pv = sub.add_parser("pilot-values", help="write pilot-values.json (`[pilot] writes_at_lock`) from summary.json")
+    pv.add_argument("--out", type=Path, default=RESULTS_DIR / "pilot")
     args = ap.parse_args()
     if args.cmd == "plan":
         overlay = json.loads(args.constants.read_text(encoding="utf-8")) if args.constants else None
         print_plan(plan(load_prereg(), json.loads(STRATA.read_text(encoding="utf-8")), overlay), args.json)
         return 0
-    return {"run": cmd_run, "collect": cmd_collect, "summarize": cmd_summarize}[args.cmd](args)
+    return {"run": cmd_run, "collect": cmd_collect, "summarize": cmd_summarize, "pilot-values": cmd_pilot_values}[args.cmd](args)
 
 
 if __name__ == "__main__":
