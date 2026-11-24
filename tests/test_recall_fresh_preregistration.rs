@@ -2,14 +2,17 @@
 //! `docs/benchmarks/recall-fresh-preregistration.toml`, status `draft`): the study script's
 //! self-checks run, the committed population scan is disjoint from v1's instances, and the
 //! Step-0 values the pre-registration records are the ones the Rust bound functions and
-//! their Python mirrors give.
+//! their Python mirrors give. Three lock preconditions are checked against committed files:
+//! the harness dataset-loading patch and its sha256, v1's confirmatory units by shape
+//! (`scripts/recall_strata.py --v1-units`), and the reused-unit baseline R_wf.
 
 mod common;
 
 use discipline::guards::perf::bounds::{
     minimum_detectable_difference, sample_size_for_interval, trajectories_required,
-    wilson_pass_probability,
+    wilson_pass_probability, wilson_score_interval,
 };
+use discipline::report::gitlab::sha256_hex;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
@@ -281,4 +284,110 @@ fn python_step0_values_match_the_rust_bounds() {
             "{p}: python {py}, rust {rust}"
         );
     }
+}
+
+fn strata_script(args: &[&str]) -> Value {
+    let mut all = vec!["-I", "scripts/recall_strata.py"];
+    all.extend_from_slice(args);
+    let out = common::script_command("python3")
+        .args(all)
+        .current_dir(root())
+        .output()
+        .expect("run python3");
+    assert!(
+        out.status.success(),
+        "recall_strata.py {args:?} failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("recall_strata.py prints JSON")
+}
+
+/// Lock precondition: the harness dataset-loading patch is committed, its recorded sha256 is
+/// the committed file's, and it touches only the task module's dataset source.
+#[test]
+fn dataset_loading_patch_matches_its_recorded_sha256() {
+    let pre = prereg();
+    let h = &pre["harness"];
+    let path = h["dataset_loading_patch"]
+        .as_str()
+        .expect("[harness] dataset_loading_patch");
+    let raw = std::fs::read(root().join(path)).expect("read the dataset-loading patch");
+    assert_eq!(
+        Some(sha256_hex(&raw).as_str()),
+        h["dataset_loading_patch_sha256"].as_str(),
+        "{path}"
+    );
+    let text = String::from_utf8(raw).expect("utf-8 patch");
+    let files: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("diff --git "))
+        .collect();
+    assert_eq!(
+        files,
+        ["diff --git a/src/impossiblebench/swebench_tasks.py b/src/impossiblebench/swebench_tasks.py"]
+    );
+    assert!(text.contains("+    dataset_path: str | None = None,"));
+    assert!(text.contains("path=\"fjzzq2002/impossible_swebench\""));
+}
+
+/// v1's confirmatory R units by shape, read from the committed files, are the counts
+/// `[strata.v1_units]` records, and they add up to the 0.32.0-tree replay's R.
+#[cfg(unix)]
+#[test]
+fn v1_unit_shapes_are_the_recorded_counts() {
+    let pre = prereg();
+    let rec = &pre["strata"]["v1_units"];
+    let replay = rec["replay"].as_str().expect("replay");
+    let v = strata_script(&["--v1-units", "--replay", replay]);
+    let shape = |s: &str, f: &str| v["by_shape"][s][f].as_i64().expect("count");
+    assert_eq!(v["units"].as_i64(), Some(int(rec, "units")));
+    assert_eq!(shape("well-formed", "units"), int(rec, "well_formed"));
+    assert_eq!(
+        shape("broken-by-injection", "units"),
+        int(rec, "broken_by_injection")
+    );
+    assert_eq!(
+        shape("well-formed", "units") + shape("broken-by-injection", "units"),
+        int(rec, "units")
+    );
+    let summary: Value = serde_json::from_str(
+        &std::fs::read_to_string(root().join(format!(
+            "docs/benchmarks/results-recall-confirmatory/{}-summary.json",
+            replay.trim_end_matches(".json.gz")
+        )))
+        .expect("read the replay summary"),
+    )
+    .expect("parse the replay summary");
+    let r = &summary["by_benchmark"]["swe"]["config_arms"]["primary"]["R"];
+    assert_eq!(v["units"], r["n"]);
+    assert_eq!(v["blocked"], r["k"]);
+}
+
+/// Lock precondition: the reused-unit baseline R_wf the pre-registration records is the
+/// script's count on the committed replay, with the Rust Wilson interval.
+#[cfg(unix)]
+#[test]
+fn reused_baseline_r_wf_is_recomputed() {
+    let pre = prereg();
+    let b = &pre["generalisation"]["reused_baseline_committed_reading"];
+    let (k, n) = (int(b, "blocked"), int(b, "well_formed_units"));
+    let v = strata_script(&[
+        "--v1-units",
+        "--replay",
+        b["replay"].as_str().expect("replay"),
+    ]);
+    assert_eq!(v["R_wf"]["blocked"].as_i64(), Some(k));
+    assert_eq!(v["R_wf"]["units"].as_i64(), Some(n));
+    let (lo, hi) = wilson_score_interval(k as usize, n as usize, 0.95).unwrap();
+    for (py, rust) in [
+        (v["R_wf"]["ci95"][0].as_f64().unwrap(), lo),
+        (v["R_wf"]["ci95"][1].as_f64().unwrap(), hi),
+    ] {
+        assert!((py - rust).abs() < 1e-12, "python {py}, rust {rust}");
+    }
+    let round3 = |x: f64| (x * 1000.0).round() / 1000.0;
+    assert_eq!(float(b, "r_wf"), round3(k as f64 / n as f64));
+    let ci = b["ci95"].as_array().expect("ci95");
+    assert_eq!(ci[0].as_float(), Some(round3(lo)));
+    assert_eq!(ci[1].as_float(), Some(round3(hi)));
 }
