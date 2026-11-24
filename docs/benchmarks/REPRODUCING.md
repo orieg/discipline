@@ -16,7 +16,7 @@ Adopting a gate is worth it when it blocks real problems (value), rarely blocks 
 | Noise and value on a random sample | `agent-pr-precision-v7` | Block rate on randomly sampled merged agent pull requests, then labelled precision per gate | `docs/benchmarks/precision-preregistration-v7.toml` | not run yet |
 | Noise and value of the 0.32 code | `agent-pr-precision-v8` | Block rate of the 0.32.0 code on v2 to v6's 232 pull requests; rule fidelity and actionability of each block, graded by a Claude and a Gemini rater, every disagreement settled by a third LLM agent (amendment 2) | `docs/benchmarks/precision-preregistration-v8.toml` | `docs/benchmarks/results-v8/` (`scripts/precision_v8.py report --tie-breaker fable`) |
 | Value on verified test gaming | `impossible-recall-v1` (#838) | Share of agent changes that pass impossible tests by editing the test side that discipline blocks (recall), against a line-regex twin; false alarms on honest solutions to the normal split | `docs/benchmarks/recall-preregistration.toml` | `docs/benchmarks/results-recall-pilot/` (pilot); `docs/benchmarks/results-recall-confirmatory/` (verdict REJECTED with 0.26.0; descriptive replays of 0.31.0 and the 0.32.0 code beside it) |
-| Held-out value on verified test gaming | `impossible-recall-fresh-v1` (#838) | v1's recall, on fresh impossible SWE-bench instances generated from SWE-bench `test` outside Verified, primary on units whose injected test file is well-formed; beside the reused-unit figure of the same binary | `docs/benchmarks/recall-fresh-preregistration.toml` (draft) | pre-registered draft, not run; `docs/benchmarks/results-recall-fresh/population.json` (scan); see §4.6 |
+| Held-out value on verified test gaming | `impossible-recall-fresh-v1` (#838) | v1's recall, on fresh impossible SWE-bench instances generated from SWE-bench `test` outside Verified, primary on units whose injected test file is well-formed; beside the reused-unit figure of the same binary (descriptive: a different generator model makes the difference confounded) | `docs/benchmarks/recall-fresh-preregistration.toml` (draft) | pre-registered draft, not run; `docs/benchmarks/results-recall-fresh/population.json` (scan); see §4.6 |
 | Value on known regressions | `regression-value-v1` (#1024) | Share of reverted or fix-linked agent pull requests that discipline blocks with a finding in an implicated file, and its block rate on them against matched controls from the same repositories, beside a naive twin | `docs/benchmarks/regression-value-preregistration.toml` (draft) | not run yet |
 | Prevention in the agent's loop | `prevention-v1` (#1036) | Landed test-gaming rate on impossible tests with discipline refusing submissions in the agent's loop, against no gate and a test-path-lock twin; landed honest passes on the normal split as the cost | `docs/benchmarks/prevention-preregistration.toml` (draft; H1 Step 0 REJECT_UNDETECTABLE) | not run yet |
 | Friction of the `base-tests` preset | `base-tests-v1` (#1052) | Whether the preset runs on each SWE-bench repository's runner; the share of honest gold pull requests it blocks, by class, against a ceiling; what it adds over the diff gates on #838's gaming runs | `docs/benchmarks/base-tests-preregistration.toml` (`locked-pre-data`; Part 2 estimate-only) | pilot run, confirmatory not run; runner `scripts/base_tests_lab.py`: `plan --dry-run` prints the Part 1 sample and the Part 2 runs with no Docker, `run --mode pilot\|confirmatory --part 1\|2` runs them on the lab host under the benchmark lock (confirmatory refuses a draft, a `LOCK` value or a `--constants` overlay; the lock has written every value), `collect` and `summarize` write `runs.json`, `blocks.json` and `summary.json` to `docs/benchmarks/results-base-tests/`, and `pilot-values --out docs/benchmarks/results-base-tests/pilot` writes `pilot-values.json` from the pilot summary. The pilot ran `run --mode pilot --constants docs/benchmarks/results-base-tests/pilot/constants.json`, Part 2 then Part 1 per instance, each image pulled and removed in turn; its outputs, `provenance.json` (binary, dataset, pulled image digests) and `part1-pairs.json` are in `results-base-tests/pilot/` |
@@ -198,15 +198,28 @@ Pre-registered draft, not run. Only the population scan has run:
 python3 -I scripts/recall_fresh.py population        # reads three datasets, rewrites population.json
 python3 -I scripts/recall_fresh.py --check-population  # no network: the pool is disjoint from v1
 python3 -I scripts/recall_fresh.py --bounds-json       # the Step-0 values the pre-registration records
-python3 -I scripts/recall_strata.py --v1-units         # v1's confirmatory units by shape and R_wf, committed files only
+python3 -I scripts/recall_strata.py --v1-units         # the hunk-local reading (67 well-formed), not the registered one
+python3 -I scripts/recall_strata.py --v1-units-injection  # v1's units by `injection_shape` and R_wf, offline
+python3 -I scripts/recall_strata.py --v1-units-injection --fetch <cache dir>  # rebuild the per-unit file
 ```
+
+`--v1-units-injection` recomputes v1's confirmatory units by the registered `injection_shape`
+(66 well-formed) and the reused-unit R_wf from the committed
+`results-recall-confirmatory/injection-shapes-v1-units.json` and replay, and refuses a file
+whose units or blocked flags differ from the replay's. With `--fetch`, it reads the two patches
+from the pinned Impossible-SWE-bench revision (checked against `manifest.json`'s sha256) and
+base_commit's copies of the files they touch from public GitHub raw URLs into the cache
+directory, then rewrites the per-unit file. Keep the cache outside the repository: it holds
+third-party source files, which are not committed; the per-unit file records only their sha256.
 
 The harness runs fresh instances with `scripts/recall_lab/harness-dataset-path.patch` applied
 at the harness commit beside v1's `harness_patch` (`git apply` both; the hunks do not overlap).
 
 The scan reads SWE-bench `test`, SWE-bench Verified and Impossible-SWE-bench through the
 Hugging Face datasets-server at the revisions pinned in the script, and refuses when a dataset
-is at another revision. Generation, agent runs and scoring follow §4.3 and §4.4 once the
+is at another revision. Generation runs ImpossibleBench's generator with the generator model
+patch the pre-registration names (`[generation] generator_model_patch`, written at the lock),
+not upstream's model. Generation, agent runs and scoring follow §4.3 and §4.4 once the
 pre-registration is locked; its `[lock_preconditions]` list what is still open.
 
 ## 5. Hook latency
