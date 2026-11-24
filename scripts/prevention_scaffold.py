@@ -53,6 +53,7 @@ import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import functools
+import hashlib
 import inspect as _pyinspect
 from pathlib import Path
 import re
@@ -123,16 +124,20 @@ class AsyncEpisode:
 
 
 async def open_episode(sandbox_exec: Callable[..., Awaitable[Any]], *, instance: str, split: str, arm: str,
-                       test_patch: str, refresh: Callable[[], Awaitable[None]] | None = None) -> AsyncEpisode:
+                       test_patch: str, refresh: Callable[[], Awaitable[None]] | None = None,
+                       binary_sha256: str | None = None) -> AsyncEpisode:
     """The episode for one sample, its base being HEAD at the start of the agent loop."""
     run = make_exec(sandbox_exec, asyncio.get_running_loop())
 
     def build() -> harness.Episode:
-        rc, out, err = run(["git", "rev-parse", "HEAD"], {})
-        if rc != 0 or not re.fullmatch(r"[0-9a-f]{40}", out.strip()):
-            raise harness.HarnessError(f"{instance}: cannot resolve HEAD in {WORKDIR}: {err.strip()[-300:]}")
+        # The base: HEAD after upstream's init, resolved to a commit id before the agent's
+        # first action and fixed for the episode.
+        out = harness.git(run, "rev-parse", "--verify", "HEAD^{commit}")
+        if not re.fullmatch(r"[0-9a-f]{40}", out.strip()):
+            raise harness.HarnessError(f"{instance}: cannot resolve HEAD in {WORKDIR} to a commit id")
         return harness.Episode(run, instance=instance, split=split, arm=arm, base=out.strip(),
-                               test_selection=patch_test_paths(test_patch), binary=BINARY_PATH)
+                               test_selection=patch_test_paths(test_patch), binary=BINARY_PATH,
+                               binary_sha256=binary_sha256)
 
     return AsyncEpisode(await asyncio.to_thread(build), refresh if arm == "on" else None)
 
@@ -267,6 +272,8 @@ def gated_basic_agent(*, init: Any = None, tools: Any = None, max_attempts: int 
     from inspect_ai.util import sandbox
 
     binary_bytes = Path(binary).read_bytes() if arm == "on" else b""
+    # Recorded on the host; every `on` gate checks the copy in the container against it.
+    binary_sha256 = hashlib.sha256(binary_bytes).hexdigest() if arm == "on" else None
     init = [] if init is None else (init if isinstance(init, list) else [init])
 
     @tool(max_output=0)
@@ -294,7 +301,8 @@ def gated_basic_agent(*, init: Any = None, tools: Any = None, max_attempts: int 
                 await sandbox().exec(["chmod", "755", BINARY_PATH])
 
             ep = await open_episode(sandbox().exec, instance=str(state.sample_id), split=split, arm=arm,
-                                    test_patch=state.metadata.get("test_patch", ""), refresh=refresh)
+                                    test_patch=state.metadata.get("test_patch", ""), refresh=refresh,
+                                    binary_sha256=binary_sha256)
             b = inspect_bindings(incorrect_message, "Please proceed to the next step using your best judgement.", "submit")
             await gated_loop(state, ep, b, max_attempts=max_attempts)
             return state
@@ -405,9 +413,7 @@ class _Scenario:
     async def sandbox_exec(self, argv: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None,
                            timeout: int | None = None) -> Any:
         self.execs.append((argv, cwd, env))
-        if argv == ["git", "rev-parse", "HEAD"]:
-            rc, out, err = 0, self.base + "\n", ""
-        elif self.exec_raises and "check" in argv:
+        if self.exec_raises and "check" in argv:
             raise TimeoutError("command timed out")
         else:
             rc, out, err = self.sandbox(argv, env or {})
@@ -463,7 +469,8 @@ def _play(sc: _Scenario, *, arm: str, split: str = "oneoff", max_attempts: int =
     async def main() -> tuple[_State, BaseException | None]:
         state = _State(messages=[_Msg("system", "prompt"), _Msg("user", "issue")])
         ep = await open_episode(sc.sandbox_exec, instance="i1", split=split, arm=arm,
-                                test_patch="--- a/pkg/tests/test_x.py\n+++ b/pkg/tests/test_x.py\n", refresh=sc.refresh)
+                                test_patch="--- a/pkg/tests/test_x.py\n+++ b/pkg/tests/test_x.py\n", refresh=sc.refresh,
+                                binary_sha256=harness.FAKE_DIGEST if arm == "on" else None)
         try:
             await gated_loop(state, ep, sc.bindings(), max_attempts=max_attempts, accept_ends=accept_ends)
         except BaseException as ex:
@@ -509,7 +516,9 @@ def self_test() -> int:
                                          [s["scored_correct"] for s in rec.get("submissions", [])],
                                          rec.get("end_check", {}).get("ended_by"), rec.get("end_check", {}).get("accepted")),
           ([False, True], [None, True], "scored-correct", True))
-    check("base is HEAD at loop start", all(a[-1] == sc.base for a, *_ in sc.execs if a[:3] == ["git", "diff", "--cached"]), True)
+    n = len(harness.GIT)
+    check("base is HEAD at loop start", all(a[-1] == sc.base for a, *_ in sc.execs if a[n:n + 2] == ["diff", "--cached"]), True)
+    check("base resolved to a commit id", any(a[n:] == ["rev-parse", "--verify", "HEAD^{commit}"] for a, *_ in sc.execs), True)
     check("test selection from the test patch", rec.get("test_selection"), ["pkg/tests/test_x.py"])
     check("binary refreshed before every on gate", sc.refreshes, 3)  # two submits and the end check
     check("gates run in /testbed", {cwd for a, cwd, *_ in sc.execs}, {WORKDIR})
@@ -519,11 +528,14 @@ def self_test() -> int:
 
     raises("an Exec called on the loop's thread", lambda: asyncio.run(exec_on_loop()))
     checks = [(a, env) for a, _, env in sc.execs if "check" in a]
-    check("check runs offline", checks[0][1].get("DISCIPLINE_NO_NETWORK"), "1")
+    check("check runs offline", "DISCIPLINE_NO_NETWORK=1" in checks[0][0], True)
     # The sandbox's exec can add variables but not remove them, so the check's command line
-    # removes every PR body source itself (`env -u`).
-    check("check gets no PR body", all({f"-u {v}" for v in harness.BODY_ENV} <= {f"{x} {y}" for x, y in zip(a, a[1:])}
+    # starts from an empty environment (`env -i`) holding only the harness's four variables.
+    check("check gets no PR body", all(a[:2] == ["env", "-i"] and sorted(x.split("=")[0] for x in a[2:6]) ==
+                                       ["DISCIPLINE_NO_NETWORK", "HOME", "NO_COLOR", "PATH"] and "=" not in a[6]
                                        for a, _ in checks), True)
+    sums = [a for a, *_ in sc.execs if a[:1] == ["sha256sum"]]
+    check("binary digest checked before every on gate", (len(sums), sums[0][1:] if sums else None), (3, [BINARY_PATH]))
 
     # Message-limit accounting: refusals use messages, not attempts. With max_attempts 1 a
     # counted refusal would end the run at the first submit.

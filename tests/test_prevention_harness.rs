@@ -203,14 +203,43 @@ fn harness_owner_decisions_match_the_preregistration() {
     assert!(on.contains("--format agent-prompt"));
     assert!(!on.contains("the report's text"));
 
-    // No PR body: every variable a body or a title is read from is removed from the
-    // check's environment, and the pre-registration says so.
-    let unset: Vec<&str> = got["configs"]["on"]["unset_env"]
-        .as_array()
-        .expect("on unset_env")
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    // The check is the one the agent hooks run: the flags `src/hook.rs` passes, in its
+    // order, and the pre-registration quotes them.
+    assert_eq!(
+        argv[1..],
+        [
+            "check",
+            "--format",
+            "agent-prompt",
+            "--quiet",
+            "--json-out",
+            argv[6],
+            "--policy-from",
+            "base",
+            "--directive-sources",
+            "pr-body",
+            "--base",
+            "<base_commit>"
+        ]
+    );
+    let hook = std::fs::read_to_string(root().join("src/hook.rs")).expect("read src/hook.rs");
+    assert!(
+        hook.contains(r#".args(["check", "--format", "agent-prompt", "--quiet", "--json-out"])"#)
+    );
+    assert!(hook.contains(r#".args(["--policy-from", "base", "--directive-sources", "pr-body"])"#));
+    assert!(on.contains(
+        "--format agent-prompt --quiet --json-out <file> --policy-from base --directive-sources pr-body"
+    ));
+
+    // No PR body, and nothing else from the sandbox: the check runs in an explicit
+    // environment (`env -i`) holding only these four variables, so every variable a body
+    // or a title is read from is absent, and the pre-registration says so.
+    let env = got["configs"]["on"]["env"].as_object().expect("on env");
+    let mut keys: Vec<&str> = env.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["DISCIPLINE_NO_NETWORK", "HOME", "NO_COLOR", "PATH"]);
+    assert_eq!(got["configs"]["on"]["env_clear"], true);
+    assert!(on.contains("`env -i`"));
     for var in [
         "PR_BODY",
         "DISCIPLINE_PR_BODY_FILE",
@@ -219,7 +248,7 @@ fn harness_owner_decisions_match_the_preregistration() {
         "GITEA_EVENT_PATH",
         "FORGEJO_EVENT_PATH",
     ] {
-        assert!(unset.contains(&var), "harness does not clear {var}");
+        assert!(!env.contains_key(var), "harness passes {var} to the check");
         assert!(
             on.contains(&format!("`{var}`")),
             "`[arms] on` does not name {var}"
