@@ -15,6 +15,11 @@
 //!   toward "every listed path changed".
 //! - `exempt_paths` drops a path from the change before any rule reads it: it neither
 //!   fires a rule nor meets one.
+//! - `require_added_line_match` reads the content of a met rule's companion change: every
+//!   listed pattern must match some line the change adds to a companion path (a path the
+//!   head has that matches `require_edits_to`). Context lines, removed lines and other
+//!   files do not count, so a whitespace-only touch, or a matching line moved or deleted,
+//!   does not meet it.
 
 use crate::config::{CompanionEditRule, GateSettings};
 use crate::could_not_check::{tag, Reason};
@@ -32,6 +37,9 @@ pub struct CompiledRule {
     /// entry no changed path matched.
     required: Vec<(String, PathFilter)>,
     require_all: bool,
+    /// `require_added_line_match`, compiled: every pattern must match an added companion
+    /// line.
+    line_patterns: Vec<(String, regex::Regex)>,
 }
 
 impl CompiledRule {
@@ -73,11 +81,62 @@ impl CompiledRule {
                 compile("require_edits_to", std::slice::from_ref(glob))?,
             ));
         }
+        let mut line_patterns = Vec::new();
+        if let Some(patterns) = &rule.require_added_line_match {
+            let field = key("require_added_line_match");
+            if patterns.is_empty() {
+                return Err(config_err(format!(
+                    "`{field}` is an empty list, which asks nothing: remove the key or list a pattern"
+                )));
+            }
+            for pattern in patterns {
+                if pattern.trim().is_empty() {
+                    return Err(config_err(format!(
+                        "`{field}` holds a blank pattern, which every line matches"
+                    )));
+                }
+                let re = regex::Regex::new(pattern).map_err(|e| {
+                    config_err(format!(
+                        "`{field}`: `{pattern}` is not a regular expression: {e}"
+                    ))
+                })?;
+                // A pattern a blank line matches is met by a whitespace-only edit: the
+                // very edit the key exists to refuse.
+                if ["", " ", "\t"].iter().any(|blank| re.is_match(blank)) {
+                    return Err(config_err(format!(
+                        "`{field}`: `{pattern}` matches an empty or whitespace-only line, so a whitespace-only edit would meet it"
+                    )));
+                }
+                line_patterns.push((pattern.clone(), re));
+            }
+        }
         Ok(Self {
             trigger,
             required,
             require_all: rule.require_all,
+            line_patterns,
         })
+    }
+
+    /// Whether `path` is a companion of this rule: it matches a `require_edits_to` glob.
+    fn is_companion(&self, path: &str) -> bool {
+        self.required.iter().any(|(_, f)| f.matches(path))
+    }
+
+    /// `require_added_line_match`: the patterns no line in `added` matches, in the order
+    /// configured. Empty when the rule sets none, or every one matched some line.
+    pub fn missing_line_patterns<'a>(
+        &self,
+        added: impl IntoIterator<Item = &'a str>,
+    ) -> Vec<String> {
+        let mut unmet: Vec<&(String, regex::Regex)> = self.line_patterns.iter().collect();
+        for line in added {
+            if unmet.is_empty() {
+                break;
+            }
+            unmet.retain(|(_, re)| !re.is_match(line));
+        }
+        unmet.into_iter().map(|(p, _)| p.clone()).collect()
     }
 
     /// Judges one rule against the change: `touched` is every path either side of the
@@ -180,6 +239,9 @@ pub fn evaluate_companion_edit(ctx: &Context) -> Result<GateOutcome> {
             Verdict::NotFired => continue,
             Verdict::Met => {
                 out.examined += 1;
+                if !compiled.line_patterns.is_empty() {
+                    judge_added_lines(ctx, rule, compiled, position, &changed, &exempt, &mut out)?;
+                }
                 if rule.require_mention {
                     judge_mention(ctx, rule, compiled, position, &changed, &exempt, &mut out)?;
                 }
@@ -419,6 +481,74 @@ fn judge_mention(
     Ok(())
 }
 
+/// `require_added_line_match`: the rule fired and its companion path changed; every
+/// pattern must match a line the change adds to a companion path.
+fn judge_added_lines(
+    ctx: &Context,
+    rule: &CompanionEditRule,
+    compiled: &CompiledRule,
+    position: usize,
+    changed: &[crate::gitctx::ChangedFile],
+    exempt: &PathFilter,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let mut companions = Vec::new();
+    let mut added: Vec<String> = Vec::new();
+    for f in changed {
+        if f.is_deleted() || exempt.matches(&f.path) || !compiled.is_companion(&f.path) {
+            continue;
+        }
+        companions.push(f.path.clone());
+        if f.added_lines.is_empty() {
+            continue;
+        }
+        let Some(text) = ctx.git.head_content(&f.path)? else {
+            out.notes.push(format!(
+                "rule {position}: `require_added_line_match` could not read `{}` as text; its lines do not count",
+                f.path
+            ));
+            continue;
+        };
+        added.extend(
+            text.lines()
+                .enumerate()
+                .filter(|(i, _)| f.added_lines.contains(&(i + 1)))
+                .map(|(_, l)| l.to_string()),
+        );
+    }
+    let missing = compiled.missing_line_patterns(added.iter().map(String::as_str));
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let subject = &rule.require_edits_to[0];
+    let at = companions.first().unwrap_or(subject);
+    let lifted = ctx.find_override(
+        GATE,
+        &crate::findings::COMPANION_LINE_MISSING,
+        tokens::ALLOW_COMPANION_EDIT,
+        subject,
+    );
+    out.lift_or_push(
+        lifted,
+        ctx.overridable(rule_severity(ctx)),
+        &crate::findings::COMPANION_LINE_MISSING,
+        (Some(at), None),
+        format!(
+            "Rule {position} (`require_added_line_match`): the companion edit adds no line matching {} ({} added line(s) read in {}). Every listed pattern must match a line the change adds; context and removed lines do not count.",
+            list(&missing),
+            added.len(),
+            list(&companions),
+        ),
+        &format!(
+            "Add the required entry to `{at}`, or justify with `allow-companion-edit: {subject} <reason>`."
+        ),
+    );
+    if let Some(anchor) = later_rule_anchor(&ctx.config.gates.companion_edit.rules, position) {
+        out.anchor_last(anchor);
+    }
+    Ok(())
+}
+
 fn rule_severity(ctx: &Context) -> crate::config::Severity {
     ctx.config.gates.companion_edit.severity()
 }
@@ -464,6 +594,7 @@ mod tests {
             require_edits_to: required.iter().map(|s| s.to_string()).collect(),
             require_all,
             require_mention: false,
+            require_added_line_match: None,
             reason: None,
         }
     }
@@ -615,6 +746,63 @@ mod tests {
             assert!(format!("{err:#}").contains(key), "{err:#}");
         }
         assert!(CompiledRule::new(&rule(&["a/**"], &["docs/a.md"], false), 0).is_ok());
+    }
+
+    fn with_lines(patterns: &[&str]) -> CompanionEditRule {
+        let mut r = rule(&["src/**"], &["docs/REVIEW-LOG.md"], false);
+        r.require_added_line_match = Some(patterns.iter().map(|s| s.to_string()).collect());
+        r
+    }
+
+    #[test]
+    fn require_added_line_match_needs_an_added_line_matching_every_pattern() {
+        let dated = r"^## \d{4}-\d{2}-\d{2} ";
+        let c = CompiledRule::new(&with_lines(&[dated]), 0).unwrap();
+        // A whitespace-only edit adds blank lines: unmet.
+        assert_eq!(c.missing_line_patterns(["", "   ", "\t"]), [dated]);
+        // An added line that does not match: unmet.
+        assert_eq!(c.missing_line_patterns(["## Notes on 2026-11-24"]), [dated]);
+        // No added line at all (a removed matching line contributes nothing): unmet.
+        assert_eq!(c.missing_line_patterns([]), [dated]);
+        // An added dated entry: met.
+        assert!(c
+            .missing_line_patterns(["", "## 2026-11-24 quarterly review"])
+            .is_empty());
+
+        // A list asks for every pattern, each on some added line, not one line for all.
+        let c = CompiledRule::new(&with_lines(&[dated, "^Reviewer: "]), 0).unwrap();
+        assert_eq!(
+            c.missing_line_patterns(["## 2026-11-24 review"]),
+            ["^Reviewer: "]
+        );
+        assert!(c
+            .missing_line_patterns(["## 2026-11-24 review", "Reviewer: a"])
+            .is_empty());
+        // A rule without the key asks nothing.
+        let c = CompiledRule::new(&rule(&["a/**"], &["b.md"], false), 0).unwrap();
+        assert!(c.missing_line_patterns([]).is_empty());
+    }
+
+    #[test]
+    fn a_line_pattern_that_cannot_discriminate_is_refused() {
+        for (patterns, why) in [
+            (vec![], "empty list"),
+            (vec![" "], "blank pattern"),
+            (vec!["^## ("], "not a regular expression"),
+            (vec![".*"], "whitespace-only"),
+            (vec![r"^\s*$"], "whitespace-only"),
+            (vec!["^## ", "x?"], "whitespace-only"),
+        ] {
+            let err = CompiledRule::new(&with_lines(&patterns), 2)
+                .err()
+                .expect("refused");
+            let text = format!("{err:#}");
+            assert!(
+                text.contains("rules[2].require_added_line_match") && text.contains(why),
+                "{text}"
+            );
+        }
+        assert!(CompiledRule::new(&with_lines(&["^## "]), 0).is_ok());
     }
 
     #[test]

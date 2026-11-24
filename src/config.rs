@@ -2958,6 +2958,26 @@ impl Default for ClaimLabelsGate {
     }
 }
 
+/// `require_added_line_match`: one pattern as a string, or a list of patterns.
+fn one_or_many_patterns<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        One(String),
+        Many(Vec<String>),
+    }
+    match Raw::deserialize(d).map_err(|_| {
+        serde::de::Error::custom(
+            "`require_added_line_match` is a regular expression string or a list of them",
+        )
+    })? {
+        Raw::One(p) => Ok(Some(vec![p])),
+        Raw::Many(ps) => Ok(Some(ps)),
+    }
+}
+
 /// `companion-edit`: independent rules, each "a change to `trigger_paths` must also
 /// change `require_edits_to`".
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2983,6 +3003,15 @@ pub struct CompanionEditRule {
     /// removed or modified (`companion-edit/companion-not-specific`).
     #[serde(default)]
     pub require_mention: bool,
+    /// Regular expressions, each of which an added line of a companion path must match
+    /// (`companion-edit/companion-line-missing`). Written as one string or a list; a list
+    /// asks for every pattern, each on some added line.
+    #[serde(
+        default,
+        deserialize_with = "one_or_many_patterns",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub require_added_line_match: Option<Vec<String>>,
     /// Why the two sets move together, quoted in the finding.
     #[serde(default)]
     pub reason: Option<String>,

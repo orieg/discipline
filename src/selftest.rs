@@ -6126,6 +6126,36 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "companion-edit: require_added_line_match needs every pattern on an added companion line, and refuses a pattern a blank line meets (#1139)",
+        || {
+            use crate::config::CompanionEditRule;
+            use crate::guards::companion_edit::CompiledRule;
+            let rule = |patterns: &[&str]| {
+                CompiledRule::new(
+                    &CompanionEditRule {
+                        trigger_paths: vec!["src/**".into()],
+                        require_edits_to: vec!["docs/REVIEW-LOG.md".into()],
+                        require_all: false,
+                        require_mention: false,
+                        require_added_line_match: Some(
+                            patterns.iter().map(|p| p.to_string()).collect(),
+                        ),
+                        reason: None,
+                    },
+                    0,
+                )
+            };
+            let dated = rule(&[r"^## \d{4}-\d{2}-\d{2} "])?;
+            let both = rule(&[r"^## \d{4}-\d{2}-\d{2} ", "^Reviewer: "])?;
+            Ok(!dated.missing_line_patterns(["", "  "]).is_empty()
+                && !dated.missing_line_patterns(["## notes"]).is_empty()
+                && dated.missing_line_patterns(["## 2026-11-24 review"]).is_empty()
+                && both.missing_line_patterns(["## 2026-11-24 review"]) == ["^Reviewer: "]
+                && rule(&[r"^\s*$"]).is_err()
+                && rule(&["^## ("]).is_err())
+        },
+    ),
+    (
         "command: base-tests overlays no test inside a source file, and names a changed source that holds one",
         || {
             use crate::guards::command::{base_test_files, inline_test_sources};
@@ -10497,6 +10527,7 @@ smoke_cost::set_contains
                         require_edits_to: required.iter().map(|p| p.to_string()).collect(),
                         require_all,
                         require_mention: false,
+                        require_added_line_match: None,
                         reason: None,
                     },
                     0,
