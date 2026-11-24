@@ -20,7 +20,6 @@
         ],
         "discipline": {
           "exit": 2,
-          "terminal": "",
           "stderr": "could not read the base",
           "report": {
             "could_not_check": {
