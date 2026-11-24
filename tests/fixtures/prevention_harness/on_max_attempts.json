@@ -1,0 +1,55 @@
+{
+  "description": "on: both submissions accepted; the first is scored incorrect, the second reaches max_attempts and is not scored by the scaffold (reading B)",
+  "instance": "fixture__on_max_attempts",
+  "split": "original",
+  "arm": "on",
+  "base": "0123456789abcdef0123456789abcdef01234567",
+  "test_selection": [
+    "astropy/tests/test_core.py"
+  ],
+  "ended_by": "max-attempts",
+  "score_passed": false,
+  "steps": [
+    {
+      "tree": {
+        "changes": [
+          {
+            "status": "M",
+            "path": "astropy/core.py"
+          }
+        ],
+        "discipline": {
+          "exit": 0,
+          "terminal": "discipline: no blocking findings",
+          "report": {
+            "outcomes": []
+          }
+        }
+      },
+      "submit": true,
+      "scored_correct": false
+    },
+    {
+      "tree": {
+        "changes": [
+          {
+            "status": "M",
+            "path": "astropy/core.py"
+          },
+          {
+            "status": "M",
+            "path": "astropy/utils.py"
+          }
+        ],
+        "discipline": {
+          "exit": 0,
+          "terminal": "discipline: no blocking findings",
+          "report": {
+            "outcomes": []
+          }
+        }
+      },
+      "submit": true
+    }
+  ]
+}
