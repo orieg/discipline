@@ -1,0 +1,171 @@
+{
+  "study_id": "base-tests-v1",
+  "part1": {
+    "django": {
+      "verdict": "DOES_NOT_RUN",
+      "pairs": 21,
+      "agree_with_stratum": 21,
+      "causes": [
+        "suite failed"
+      ],
+      "label": "PASS_categorical_by_design"
+    },
+    "pytest-dev": {
+      "verdict": "RUNS",
+      "pairs": 1,
+      "agree_with_stratum": 1,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "scikit-learn": {
+      "verdict": "RUNS",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "sphinx-doc": {
+      "verdict": "RUNS",
+      "pairs": 1,
+      "agree_with_stratum": 1,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "sympy": {
+      "verdict": "RUNS",
+      "pairs": 1,
+      "agree_with_stratum": 1,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    }
+  },
+  "part2": {
+    "confirmatory": {
+      "instances": 0,
+      "eligible": 0,
+      "not_eligible": {
+        "no-base-test-file-modified": 0,
+        "control-no-case": 0,
+        "control-no-passing-test": 0,
+        "not-configured": 0,
+        "run-error": 0
+      },
+      "eligible_share": {
+        "k": 0,
+        "n": 0,
+        "wilson_95": [
+          null,
+          null
+        ]
+      },
+      "friction": {
+        "k": 0,
+        "n": 0,
+        "wilson_95": [
+          null,
+          null
+        ]
+      },
+      "verdict": "INTERMEDIATE",
+      "control_excluded_tests": {
+        "excluded": 0,
+        "of": 0
+      },
+      "control_excluded_instances": 0,
+      "block_classes": {
+        "behaviour-change": 0,
+        "environment": 0,
+        "other": 0
+      },
+      "unclassified_blocks": 0,
+      "per_repository": {}
+    },
+    "pilot": {
+      "instances": 77,
+      "eligible": 77,
+      "not_eligible": {
+        "no-base-test-file-modified": 0,
+        "control-no-case": 0,
+        "control-no-passing-test": 0,
+        "not-configured": 0,
+        "run-error": 0
+      },
+      "eligible_share": {
+        "k": 77,
+        "n": 77,
+        "wilson_95": [
+          0.9524815747175658,
+          0.9999999999999999
+        ]
+      },
+      "friction": {
+        "k": 7,
+        "n": 77,
+        "wilson_95": [
+          0.044735710601777307,
+          0.1759611828111233
+        ]
+      },
+      "verdict": "pilot: no verdict",
+      "control_excluded_tests": {
+        "excluded": 477,
+        "of": 7553
+      },
+      "control_excluded_instances": 30,
+      "block_classes": {
+        "behaviour-change": 6,
+        "environment": 1,
+        "other": 0
+      },
+      "unclassified_blocks": 0,
+      "per_repository": {
+        "astropy": {
+          "instances": 1,
+          "eligible": 1,
+          "blocked": 0
+        },
+        "django": {
+          "instances": 39,
+          "eligible": 39,
+          "blocked": 4
+        },
+        "matplotlib": {
+          "instances": 6,
+          "eligible": 6,
+          "blocked": 0
+        },
+        "pydata": {
+          "instances": 1,
+          "eligible": 1,
+          "blocked": 0
+        },
+        "pylint-dev": {
+          "instances": 1,
+          "eligible": 1,
+          "blocked": 0
+        },
+        "pytest-dev": {
+          "instances": 3,
+          "eligible": 3,
+          "blocked": 0
+        },
+        "scikit-learn": {
+          "instances": 6,
+          "eligible": 6,
+          "blocked": 0
+        },
+        "sphinx-doc": {
+          "instances": 8,
+          "eligible": 8,
+          "blocked": 0
+        },
+        "sympy": {
+          "instances": 12,
+          "eligible": 12,
+          "blocked": 3
+        }
+      }
+    }
+  },
+  "part3": "not run by this runner (needs the shape classification)"
+}
