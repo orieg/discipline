@@ -298,11 +298,13 @@ pub const ENTRY_SHAPES: &[EntryShape] = &[
         stricter_when_true: &[],
     },
     // companion-edit: a rule is named by its two path sets; requiring the companion to
-    // name what changed is one more condition on it.
+    // name what changed, or to add a line matching each listed pattern, is one more
+    // condition on it. Every listed pattern must match, so a pattern added to the list is
+    // stricter; one changed or removed is not.
     EntryShape {
         key: "rules",
         identity: &["trigger_paths", "require_edits_to"],
-        stricter_when_grown: &[],
+        stricter_when_grown: &["require_added_line_match"],
         stricter_when_shrunk: &[],
         stricter_when_added: &[],
         stricter_when_true: &["require_mention"],
