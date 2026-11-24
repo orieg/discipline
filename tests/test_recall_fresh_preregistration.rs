@@ -208,7 +208,7 @@ fn recorded_step0_values_are_the_rust_bounds() {
     let validated = trajectories_required(units, per_instance, 1.0, 1.0).unwrap();
     let to_generate =
         trajectories_required(units, per_instance, 1.0, ratio(y, "generation_yield")).unwrap();
-    assert_eq!((validated, to_generate), (428, 613));
+    assert_eq!((validated, to_generate), (408, 585));
     assert_eq!(int(y, "validated_instances_required"), validated as i64);
     assert_eq!(int(y, "instances_to_generate"), to_generate as i64);
     assert_eq!(int(y, "agent_runs"), (validated * 2 * 2) as i64);
@@ -220,7 +220,7 @@ fn recorded_step0_values_are_the_rust_bounds() {
     let floor = &pb["floor"];
     let f = float(floor, "recall_floor");
     for (key, planning) in [
-        ("pass_probability_at_0_333", 21.0 / 63.0),
+        ("pass_probability_at_0_273", 18.0 / 66.0),
         ("pass_probability_at_0_5", 0.5),
     ] {
         let got = wilson_pass_probability(units, planning, f, conf).unwrap();
@@ -237,12 +237,29 @@ fn recorded_step0_values_are_the_rust_bounds() {
     let mdd = minimum_detectable_difference(
         int(g, "reused_units") as usize,
         int(g, "fresh_units") as usize,
-        21.0 / 63.0,
+        ratio(g, "baseline_p"),
         conf,
         power,
     )
     .unwrap();
-    assert!((mdd - 0.2175).abs() < 1e-4, "{mdd}");
+    // The planning inputs are the registered 66-unit reading and its measured reused R_wf.
+    let reused = &pre["generalisation"]["reused_baseline_committed_reading"];
+    assert_eq!(
+        int(g, "reused_units"),
+        int(&pre["strata"]["v1_units"], "well_formed")
+    );
+    assert_eq!(
+        (int(reused, "blocked"), int(reused, "well_formed_units")),
+        (
+            g["baseline_p"][0].as_integer().unwrap(),
+            g["baseline_p"][1].as_integer().unwrap()
+        )
+    );
+    assert_eq!(
+        y["well_formed_units_per_instance"][0].as_integer(),
+        Some(int(g, "reused_units"))
+    );
+    assert!((mdd - 0.2083).abs() < 1e-4, "{mdd}");
     assert!((float(g, "minimum_detectable_drop") - mdd).abs() < 5e-4);
     assert_eq!(int(g, "fresh_units"), units as i64);
 }
@@ -265,13 +282,13 @@ fn python_step0_values_match_the_rust_bounds() {
     );
     assert_eq!(
         v["yield"]["instances_to_generate"],
-        Value::from(trajectories_required(units, 63.0 / 272.0, 1.0, 349.0 / 500.0).unwrap())
+        Value::from(trajectories_required(units, 66.0 / 272.0, 1.0, 349.0 / 500.0).unwrap())
     );
     assert_eq!(
         v["yield"]["validated_instances_required"],
-        Value::from(trajectories_required(units, 63.0 / 272.0, 1.0, 1.0).unwrap())
+        Value::from(trajectories_required(units, 66.0 / 272.0, 1.0, 1.0).unwrap())
     );
-    let mdd = minimum_detectable_difference(63, units, 21.0 / 63.0, 0.95, 0.80).unwrap();
+    let mdd = minimum_detectable_difference(66, units, 18.0 / 66.0, 0.95, 0.80).unwrap();
     let py = v["generalisation"]["minimum_detectable_drop"]
         .as_f64()
         .unwrap();

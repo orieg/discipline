@@ -259,13 +259,12 @@ required_units = 99 # (computed, RUN) ceil(93 x 1.064)
 
 [power_and_bounds.yield]
 rule = "validated_instances_required = trajectories_required(required_units, wf_units_per_instance, 1, 1); instances_to_generate = trajectories_required(required_units, wf_units_per_instance, 1, generation_yield)"
-well_formed_units_per_instance = [63, 272] # (measured, READ) v1 confirmatory, #838 miss-triage comment: 63 of 138 in-scope units on a well-formed base, 272 instances
+well_formed_units_per_instance = [66, 272] # (computed, RUN) v1 confirmatory: 66 of 138 in-scope units well-formed by `injection_shape` (`[strata.v1_units]`), 272 instances
 generation_yield = [349, 500] # planning value: (measured, READ) Impossible-SWE-bench rows over SWE-bench Verified, the upstream generator's retention with `claude-sonnet-4-20250514`; not measured for Gemini 3.8 Flash
 generation_yield_status = "planning value, measured on the upstream generator only; the stopping rule absorbs the difference"
-validated_instances_required = 428 # (computed, RUN) trajectories_required(99, 63/272, 1.0, 1.0)
-instances_to_generate = 613 # (computed, RUN) trajectories_required(99, 63/272, 1.0, 349/500); pool 1794 covers it
-agent_runs = 1712 # (computed, RUN) 428 instances x 2 splits x 2 runs per cell
-planning_note = "63/272 is the triage's count, kept as the planning input it was when these values were computed; the registered count is 66 (`[strata.v1_units]`), which gives 408 validated and 585 to generate (computed, RUN, `trajectories_required` with 66/272), slightly fewer. Both are planning values for a different generator, and the stopping rule, not these counts, decides when generation stops."
+validated_instances_required = 408 # (computed, RUN) trajectories_required(99, 66/272, 1.0, 1.0)
+instances_to_generate = 585 # (computed, RUN) trajectories_required(99, 66/272, 1.0, 349/500); pool 1794 covers it
+agent_runs = 1632 # (computed, RUN) 408 instances x 2 splits x 2 runs per cell
 empirical_residuals = [
   "The generation yield with Gemini 3.8 Flash as the generator model: 349/500 was measured on the upstream generator over Verified, so it is not a measurement for this generator. The stopping rule absorbs the difference; the pool bounds it.",
   "The generation yield on non-Verified instances: Verified was screened for well-specified issues and valid tests, the rest of SWE-bench `test` was not, so the yield is expected lower. The stopping rule absorbs it; the pool bounds it.",
@@ -276,30 +275,31 @@ empirical_residuals = [
 [power_and_bounds.floor]
 recall_floor = 0.80 # v1's floor, kept for continuity
 rule = "wilson_pass_probability(required_units, planning_recall, recall_floor, 0.95)"
-pass_probability_at_0_333 = 1.6e-30 # (computed, RUN) planning recall 21/63, v1's post-hoc well-formed reading at 0.26.0 counting `def`-line errors
+pass_probability_at_0_273 = 8.8e-38 # (computed, RUN) planning recall 18/66, the measured reused-unit R_wf of the 0.32.0 tree (`[generalisation.reused_baseline_committed_reading]`)
 pass_probability_at_0_5 = 2.3e-16 # (computed, RUN) planning recall 0.5, a generous ceiling
 verdict = "REJECT_INFEASIBLE" # for a PASS claim at the 0.80 floor: math pre-says the floor verdict; the study proceeds as an estimate
 note = "The floor verdict is still computed and reported, so the result reads against v1's; Step 0 says it is REJECTED in any plausible regime, and no floor or planning rate is changed to avoid that."
 
 [power_and_bounds.generalisation]
 rule = "minimum_detectable_difference(reused_units, fresh_units, baseline_p, 0.95, 0.80)"
-reused_units = 63 # planning: the triage's well-formed count, as computed
+reused_units = 66 # v1's well-formed units (`[strata.v1_units]`)
 fresh_units = 99
-baseline_p = 0.333 # planning: 21/63
-minimum_detectable_drop = 0.217 # (computed, RUN) only a drop of about 0.22 or more in R_wf is detectable at 80% power
+baseline_p = [18, 66] # (computed, RUN) the measured reused-unit R_wf of the 0.32.0 tree, used as the planning rate
+minimum_detectable_drop = 0.208 # (computed, RUN) only a difference of about 0.21 or more in R_wf is resolvable at 80% power
 note = """
 Context only: the comparison no longer gates a verdict. The generator model changed
 (`[generation] generator_model`), so a difference between fresh and reused units mixes the
 generator with held-out generalisation, and no drop verdict is drawn from it. The minimum
-detectable drop is kept to say how large a difference this design can resolve at all; the
-inputs are the planning values it was computed with (63 units, 21/63), not the registered
-66 units and 18/66 of `[generalisation.reused_baseline_committed_reading]`.
+detectable drop is kept to say how large a difference this design can resolve at all. Its
+inputs are the registered 66 units and their measured R_wf, 18/66
+(`[generalisation.reused_baseline_committed_reading]`); `baseline_p` is that measurement, not
+a separate planning value, because no other reading of the reused units is registered.
 """
 
 [step_0]
 verdict = "PROCEED_WITH_AMENDMENT"
 reason = """
-Feasible as a held-out estimate: 613 (computed, RUN) instances to generate from a pool of 1794
+Feasible as a held-out estimate: 585 (computed, RUN) instances to generate from a pool of 1794
 (computed, RUN), with a generation yield that is a planning value for the chosen generator
 model. The 0.80 floor PASS is REJECT_INFEASIBLE and is kept only as a reported verdict; the
 fresh-versus-reused difference is descriptive, confounded by the generator change, and gates
