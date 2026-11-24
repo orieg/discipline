@@ -432,6 +432,7 @@ def v1_unit_shapes(results: Path = CONFIRMATORY_DIR, replay_name: str = BASELINE
                     "instance_id": p["instance_id"],
                     "split": p["split"],
                     "sub_stratum": t["sub_stratum"],
+                    "hunk_sha256": t["hunk_sha256"],
                     "shape": "broken-by-injection" if shape == "broken" else shape,
                     "blocked": t["discipline"] == "blocked",
                 }
@@ -455,6 +456,152 @@ def v1_unit_summary(units: list[dict[str, Any]], replay_name: str = BASELINE_REP
         "by_shape": by_shape,
         "R_wf": {"blocked": k, "units": n, "point_estimate": k / n if n else None, "ci95": [lo, hi]},
     }
+
+
+# --- v1's confirmatory units by `injection_shape` ------------------------------------
+#
+# The registered rule needs base_commit's copies of the injected test files, which the
+# repository does not commit (some upstream repositories are GPL). `--v1-units-injection
+# --fetch <cache>` fetches them from public GitHub raw URLs and the two patches from the
+# pinned Impossible-SWE-bench revision, classifies every unit, and writes
+# `INJECTION_UNITS_FILE` with the sha256 of every input; without `--fetch` the summary is
+# recomputed from that committed file and the committed replay, offline.
+
+INJECTION_UNITS_FILE = "injection-shapes-v1-units.json"
+IMPOSSIBLE_DATASET = "fjzzq2002/impossible_swebench"
+IMPOSSIBLE_REVISION = "9c2d34f364b7229e8c0ff807c646100bdc18bbb5"  # `dataset_swe_revision` in scripts/recall_lab/run_confirmatory.py
+RAW_URL = "https://raw.githubusercontent.com/{repo}/{commit}/{path}"
+UNCLASSIFIED = "unclassified"  # a patch did not apply to base_commit; counted with its reason
+
+
+def _unit_key(u: dict[str, Any]) -> list[str]:
+    return [u["instance_id"], u["sub_stratum"], u["hunk_sha256"]]
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _fetch_base_file(cache: Path, repo: str, commit: str, path: str) -> str | None:
+    """base_commit's copy of `path`, or None when it does not exist there (HTTP 404).
+    Any other failure raises: a missing input is never replaced by a guess."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    local = cache / "files" / repo / commit / path
+    absent = local.with_name(local.name + ".absent-at-base")
+    if local.exists():
+        return local.read_text(encoding="utf-8")
+    if absent.exists():
+        return None
+    url = RAW_URL.format(repo=repo, commit=commit, path=urllib.parse.quote(path))
+    req = urllib.request.Request(url, headers={"User-Agent": "recall-strata/1"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            text = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        absent.parent.mkdir(parents=True, exist_ok=True)
+        absent.write_text("")
+        return None
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text(text, encoding="utf-8")
+    return text
+
+
+def _fetch_impossible_rows(cache: Path, split: str) -> dict[str, dict[str, Any]]:
+    """The pinned dataset's rows of `split` (datasets-server, revision checked before and after)."""
+    local = cache / f"impossible-{IMPOSSIBLE_REVISION}-{split}.json"
+    if not local.exists():
+        fresh = _load_sibling("recall_fresh")
+        fields = ("instance_id", "repo", "base_commit", "test_patch", "original_test_patch")
+        rows = fresh.fetch_rows(IMPOSSIBLE_DATASET, IMPOSSIBLE_REVISION, split, fields)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_text(json.dumps(rows), encoding="utf-8")
+    return {r["instance_id"]: r for r in json.loads(local.read_text(encoding="utf-8"))}
+
+
+def classify_v1_units_injection(cache: Path, results: Path = CONFIRMATORY_DIR, replay_name: str = BASELINE_REPLAY) -> dict[str, Any]:
+    """Every v1 confirmatory R unit (the set `v1_unit_shapes` gives) with `injection_shape_from_patches`
+    on the fetched inputs; refuses when a fetched patch is not the one the committed manifest hashed."""
+    units = v1_unit_shapes(results, replay_name)
+    manifest = {p["pair_id"]: p for p in json.loads((results / "manifest.json").read_text(encoding="utf-8"))["pairs"]}
+    rows = {split: _fetch_impossible_rows(cache, split) for split in sorted({u["split"] for u in units})}
+    out = []
+    for u in units:
+        row = rows[u["split"]][u["instance_id"]]
+        tp, otp = row["test_patch"], row["original_test_patch"]
+        hashed = manifest[u["pair_id"]]["patch_sha256"]
+        if (_sha256(tp), _sha256(otp)) != (hashed["test_patch"], hashed["original_test_patch"]):
+            raise SystemExit(f"{u['pair_id']}: the fetched patches are not the ones manifest.json hashed")
+        paths = sorted({fp.old_path for patch in (tp, otp) for fp in pairs.parse_patch(patch) if fp.old_path})
+        base = {}
+        files = []
+        for path in paths:
+            text = _fetch_base_file(cache, row["repo"], row["base_commit"], path)
+            files.append({"path": path, "base_sha256": None if text is None else _sha256(text)})
+            if text is not None:
+                base[path] = text
+        try:
+            got = injection_shape_from_patches(base, tp, otp)
+        except pairs.PatchError as e:
+            got = {"shape": UNCLASSIFIED, "reasons": [f"patch-does-not-apply: {e}"]}
+        out.append(
+            {
+                "unit": _unit_key(u),
+                "pair_id": u["pair_id"],
+                "instance_id": u["instance_id"],
+                "split": u["split"],
+                "repo": row["repo"],
+                "base_commit": row["base_commit"],
+                "files": files,
+                "test_patch_sha256": _sha256(tp),
+                "original_test_patch_sha256": _sha256(otp),
+                "shape": got["shape"],
+                "reasons": got["reasons"],
+                "blocked": u["blocked"],
+            }
+        )
+    return {
+        "generated_by": (
+            "python3 -I scripts/recall_strata.py --v1-units-injection --fetch <cache dir>: `injection_shape_from_patches` "
+            "on base_commit's copies of the files the two patches touch (public GitHub raw files; `base_sha256` null when "
+            "the file does not exist at base_commit) and the pinned dataset's `test_patch` and `original_test_patch` "
+            "(each checked against manifest.json's sha256). The source files are not committed."
+        ),
+        "dataset": IMPOSSIBLE_DATASET,
+        "dataset_revision": IMPOSSIBLE_REVISION,
+        "replay": replay_name,
+        "arm": "primary",
+        "in_scope_rule": IN_SCOPE_RULE,
+        "units": out,
+    }
+
+
+def v1_unit_injection_summary(doc: dict[str, Any], results: Path = CONFIRMATORY_DIR) -> dict[str, Any]:
+    """`v1_unit_summary` on the committed per-unit `injection_shape` file, after checking that its
+    units and blocked flags are exactly the ones the committed replay gives."""
+    replay_name = doc["replay"]
+    units = v1_unit_shapes(results, replay_name)
+    recorded = doc["units"]
+    if [_unit_key(u) for u in units] != [r["unit"] for r in recorded]:
+        raise SystemExit(f"{INJECTION_UNITS_FILE}: its units are not the R units of {replay_name}")
+    for u, r in zip(units, recorded):
+        if u["blocked"] != r["blocked"] or u["split"] != r["split"]:
+            raise SystemExit(f"{INJECTION_UNITS_FILE}: unit {r['unit']} disagrees with {replay_name}")
+        if r["shape"] not in (*INJECTION_SHAPES, UNCLASSIFIED):
+            raise SystemExit(f"{INJECTION_UNITS_FILE}: unit {r['unit']} has an unknown shape {r['shape']!r}")
+    summary = v1_unit_summary([dict(u, shape=r["shape"]) for u, r in zip(units, recorded)], replay_name)
+    reasons: dict[str, int] = {}
+    for r in recorded:
+        for reason in r["reasons"] or ["none"]:
+            key = f"{r['shape']}: {reason.split(':')[0]}"
+            reasons[key] = reasons.get(key, 0) + 1
+    summary["reasons"] = dict(sorted(reasons.items()))
+    summary["unclassified"] = [r["instance_id"] for r in recorded if r["shape"] == UNCLASSIFIED]
+    return summary
 
 
 def strata_from_manifest(manifest_path: Path) -> dict[str, Any]:
@@ -605,6 +752,22 @@ def run_self_checks() -> None:
     to = lambda v: f"--- a/t/test_x.py\n+++ b/t/test_x.py\n@@ -1,3 +1,3 @@\n def test_a():\n     x = f()\n-    assert x == 0\n+{v}\n"
     assert injection_shape_from_patches(base, to("    assert x == 2"), to("    assert x == 1"))["shape"] == "well-formed"
     assert injection_shape_from_patches(base, to("  assert x == 2"), to("    assert x == 1"))["reasons"] == ["parse-error"]
+    # The committed per-unit file is checked against the committed replay: a unit whose
+    # blocked flag or key differs from the replay's is refused, not counted.
+    units_file = CONFIRMATORY_DIR / INJECTION_UNITS_FILE
+    if units_file.exists():
+        doc = json.loads(units_file.read_text(encoding="utf-8"))
+        v1_unit_injection_summary(doc)
+        for tamper in ("blocked", "unit"):
+            bad = json.loads(json.dumps(doc))
+            row = bad["units"][0]
+            row[tamper] = (not row["blocked"]) if tamper == "blocked" else [*row["unit"][:2], "0" * 64]
+            try:
+                v1_unit_injection_summary(bad)
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError(f"a per-unit file with a changed {tamper} was accepted")
     print("All recall_strata.py self-checks passed.")
 
 
@@ -616,12 +779,35 @@ def main() -> int:
     parser.add_argument("--print-schema", action="store_true", help="Print STRATA_SCHEMA.")
     parser.add_argument("--v1-units", action="store_true", help="v1's confirmatory R units by shape and R_wf, from the committed files (JSON).")
     parser.add_argument("--replay", default=BASELINE_REPLAY, help="With --v1-units: the committed replay to read.")
+    parser.add_argument(
+        "--v1-units-injection",
+        action="store_true",
+        help=f"v1's confirmatory R units by `injection_shape` and R_wf, from the committed {INJECTION_UNITS_FILE} (JSON, offline).",
+    )
+    parser.add_argument(
+        "--fetch",
+        type=Path,
+        help=f"With --v1-units-injection: fetch the inputs into this cache directory and rewrite {INJECTION_UNITS_FILE}.",
+    )
+    parser.add_argument(
+        "--units-file",
+        type=Path,
+        default=CONFIRMATORY_DIR / INJECTION_UNITS_FILE,
+        help="With --v1-units-injection: the per-unit file to read (and write with --fetch).",
+    )
     args = parser.parse_args()
     if args.self_check:
         run_self_checks()
         return 0
     if args.print_schema:
         print(json.dumps(STRATA_SCHEMA, indent=2))
+        return 0
+    if args.v1_units_injection:
+        if args.fetch:
+            doc = classify_v1_units_injection(args.fetch, replay_name=args.replay)
+            args.units_file.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        doc = json.loads(args.units_file.read_text(encoding="utf-8"))
+        print(json.dumps(v1_unit_injection_summary(doc), indent=1))
         return 0
     if args.v1_units:
         print(json.dumps(v1_unit_summary(v1_unit_shapes(replay_name=args.replay), args.replay), indent=1))
