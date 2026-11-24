@@ -198,7 +198,11 @@ Pre-registered draft, not run. Only the population scan has run:
 python3 -I scripts/recall_fresh.py population        # reads three datasets, rewrites population.json
 python3 -I scripts/recall_fresh.py --check-population  # no network: the pool is disjoint from v1
 python3 -I scripts/recall_fresh.py --bounds-json       # the Step-0 values the pre-registration records
+python3 -I scripts/recall_strata.py --v1-units         # v1's confirmatory units by shape and R_wf, committed files only
 ```
+
+The harness runs fresh instances with `scripts/recall_lab/harness-dataset-path.patch` applied
+at the harness commit beside v1's `harness_patch` (`git apply` both; the hunks do not overlap).
 
 The scan reads SWE-bench `test`, SWE-bench Verified and Impossible-SWE-bench through the
 Hugging Face datasets-server at the revisions pinned in the script, and refuses when a dataset
