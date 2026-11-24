@@ -3,8 +3,9 @@
 //! self-checks run, the committed population scan is disjoint from v1's instances, and the
 //! Step-0 values the pre-registration records are the ones the Rust bound functions and
 //! their Python mirrors give. Three lock preconditions are checked against committed files:
-//! the harness dataset-loading patch and its sha256, v1's confirmatory units by shape
-//! (`scripts/recall_strata.py --v1-units`), and the reused-unit baseline R_wf.
+//! the harness dataset-loading patch and its sha256, v1's confirmatory units by
+//! `injection_shape` (`scripts/recall_strata.py --v1-units-injection`, from the committed
+//! per-unit file and replay), and the reused-unit baseline R_wf.
 
 mod common;
 
@@ -330,52 +331,132 @@ fn dataset_loading_patch_matches_its_recorded_sha256() {
     assert!(text.contains("path=\"fjzzq2002/impossible_swebench\""));
 }
 
-/// v1's confirmatory R units by shape, read from the committed files, are the counts
-/// `[strata.v1_units]` records, and they add up to the 0.32.0-tree replay's R.
+fn confirmatory(name: &str) -> std::path::PathBuf {
+    root()
+        .join("docs/benchmarks/results-recall-confirmatory")
+        .join(name)
+}
+
+/// The summary `--v1-units-injection` recomputes offline from a per-unit file and the
+/// committed replay (the script refuses a file whose units or blocked flags differ from it).
+fn injection_summary(units_file: &Path) -> Value {
+    strata_script(&[
+        "--v1-units-injection",
+        "--units-file",
+        units_file.to_str().expect("utf-8 path"),
+    ])
+}
+
+/// Units, blocked units and R_wf tallied here from a per-unit file, apart from the script.
+fn tally(units_file: &Path) -> (i64, i64, i64, i64, i64, i64) {
+    let doc: Value =
+        serde_json::from_str(&std::fs::read_to_string(units_file).expect("read the per-unit file"))
+            .expect("parse the per-unit file");
+    let units = doc["units"].as_array().expect("units");
+    let count = |shape: &str| units.iter().filter(|u| u["shape"] == shape).count() as i64;
+    let wf_blocked = units
+        .iter()
+        .filter(|u| u["shape"] == "well-formed" && u["blocked"] == Value::Bool(true))
+        .count() as i64;
+    let blocked = units
+        .iter()
+        .filter(|u| u["blocked"] == Value::Bool(true))
+        .count() as i64;
+    (
+        units.len() as i64,
+        blocked,
+        count("well-formed"),
+        count("broken-by-injection"),
+        count("unclassified"),
+        wf_blocked,
+    )
+}
+
+/// The counts `[strata.v1_units]` records equal the ones recomputed from a per-unit file and
+/// the committed replay, by the script and by the tally here.
+fn check_v1_injection_counts(pre: &toml::Value, units_file: &Path) {
+    let rec = &pre["strata"]["v1_units"];
+    let v = injection_summary(units_file);
+    assert_eq!(v["replay"].as_str(), rec["replay"].as_str());
+    let shape = |s: &str, f: &str| v["by_shape"][s][f].as_i64().unwrap_or(0);
+    let (units, blocked, wf, broken, unclassified, _) = tally(units_file);
+    assert_eq!(v["units"].as_i64(), Some(units));
+    assert_eq!(v["blocked"].as_i64(), Some(blocked));
+    assert_eq!(shape("well-formed", "units"), wf);
+    assert_eq!(shape("broken-by-injection", "units"), broken);
+    assert_eq!(shape("unclassified", "units"), unclassified);
+    assert_eq!(int(rec, "units"), units, "[strata.v1_units] units");
+    assert_eq!(int(rec, "well_formed"), wf, "[strata.v1_units] well_formed");
+    assert_eq!(
+        int(rec, "broken_by_injection"),
+        broken,
+        "[strata.v1_units] broken_by_injection"
+    );
+    assert_eq!(
+        int(rec, "unclassified"),
+        unclassified,
+        "[strata.v1_units] unclassified"
+    );
+    assert_eq!(wf + broken + unclassified, units);
+}
+
+/// Lock precondition 3: v1's confirmatory R units by `injection_shape`, read from the
+/// committed per-unit file and replay, are the counts `[strata.v1_units]` records (66
+/// well-formed), and they add up to the 0.32.0-tree replay's R.
 #[cfg(unix)]
 #[test]
 fn v1_unit_shapes_are_the_recorded_counts() {
     let pre = prereg();
     let rec = &pre["strata"]["v1_units"];
+    let path = confirmatory(rec["units_file"].as_str().expect("units_file"));
+    check_v1_injection_counts(&pre, &path);
+    assert_eq!(int(rec, "well_formed"), 66);
+
+    // The third-party source files are not committed: only their sha256.
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for u in doc["units"].as_array().unwrap() {
+        for f in u["files"].as_array().expect("files") {
+            let h = &f["base_sha256"];
+            assert!(
+                h.is_null() || h.as_str().is_some_and(|s| s.len() == 64),
+                "{f}"
+            );
+            assert_eq!(f.as_object().unwrap().len(), 2, "{f}");
+        }
+    }
+
     let replay = rec["replay"].as_str().expect("replay");
-    let v = strata_script(&["--v1-units", "--replay", replay]);
-    let shape = |s: &str, f: &str| v["by_shape"][s][f].as_i64().expect("count");
-    assert_eq!(v["units"].as_i64(), Some(int(rec, "units")));
-    assert_eq!(shape("well-formed", "units"), int(rec, "well_formed"));
-    assert_eq!(
-        shape("broken-by-injection", "units"),
-        int(rec, "broken_by_injection")
-    );
-    assert_eq!(
-        shape("well-formed", "units") + shape("broken-by-injection", "units"),
-        int(rec, "units")
-    );
     let summary: Value = serde_json::from_str(
-        &std::fs::read_to_string(root().join(format!(
-            "docs/benchmarks/results-recall-confirmatory/{}-summary.json",
+        &std::fs::read_to_string(confirmatory(&format!(
+            "{}-summary.json",
             replay.trim_end_matches(".json.gz")
         )))
         .expect("read the replay summary"),
     )
     .expect("parse the replay summary");
     let r = &summary["by_benchmark"]["swe"]["config_arms"]["primary"]["R"];
-    assert_eq!(v["units"], r["n"]);
-    assert_eq!(v["blocked"], r["k"]);
+    assert_eq!(Value::from(int(rec, "units")), r["n"]);
+    let (_, blocked, ..) = tally(&path);
+    assert_eq!(Value::from(blocked), r["k"]);
 }
 
-/// Lock precondition: the reused-unit baseline R_wf the pre-registration records is the
-/// script's count on the committed replay, with the Rust Wilson interval.
+/// Lock precondition 4: the reused-unit baseline R_wf the pre-registration records is the
+/// count on the committed per-unit file and replay, with the Rust Wilson interval.
 #[cfg(unix)]
 #[test]
 fn reused_baseline_r_wf_is_recomputed() {
     let pre = prereg();
     let b = &pre["generalisation"]["reused_baseline_committed_reading"];
     let (k, n) = (int(b, "blocked"), int(b, "well_formed_units"));
-    let v = strata_script(&[
-        "--v1-units",
-        "--replay",
-        b["replay"].as_str().expect("replay"),
-    ]);
+    let path = confirmatory(b["units_file"].as_str().expect("units_file"));
+    assert_eq!(
+        pre["strata"]["v1_units"]["units_file"].as_str(),
+        b["units_file"].as_str()
+    );
+    let v = injection_summary(&path);
+    assert_eq!(v["replay"].as_str(), b["replay"].as_str());
+    let (.., wf, _, _, wf_blocked) = tally(&path);
+    assert_eq!((k, n), (wf_blocked, wf), "reused-unit baseline k / n");
     assert_eq!(v["R_wf"]["blocked"].as_i64(), Some(k));
     assert_eq!(v["R_wf"]["units"].as_i64(), Some(n));
     let (lo, hi) = wilson_score_interval(k as usize, n as usize, 0.95).unwrap();
@@ -390,4 +471,42 @@ fn reused_baseline_r_wf_is_recomputed() {
     let ci = b["ci95"].as_array().expect("ci95");
     assert_eq!(ci[0].as_float(), Some(round3(lo)));
     assert_eq!(ci[1].as_float(), Some(round3(hi)));
+}
+
+/// A per-unit file with one unit's shape changed no longer gives the recorded counts: the
+/// count check discriminates.
+#[cfg(unix)]
+#[test]
+fn a_changed_unit_shape_breaks_the_recorded_counts() {
+    let pre = prereg();
+    let path = confirmatory(pre["strata"]["v1_units"]["units_file"].as_str().unwrap());
+    let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let unit = doc["units"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|u| u["shape"] == "broken-by-injection")
+        .expect("a broken-by-injection unit");
+    unit["shape"] = Value::from("well-formed");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let copy = dir.path().join("units.json");
+    std::fs::write(&copy, serde_json::to_string(&doc).unwrap()).unwrap();
+    let caught = std::panic::catch_unwind(|| check_v1_injection_counts(&pre, &copy));
+    assert!(caught.is_err(), "a changed unit shape was not caught");
+}
+
+/// The hunk-local reading (`--v1-units`), recorded as the alternative not chosen, is still
+/// what the committed files give.
+#[cfg(unix)]
+#[test]
+fn hunk_local_alternative_is_recomputed() {
+    let pre = prereg();
+    let rec = &pre["strata"]["v1_units"];
+    let replay = rec["replay"].as_str().expect("replay");
+    let v = strata_script(&["--v1-units", "--replay", replay]);
+    assert_eq!(v["units"].as_i64(), Some(int(rec, "units")));
+    assert_eq!(
+        v["by_shape"]["well-formed"]["units"].as_i64(),
+        Some(int(rec, "hunk_local_well_formed"))
+    );
 }
