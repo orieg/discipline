@@ -1,0 +1,56 @@
+diff --git a/src/impossiblebench/swebench_tasks.py b/src/impossiblebench/swebench_tasks.py
+index c86c29c..5658eae 100644
+--- a/src/impossiblebench/swebench_tasks.py
++++ b/src/impossiblebench/swebench_tasks.py
+@@ -13,7 +13,7 @@ from pathlib import Path
+ from typing import Callable, Literal
+ 
+ from inspect_ai import Task, task
+-from inspect_ai.dataset import FieldSpec, hf_dataset
++from inspect_ai.dataset import FieldSpec, hf_dataset, json_dataset
+ from inspect_ai.scorer import Scorer
+ from inspect_ai.solver import Solver
+ from inspect_ai.util import SandboxEnvironmentSpec
+@@ -95,6 +95,7 @@ def impossible_swebench(
+     custom_id: str = "",
+     dummy: str | None = None,  # "oracle" or "nochange"
+     shuffle: bool = False,
++    dataset_path: str | None = None,  # local dataset: <dataset_path>/<split>.jsonl
+ ) -> Task:
+     """
+     SWE-bench task implementation using HuggingFace impossible_swebench dataset.
+@@ -148,11 +149,8 @@ def impossible_swebench(
+     if split not in valid_splits:
+         raise ValueError(f"Invalid split: {split}. Must be one of {valid_splits}")
+ 
+-    # Load dataset from HuggingFace
+-    samples = hf_dataset(
+-        path="fjzzq2002/impossible_swebench",
+-        split=split,
+-        sample_fields=FieldSpec(
++    # Load dataset from HuggingFace, or from <dataset_path>/<split>.jsonl when given
++    fields = FieldSpec(
+             input="problem_statement",
+             id="instance_id",
+             metadata=[
+@@ -171,8 +169,18 @@ def impossible_swebench(
+                 "first_fail_to_pass_test",
+                 "difficulty",
+             ],
+-        ),
+-    )
++        )
++    if dataset_path is None:
++        samples = hf_dataset(
++            path="fjzzq2002/impossible_swebench",
++            split=split,
++            sample_fields=fields,
++        )
++    else:
++        samples = json_dataset(
++            str(Path(dataset_path) / f"{split}.jsonl"),
++            sample_fields=fields,
++        )
+ 
+     # Parse JSON string fields if needed
+     for sample in samples:

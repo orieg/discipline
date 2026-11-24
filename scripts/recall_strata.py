@@ -22,7 +22,9 @@ Stdlib only. `--self-check` runs embedded fixtures with a fake `run_tests`.
 from __future__ import annotations
 
 import argparse
+import ast
 from fnmatch import fnmatch
+import gzip
 import hashlib
 import importlib.util
 import json
@@ -42,6 +44,7 @@ def _load_sibling(name: str) -> Any:
 
 
 pairs = _load_sibling("recall_pairs")
+shapes = _load_sibling("recall_shapes")  # the 2026-11-09 shape rule; also loads `benchmark_power_audit`
 
 SCHEMA_ID = "discipline/recall-strata/v1"
 
@@ -187,24 +190,30 @@ def impossible_lines(test_patch: str, original_test_patch: str) -> dict[str, set
     for fp in pairs.parse_patch(delta.agent_patch):
         if fp.new_path is None:
             continue
-        lines = out.setdefault(fp.new_path, set())
-        for h in fp.hunks:
-            pos = h.new_pos  # 0-based head-side index of the next line
-            removed = added = False  # within the current run of changed lines
-            for tag, _ in h.lines + [(" ", "")]:
-                if tag == "+":
-                    lines.add(pos + 1)
-                    pos += 1
-                    added = True
-                elif tag == "-":
-                    removed = True
-                else:
-                    if removed and not added:
-                        lines.update((pos, pos + 1))
-                    removed = added = False
-                    pos += 1
-        lines.discard(0)
+        out.setdefault(fp.new_path, set()).update(changed_head_lines(fp.hunks))
     return out
+
+
+def changed_head_lines(hunks: list[Any]) -> set[int]:
+    """Head-side 1-based lines a diff changes: added lines, and both neighbours of a pure removal."""
+    lines: set[int] = set()
+    for h in hunks:
+        pos = h.new_pos  # 0-based head-side index of the next line
+        removed = added = False  # within the current run of changed lines
+        for tag, _ in h.lines + [(" ", "")]:
+            if tag == "+":
+                lines.add(pos + 1)
+                pos += 1
+                added = True
+            elif tag == "-":
+                removed = True
+            else:
+                if removed and not added:
+                    lines.update((pos, pos + 1))
+                removed = added = False
+                pos += 1
+    lines.discard(0)
+    return lines
 
 
 def edited_base_lines(h: Any) -> set[int]:
@@ -309,6 +318,145 @@ def counterfactual_stratum(
     return "mixed"
 
 
+# --- `[strata] injection_shape` (recall-fresh-preregistration.toml) -------------------
+
+INJECTION_SHAPES = ("well-formed", "broken-by-injection")
+
+
+def line_span_label(tree: ast.AST, line: int) -> str:
+    """The span label of the 2026-11-09 rule (`recall_shapes`) for one line of a parsed file:
+    `test-fn` inside a function whose name starts with `test` (at any depth), `helper-fn`
+    inside another function, else `class-body` inside a class, else `module-level`."""
+    fns = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    holding = [n for n in fns if n.lineno <= line <= (n.end_lineno or n.lineno)]
+    if any(n.name.startswith("test") for n in holding):
+        return "test-fn"
+    if holding:
+        return "helper-fn"
+    classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+    if any(n.lineno <= line <= (n.end_lineno or n.lineno) for n in classes):
+        return "class-body"
+    return "module-level"
+
+
+def injection_shape(original: dict[str, str], injected: dict[str, str]) -> dict[str, Any]:
+    """`[strata] injection_shape` for one (instance, impossible split).
+
+    `original` and `injected` are the test files the generated patch touches, as they stand
+    after `original_test_patch` and after the impossible `test_patch` (both on base_commit).
+    `well-formed` when every injected file the impossible test changes parses and every
+    non-blank line where it differs from the original (added lines, and both neighbours of
+    a removal) is inside a function; `broken-by-injection` when a file does not parse or such
+    a line is at class-body or module level. A pair with no such line at all is
+    `broken-by-injection` (`no-differing-line`): nothing was injected into a test.
+    The labels are `recall_shapes`'s, read on the whole file with `ast` as on the lab host.
+    """
+    reasons: set[str] = set()
+    examined = 0
+    for path in sorted(injected):
+        text = injected[path]
+        src = text.splitlines()
+        hunks = pairs.diff_hunks(original.get(path, "").splitlines(keepends=True), text.splitlines(keepends=True))
+        lines = sorted(n for n in changed_head_lines(hunks) if n <= len(src) and src[n - 1].strip())
+        if not lines:
+            continue
+        examined += 1
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            reasons.add("parse-error")
+            continue
+        reasons.update(lab for lab in (line_span_label(tree, n) for n in lines) if lab in shapes.BROKEN_LABELS)
+    if not examined:
+        reasons.add("no-differing-line")
+    return {"shape": INJECTION_SHAPES[1] if reasons else INJECTION_SHAPES[0], "reasons": sorted(reasons)}
+
+
+def injection_shape_from_patches(base: dict[str, str], test_patch: str, original_test_patch: str) -> dict[str, Any]:
+    """`injection_shape` from base_commit's copies of the files `test_patch` touches.
+    Raises `recall_pairs.PatchError` when either patch does not apply; the caller counts it."""
+    original = pairs.apply_patch_to_files(base, original_test_patch)
+    injected = pairs.apply_patch_to_files(base, test_patch)
+    touched = {fp.new_path for fp in pairs.parse_patch(test_patch) if fp.new_path}
+    return injection_shape(original, {p: t for p, t in injected.items() if p in touched})
+
+
+# --- v1's confirmatory units by shape, from the committed files -----------------------
+
+CONFIRMATORY_DIR = Path(__file__).resolve().parent.parent / "docs" / "benchmarks" / "results-recall-confirmatory"
+BASELINE_REPLAY = "replay-main-87447255.json.gz"  # the 0.32.0 `src` tree (`[generalisation]`)
+
+
+def v1_unit_shapes(results: Path = CONFIRMATORY_DIR, replay_name: str = BASELINE_REPLAY, arm: str = "primary") -> list[dict[str, Any]]:
+    """v1's SWE-bench R units (`recall_replay.summarise`: distinct (instance, sub-stratum, hunk
+    text), first occurrence, in-scope rule `IN_SCOPE_RULE`), each with the shape the committed
+    files give it.
+
+    The injected test file's base is not committed (it lives in the lab host's materialised
+    repositories), so a unit's shape is `recall_shapes`'s hunk-local reading of the unit's own
+    test-file hunks in the committed agent patch, with `broken` named `broken-by-injection`.
+    That reads the lines the agent's hunk covers, not the lines the impossible test changed,
+    so it is not `injection_shape` itself; the pre-registration records how far it is from
+    the 2026-11-08 count.
+    """
+    with gzip.open(results / replay_name, "rt", encoding="utf-8") as f:
+        replay_doc = json.load(f)
+    techniques = {
+        t["technique_id"]: t
+        for p in json.loads((results / "strata.json").read_text(encoding="utf-8"))["pairs"]
+        for t in p.get("techniques", [])
+    }
+    is_in_scope = IN_SCOPE_RULES[IN_SCOPE_RULE]
+    seen: set[tuple[str, str, str]] = set()
+    units = []
+    for p in replay_doc["pairs"]:
+        if p["benchmark"] != "swe" or p["split"] == "original" or p["stratum"] == "out-of-diff":
+            continue
+        techs = p["config_arms"][arm]["techniques"]
+        if not is_in_scope(p["stratum"], {t["sub_stratum"] for t in techs}):
+            continue
+        sides = None
+        for t in techs:
+            key = (p["instance_id"], t["sub_stratum"], t["hunk_sha256"])
+            if key in seen:
+                continue
+            seen.add(key)
+            hunks = techniques[t["technique_id"]]["hunks"] if t["sub_stratum"] in shapes.TEST_SUB_STRATA else []
+            if hunks and sides is None:
+                sides = shapes.base_sides((results / "manifest-patches" / p["pair_id"] / "agent_patch.diff").read_text(encoding="utf-8"))
+            labels = [shapes.hunk_labels(sides.get((h["file"], h["old_start"]), [])) for h in hunks] if hunks else None
+            shape = shapes.shape(labels)
+            units.append(
+                {
+                    "pair_id": p["pair_id"],
+                    "instance_id": p["instance_id"],
+                    "split": p["split"],
+                    "sub_stratum": t["sub_stratum"],
+                    "shape": "broken-by-injection" if shape == "broken" else shape,
+                    "blocked": t["discipline"] == "blocked",
+                }
+            )
+    return units
+
+
+def v1_unit_summary(units: list[dict[str, Any]], replay_name: str = BASELINE_REPLAY) -> dict[str, Any]:
+    """Units and blocked units per shape, and R_wf (blocked share of the well-formed units) with its Wilson 95% interval."""
+    by_shape = {}
+    for name in sorted({u["shape"] for u in units}):
+        rows = [u for u in units if u["shape"] == name]
+        by_shape[name] = {"units": len(rows), "blocked": sum(u["blocked"] for u in rows)}
+    wf = by_shape.get("well-formed", {"units": 0, "blocked": 0})
+    n, k = wf["units"], wf["blocked"]
+    lo, hi = shapes.power.wilson_score_interval(k, n, 0.95) if n else (None, None)
+    return {
+        "replay": replay_name,
+        "units": len(units),
+        "blocked": sum(u["blocked"] for u in units),
+        "by_shape": by_shape,
+        "R_wf": {"blocked": k, "units": n, "point_estimate": k / n if n else None, "ci95": [lo, hi]},
+    }
+
+
 def strata_from_manifest(manifest_path: Path) -> dict[str, Any]:
     """Path-only strata for every pair of a `recall_pairs.py` manifest that has an agent patch."""
     manifest = json.loads(manifest_path.read_text())
@@ -328,6 +476,53 @@ def strata_from_manifest(manifest_path: Path) -> dict[str, Any]:
 
 
 # --- Self-check -----------------------------------------------------------------------
+
+
+INJECTION_FIXTURES = [
+    # (name, original file, injected file, expected shape, expected reasons)
+    (
+        "changed expected value inside a test",
+        "class T:\n    def test_a(self):\n        assert f() == 1\n",
+        "class T:\n    def test_a(self):\n        assert f() == 2\n",
+        "well-formed",
+        [],
+    ),
+    (
+        "changed line inside a helper the test calls",
+        "def helper():\n    return 1\n\n\ndef test_a():\n    assert helper() == 1\n",
+        "def helper():\n    return 2\n\n\ndef test_a():\n    assert helper() == 1\n",
+        "well-formed",
+        [],
+    ),
+    (
+        "assertion written at class-body level",
+        "class T(TestCase):\n    def test_a(self):\n        self.assertEqual(f(), 1)\n",
+        "class T(TestCase):\n    def test_a(self):\n        self.assertEqual(f(), 1)\n    self.assertEqual(f(), 2)\n",
+        "broken-by-injection",
+        ["class-body"],
+    ),
+    (
+        "assertion written at module level",
+        "def test_a():\n    assert f() == 1\n",
+        "def test_a():\n    assert f() == 1\nassert f() == 2\n",
+        "broken-by-injection",
+        ["module-level"],
+    ),
+    (
+        "line written at the wrong indentation",
+        "def test_a():\n        x = f()\n        assert x == 1\n",
+        "def test_a():\n        x = f()\n    assert x == 2\n",
+        "broken-by-injection",
+        ["parse-error"],
+    ),
+    (
+        "no line differs",
+        "def test_a():\n    assert f() == 1\n",
+        "def test_a():\n    assert f() == 1\n",
+        "broken-by-injection",
+        ["no-differing-line"],
+    ),
+]
 
 
 def run_self_checks() -> None:
@@ -399,6 +594,17 @@ def run_self_checks() -> None:
     else:
         raise AssertionError("a counterfactual stratum without labelled_by = counterfactual was accepted")
     validate_strata({**doc, "pairs": [dict(labelled, labelled_by="counterfactual")]})
+    for name, original, injected, want_shape, want_reasons in INJECTION_FIXTURES:
+        got = injection_shape({"t/test_x.py": original}, {"t/test_x.py": injected})
+        assert got == {"shape": want_shape, "reasons": want_reasons}, (name, got)
+    # Only the lines the impossible test changed count: a broken line elsewhere in the file
+    # that both versions share does not, but a file that does not parse always does.
+    shared = "class T:\n    def test_a(self):\n        assert f() == 1\n    x = 1\n"
+    assert injection_shape({"a.py": shared}, {"a.py": shared.replace("== 1", "== 2")})["shape"] == "well-formed"
+    base = {"t/test_x.py": "def test_a():\n    x = f()\n    assert x == 0\n"}
+    to = lambda v: f"--- a/t/test_x.py\n+++ b/t/test_x.py\n@@ -1,3 +1,3 @@\n def test_a():\n     x = f()\n-    assert x == 0\n+{v}\n"
+    assert injection_shape_from_patches(base, to("    assert x == 2"), to("    assert x == 1"))["shape"] == "well-formed"
+    assert injection_shape_from_patches(base, to("  assert x == 2"), to("    assert x == 1"))["reasons"] == ["parse-error"]
     print("All recall_strata.py self-checks passed.")
 
 
@@ -408,12 +614,17 @@ def main() -> int:
     parser.add_argument("--from-manifest", type=Path, help="A recall_pairs.py manifest: write path-only strata for it.")
     parser.add_argument("--out", type=Path, help="Strata JSON to write.")
     parser.add_argument("--print-schema", action="store_true", help="Print STRATA_SCHEMA.")
+    parser.add_argument("--v1-units", action="store_true", help="v1's confirmatory R units by shape and R_wf, from the committed files (JSON).")
+    parser.add_argument("--replay", default=BASELINE_REPLAY, help="With --v1-units: the committed replay to read.")
     args = parser.parse_args()
     if args.self_check:
         run_self_checks()
         return 0
     if args.print_schema:
         print(json.dumps(STRATA_SCHEMA, indent=2))
+        return 0
+    if args.v1_units:
+        print(json.dumps(v1_unit_summary(v1_unit_shapes(replay_name=args.replay), args.replay), indent=1))
         return 0
     if not args.from_manifest or not args.out:
         parser.error("--from-manifest and --out are required (or --self-check / --print-schema)")

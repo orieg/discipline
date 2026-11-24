@@ -245,10 +245,16 @@ def parse_errors(stmts: list[dict[str, Any]], complete: bool) -> bool:
 
 def hunk_labels(lines: list[str]) -> set[str]:
     """The labels the 2026-11-09 rule gives the non-blank lines of one hunk's base side."""
+    broken, per_line = line_labels(lines)
+    return set(per_line.values()) | ({"parse-error"} if broken else set())
+
+
+def line_labels(lines: list[str]) -> tuple[bool, dict[int, str]]:
+    """Whether the hunk holds a parse error, and the span label of each line a statement or
+    comment covers (0-based index into `lines`; a statement's continuation lines share its label)."""
     stmts, comments, complete = statements(lines)
-    labels: set[str] = set()
-    if parse_errors(stmts, complete):
-        labels.add("parse-error")
+    labels: dict[int, str] = {}
+    broken = parse_errors(stmts, complete)
     methods = any(re.search(r"\bself\b", line) for line in lines)
 
     def enclosing(idx: int, k: int) -> str:
@@ -266,14 +272,15 @@ def hunk_labels(lines: list[str]) -> set[str]:
         return "class-body" if methods and level <= 4 else "fn"
 
     for idx, s in enumerate(stmts):
+        span = range(s["i"], s["i"] + s["text"].count("\n") + 1)
         m = HEADER.match(s["first"].lstrip())
         if m and "def" in m[1]:
-            labels.add("test-fn" if m[2].startswith("test") else "helper-fn")
+            labels.update(dict.fromkeys(span, "test-fn" if m[2].startswith("test") else "helper-fn"))
             continue
         where = enclosing(idx, s["k"])
         if m:  # a class header is in its own ClassDef span unless a function holds it
             where = "class-body" if where in ("class-body", "module-level") else where
-        labels.add(where)
+        labels.update(dict.fromkeys(span, where))
     for i, k in comments:
         # A comment is inside a function span only when a statement of that function follows it.
         after = [j for j, s in enumerate(stmts) if s["i"] > i]
@@ -281,16 +288,16 @@ def hunk_labels(lines: list[str]) -> set[str]:
             nxt = stmts[after[0]]
             sibling_header = nxt["k"] == k and (HEADER.match(nxt["first"].lstrip()) or nxt["first"].lstrip().startswith("@"))
             if nxt["k"] >= k and not sibling_header:
-                labels.add(enclosing(after[0], nxt["k"]))
+                labels[i] = enclosing(after[0], nxt["k"])
                 continue
         before = [j for j, s in enumerate(stmts) if s["i"] < i]
         if k == 0:
-            labels.add("module-level")
+            labels[i] = "module-level"
         elif before:
-            labels.add(enclosing(before[-1] + 1, k))
+            labels[i] = enclosing(before[-1] + 1, k)
         else:
-            labels.add("class-body" if methods and k <= 4 else "fn")
-    return labels
+            labels[i] = "class-body" if methods and k <= 4 else "fn"
+    return broken, labels
 
 
 def shape(hunks: list[set[str]] | None) -> str:
