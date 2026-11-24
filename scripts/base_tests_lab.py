@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Lab runner for `base-tests-v1` (#1052): the Part 1 and Part 2 runs of the `base-tests` preset.
 
-Pre-registration: `docs/benchmarks/base-tests-preregistration.toml` (draft until the lock).
+Pre-registration: `docs/benchmarks/base-tests-preregistration.toml` (`locked-pre-data`; Part 2
+estimate-only, `[q2_friction] label`).
 
 Each run starts a fresh container from the instance's SWE-bench image (no network, the
 `container_memory` constant), copies the pinned static Linux discipline binary into it, and
@@ -432,7 +433,11 @@ def instance_outcome(files: list[str], control: dict[str, Any] | None, gold: dic
     }
 
 
-def q2_verdict(k: int, n: int, ceiling: float) -> str:
+def q2_verdict(k: int, n: int, ceiling: float, label: str | None = None) -> str:
+    """The `[verdict] q2_rule`. Under `label = "estimate-only"` (set at the lock) Part 2 reports
+    k / n and its interval and no ceiling verdict."""
+    if label == "estimate-only":
+        return "ESTIMATE_ONLY"
     if n == 0:
         return "INTERMEDIATE"
     lo, hi = htob.wilson_interval(k, n)
@@ -459,6 +464,7 @@ def share(k: int, n: int) -> dict[str, Any]:
 
 def summarize(runs: dict[str, Any], blocks: dict[str, Any] | None, prereg: dict[str, Any]) -> dict[str, Any]:
     ceiling = prereg["power_and_bounds"]["q2_ceiling"]
+    label = prereg.get("q2_friction", {}).get("label")
     out: dict[str, Any] = {"study_id": STUDY_ID, "part1": {}, "part2": {}, "part3": "not run by this runner (needs the shape classification)"}
     # Part 1, per repository owner.
     per_owner: dict[str, list[dict[str, Any]]] = {}
@@ -503,7 +509,7 @@ def summarize(runs: dict[str, Any], blocks: dict[str, Any] | None, prereg: dict[
             "not_eligible": reasons,
             "eligible_share": share(len(eligible), len(rows)),
             "friction": share(k, len(eligible)),
-            "verdict": q2_verdict(k, len(eligible), ceiling) if pop == "confirmatory" else "pilot: no verdict",
+            "verdict": q2_verdict(k, len(eligible), ceiling, label) if pop == "confirmatory" else "pilot: no verdict",
             "control_excluded_tests": {"excluded": excluded, "of": counted + excluded},
             "control_excluded_instances": sum(1 for o in outs if o.get("excluded_tests")),
             "block_classes": by_class,
@@ -1015,7 +1021,7 @@ def self_test() -> int:
     check("refuses an overlay", confirmatory_refusal(locked, {}) is not None, True)
     check("refuses a draft without LOCK", confirmatory_refusal({**locked, "study": {"status": "draft"}}, None) is not None, True)
     check("refuses one LOCK binary value", confirmatory_refusal({**locked, "binary": {"sha256": "LOCK", "release": "1"}}, None) is not None, True)
-    check("the committed draft refuses", confirmatory_refusal(prereg, None) is not None, True)
+    check("the committed lock is accepted", confirmatory_refusal(prereg, None), None)
     try:
         effective_constants(prereg, {"timeout": 1})
         check("overlay key checked", "accepted", "refused")
@@ -1099,6 +1105,7 @@ def self_test() -> int:
     check("HIGH_FRICTION", q2_verdict(40, 100, 0.15), "HIGH_FRICTION")
     check("INTERMEDIATE", q2_verdict(12, 100, 0.15), "INTERMEDIATE")
     check("no eligible", q2_verdict(0, 0, 0.15), "INTERMEDIATE")
+    check("estimate-only has no ceiling verdict", q2_verdict(2, 100, 0.15, "estimate-only"), "ESTIMATE_ONLY")
     # Part 1 outcome and the summary shape.
     ran_pair = {"report": rep}
     check("pair runs and blocks", pair_outcome(ran_pair), {"runs": True, "cause": None, "blocked": True})
@@ -1122,6 +1129,7 @@ def self_test() -> int:
     check("summary part1", {o: v["verdict"] for o, v in s["part1"].items()}, {"astropy": "RUNS", "django": "RUNS_WITH_PATHS", "sympy": "DOES_NOT_RUN"})
     c2 = s["part2"]["confirmatory"]
     check("summary part2", (c2["instances"], c2["eligible"], c2["friction"]["k"], c2["not_eligible"]["no-base-test-file-modified"], c2["block_classes"]["behaviour-change"], c2["unclassified_blocks"]), (3, 2, 1, 1, 0 + 1, 0))
+    check("summary confirmatory is estimate-only", c2["verdict"], "ESTIMATE_ONLY")
     check("summary pilot apart", (s["part2"]["pilot"]["instances"], s["part2"]["pilot"]["verdict"]), (1, "pilot: no verdict"))
     try:
         summarize(runs, {"blocks": [{"population": "confirmatory", "instance_id": "a__a-1", "class": "noise"}]}, prereg)
@@ -1131,7 +1139,7 @@ def self_test() -> int:
     # The plan from the committed files.
     p = plan(prereg, strata)
     check("plan part2 instances", p["part2"]["instances"], {"confirmatory": prereg["population"]["confirmatory_instances"], "pilot": prereg["population"]["pilot_instances"]})
-    check("plan refuses confirmatory", p["confirmatory_refusal"] is not None, True)
+    check("plan accepts confirmatory once locked", p["confirmatory_refusal"], None)
     digest = strata["counterfactual"]["pairs"][0]
     check("image from the counterfactual record", image_for(digest["instance_id"], {}, strata, "confirmatory"), digest["image_digest"])
     check("pilot image falls back to the tag", image_for("x__y-1", {}, strata, "pilot"), cf.image_name("x__y-1"))
