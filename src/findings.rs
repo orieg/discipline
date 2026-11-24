@@ -462,6 +462,7 @@ findings! {
     // companion-edit
     COMPANION_NOT_EDITED = ["companion-edit"], "companion-not-edited", "Companion Path Not Edited", Same;
     COMPANION_NOT_SPECIFIC = ["companion-edit"], "companion-not-specific", "Companion Edit Names Nothing That Changed", Same;
+    COMPANION_LINE_MISSING = ["companion-edit"], "companion-line-missing", "Companion Edit Adds No Required Line", Same;
     // changed-line-coverage
     UNCOVERED_LINES = ["changed-line-coverage"], "uncovered-lines", "Changed Lines Not Covered", Same;
     // visual-evidence

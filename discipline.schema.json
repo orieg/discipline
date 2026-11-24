@@ -644,6 +644,16 @@
                 "description": "Why the two path sets change together, quoted in the finding",
                 "type": "string"
               },
+              "require_added_line_match": {
+                "description": "Regular expression, or a list of them; every pattern must match a line the change adds to a companion path (a whitespace-only touch does not meet it)",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "array"
+                ]
+              },
               "require_all": {
                 "description": "Whether every require_edits_to glob must match a changed path, rather than any one",
                 "type": "boolean"

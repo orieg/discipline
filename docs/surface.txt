@@ -338,6 +338,7 @@ gates.companion-edit.exempt_paths.items
 gates.companion-edit.exempt_paths.reset
 gates.companion-edit.rules
 gates.companion-edit.rules[].reason
+gates.companion-edit.rules[].require_added_line_match
 gates.companion-edit.rules[].require_all
 gates.companion-edit.rules[].require_edits_to
 gates.companion-edit.rules[].require_mention

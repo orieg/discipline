@@ -27834,3 +27834,106 @@ require_mention = true
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(codes(&run).is_empty(), "{}", run.stdout);
 }
+
+#[test]
+fn companion_edit_require_added_line_match_needs_a_matching_added_line() {
+    let config = r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.companion-edit]
+enabled = true
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["src/**"]
+require_edits_to = ["docs/REVIEW-LOG.md"]
+require_added_line_match = "^## \\d{4}-\\d{2}-\\d{2} "
+"#;
+    let log = "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n";
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("src/lib.rs", "pub fn open() {}\n"),
+            ("docs/REVIEW-LOG.md", log),
+        ],
+        "base: companion-edit with require_added_line_match",
+    );
+    let codes = |run: &Run| -> Vec<String> {
+        run.violations("companion-edit")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // 1. A whitespace-only touch of the log: the path rule is met, the line rule is not.
+    repo.write("src/lib.rs", "pub fn open() {}\npub fn close() {}\n");
+    repo.write("docs/REVIEW-LOG.md", &format!("{log}\n   \n"));
+    repo.commit("feat: close");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(codes(&run), ["companion-edit/companion-line-missing"]);
+    let found = &run.violations("companion-edit")[0];
+    assert_eq!(found["file"], "docs/REVIEW-LOG.md");
+
+    // 2. An added line that does not match, and the existing dated entry rewritten in
+    // place (its old line removed, an undated line added): still not met.
+    repo.git(&["checkout", "-q", "-B", "undated", "main"]);
+    repo.write("src/lib.rs", "pub fn open() {}\npub fn close() {}\n");
+    repo.write(
+        "docs/REVIEW-LOG.md",
+        "# Review log\n\n## first review\n\nAll clear. Reviewed again.\n",
+    );
+    repo.commit("feat: close");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(codes(&run), ["companion-edit/companion-line-missing"]);
+
+    // 3. A dated entry added: met.
+    repo.git(&["checkout", "-q", "-B", "dated", "main"]);
+    repo.write("src/lib.rs", "pub fn open() {}\npub fn close() {}\n");
+    repo.write(
+        "docs/REVIEW-LOG.md",
+        &format!("{log}\n## 2026-11-24 close reviewed\n"),
+    );
+    repo.commit("feat: close");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+
+    // 4. The finding is lifted by the rule's directive.
+    repo.git(&["checkout", "-q", "-B", "waived", "main"]);
+    repo.write("src/lib.rs", "pub fn open() {}\npub fn close() {}\n");
+    repo.write("docs/REVIEW-LOG.md", &format!("{log}\nTypo fixed.\n"));
+    repo.commit("feat: close");
+    let run = repo.check_with_pr(
+        &[],
+        "allow-companion-edit: docs/REVIEW-LOG.md the quarterly entry lands with the review\n",
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{}", run.stdout);
+
+    // 5. A pattern a blank line matches is a configuration error: exit 2.
+    let bad = Repo::new();
+    bad.commit_base_files(
+        &[
+            (
+                "discipline.toml",
+                &config.replace(
+                    "require_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"",
+                    "require_added_line_match = [\"^## \", \".*\"]",
+                ),
+            ),
+            ("src/lib.rs", "pub fn open() {}\n"),
+            ("docs/REVIEW-LOG.md", log),
+        ],
+        "base",
+    );
+    bad.write("src/lib.rs", "pub fn open() {}\npub fn close() {}\n");
+    bad.commit("feat: close");
+    let stopped = bad.check(&[]);
+    assert_eq!(stopped.code, 2, "{}\n{}", stopped.stdout, stopped.stderr);
+    let (reason, gate) = stopped.could_not_check();
+    assert_eq!(reason, "configuration");
+    assert_eq!(gate.as_deref(), Some("companion-edit"));
+}
