@@ -4134,6 +4134,82 @@
       }
     },
     {
+      "name": "companion-whitespace-edit-with-require-added-line-match",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/REVIEW-LOG.md\"]\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n\n   \n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "verdict": {
+        "caught": [
+          "companion-edit/companion-line-missing"
+        ]
+      }
+    },
+    {
+      "name": "companion-existing-dated-entry-reworded",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/REVIEW-LOG.md\"]\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear, reviewed again.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "verdict": {
+        "caught": [
+          "companion-edit/companion-line-missing"
+        ]
+      }
+    },
+    {
+      "name": "companion-adds-a-dated-entry",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/REVIEW-LOG.md\"]\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n\n## 2026-11-24 close reviewed\n\n`close` releases the handle.\n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "gate": "companion-edit",
+      "verdict": "clean"
+    },
+    {
+      "name": "companion-empty-dated-heading",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.companion-edit]\nenabled = true\n\n[[gates.companion-edit.rules]]\ntrigger_paths = [\"src/**\"]\nrequire_edits_to = [\"docs/REVIEW-LOG.md\"]\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n\n## 2026-11-24 \n"
+      },
+      "enable": [
+        "companion-edit"
+      ],
+      "gate": "companion-edit",
+      "verdict": {
+        "known_miss": "#1139"
+      }
+    },
+    {
       "name": "php-phpunit-bound-widened",
       "base": {
         "src/Rows.php": "<?php\n\nfunction count_rows(array $rows): int\n{\n    return count($rows);\n}\n",

@@ -205,6 +205,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.companion-edit.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.companion-edit.rules` | array of tables | `[]` | Independent rules: a change to a trigger path must also change a required path |
 | `gates.companion-edit.rules[].reason` | string | *(per entry)* | Why the two path sets change together, quoted in the finding |
+| `gates.companion-edit.rules[].require_added_line_match` | string or array | *(per entry)* | Regular expression, or a list of them; every pattern must match a line the change adds to a companion path (a whitespace-only touch does not meet it) |
 | `gates.companion-edit.rules[].require_all` | boolean | *(per entry)* | Whether every require_edits_to glob must match a changed path, rather than any one |
 | `gates.companion-edit.rules[].require_edits_to` | list | *(required)* | Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside |
 | `gates.companion-edit.rules[].require_mention` | boolean | *(per entry)* | Whether the companion's added lines must name a public name the triggering change added, removed or modified (prose and table cells; not fenced code, HTML comments or changelog files) |

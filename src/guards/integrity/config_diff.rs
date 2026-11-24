@@ -118,6 +118,9 @@ fn within(small: Option<&Value>, big: Option<&Value>) -> bool {
         match v {
             None => Some(&[]),
             Some(Value::Array(a)) => Some(a),
+            // A key written as one string or a list (`require_added_line_match`): the
+            // string is a list of one.
+            Some(v @ Value::String(_)) => Some(std::slice::from_ref(v)),
             Some(_) => None,
         }
     }
@@ -1352,6 +1355,33 @@ mod tests {
         // Any other edit to the rule is still a lost entry.
         let all = format!("{}require_all = true\n", rule("argo/**", "docs/threat.md"));
         assert_eq!(count(&all), 1);
+        // `require_added_line_match`: added, or one more pattern in the list, tightens the
+        // rule; a pattern changed or removed loosens it. A string is a list of one.
+        let one = format!(
+            "{}require_added_line_match = \"^## \"\n",
+            rule("argo/**", "docs/threat.md")
+        );
+        let two = format!(
+            "{}require_added_line_match = [\"^## \", \"^Reviewer: \"]\n",
+            rule("argo/**", "docs/threat.md")
+        );
+        let other = format!(
+            "{}require_added_line_match = \"^# \"\n",
+            rule("argo/**", "docs/threat.md")
+        );
+        assert_eq!(count(&one), 0);
+        assert_eq!(count(&two), 0);
+        // `diff_configs(base, head)`.
+        assert_eq!(diff_configs(&cfg(&one), &cfg(&two)).unwrap().len(), 0);
+        assert_eq!(diff_configs(&cfg(&two), &cfg(&one)).unwrap().len(), 1);
+        assert_eq!(diff_configs(&cfg(&one), &cfg(&other)).unwrap().len(), 1);
+        assert_eq!(
+            diff_configs(&cfg(&one), &cfg(&rule("argo/**", "docs/threat.md")))
+                .unwrap()
+                .len(),
+            1,
+            "removing require_added_line_match is a weakening"
+        );
     }
 
     #[test]
