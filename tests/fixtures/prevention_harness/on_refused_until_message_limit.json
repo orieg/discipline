@@ -1,5 +1,5 @@
 {
-  "description": "on: refused and holds the refused tree at the message limit: does not land, raw pass counted",
+  "description": "on: refused and holds the refused tree at the message limit: does not land, raw pass counted; the release-defaults check (counterfactual) accepts the tree, so it would have landed a passing tree",
   "instance": "fixture__on_refused_until_message_limit",
   "split": "oneoff",
   "arm": "on",
@@ -37,6 +37,13 @@
               }
             ]
           }
+        },
+        "release_defaults": {
+          "exit": 0,
+          "agent_prompt": "No discipline violations found (40 gates passed, 1 items examined).\n",
+          "report": {
+            "outcomes": []
+          }
         }
       },
       "submit": true
@@ -67,6 +74,13 @@
                 ]
               }
             ]
+          }
+        },
+        "release_defaults": {
+          "exit": 0,
+          "agent_prompt": "No discipline violations found (40 gates passed, 1 items examined).\n",
+          "report": {
+            "outcomes": []
           }
         }
       },
