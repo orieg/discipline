@@ -700,3 +700,175 @@ fn the_confirmatory_summary_is_recomputed_from_the_confirmatory_runs() {
     }
     assert_eq!(int_json(&s["unclassified_blocks"]), 0);
 }
+
+/// One Part 3 run's outcome from its `discipline check` JSON report, as `part3_outcome` reads
+/// it: `(ran, kind)`, where a kind is a block. A failed base test names its id; a
+/// `base-test-failed` finding without one is the suite failing.
+fn part3_kind(result: &Value) -> (bool, Option<&'static str>) {
+    if result.get("error").is_some_and(|e| !e.is_null())
+        || result["timed_out"].as_bool() == Some(true)
+        || result["report"].is_null()
+    {
+        return (false, None);
+    }
+    let (mut failed, mut suite, mut none) = (false, false, false);
+    for o in result["report"]["outcomes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        for v in o["violations"].as_array().into_iter().flatten() {
+            match v["code"].as_str() {
+                Some("command/base-test-failed") => {
+                    if v["message"]
+                        .as_str()
+                        .is_some_and(|m| m.starts_with("Base test `"))
+                    {
+                        failed = true;
+                    } else {
+                        suite = true;
+                    }
+                }
+                Some("command/base-tests-no-cases") => none = true,
+                _ => {}
+            }
+        }
+    }
+    let kind = if failed {
+        Some("failing-test")
+    } else if suite {
+        Some("suite-failed")
+    } else if none {
+        Some("no-cases")
+    } else {
+        None
+    };
+    (true, kind)
+}
+
+/// Part 3 (`[q3_added_value]`, `PASS_categorical_by_design`): the runs are exactly #838's 212
+/// confirmatory gaming runs, each with the shape and diff-gate verdict `scripts/recall_shapes.py`
+/// computes from the committed #838 files, run by the locked binary on the image its instance's
+/// Part 2 run used; and `summary.json`'s per-shape and overall counts, Wilson intervals and block
+/// kinds are the ones the runs' reports give through `bounds.rs`.
+#[cfg(unix)]
+#[test]
+fn the_part3_summary_is_recomputed_from_the_part3_runs() {
+    let p = prereg();
+    let conf = float(&p["power_and_bounds"]["confidence_level"]);
+    let sha = p["binary"]["sha256"].as_str().unwrap();
+    let runs = confirmatory_json("runs.json.gz");
+    let part3 = runs["part3"].as_array().expect("part3 rows");
+    let prov = confirmatory_json("provenance.json");
+
+    let out = common::script_command("python3")
+        .args(["-I", "scripts/recall_shapes.py", "--runs"])
+        .current_dir(root())
+        .output()
+        .expect("run python3");
+    assert!(
+        out.status.success(),
+        "recall_shapes.py failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let shapes: Value = serde_json::from_slice(&out.stdout).expect("recall_shapes.py prints JSON");
+    let classified: BTreeMap<&str, &Value> = shapes["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["pair_id"].as_str().unwrap(), r))
+        .collect();
+    assert_eq!(part3.len(), classified.len(), "Part 3 ran every gaming run");
+    let mut seen = std::collections::BTreeSet::new();
+    for r in part3 {
+        let id = r["pair_id"].as_str().unwrap();
+        assert!(seen.insert(id), "{id} ran twice");
+        let c = classified
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} is not a gaming run"));
+        assert_eq!(r["shape"], c["shape"], "{id} shape");
+        assert_eq!(r["diff_blocked"], c["blocked"], "{id} diff-gate verdict");
+        assert_eq!(r["replay"], shapes["replay"], "{id} replay");
+        assert_eq!(r["mode"].as_str(), Some("confirmatory"), "{id}");
+        assert_eq!(r["binary_sha256"].as_str(), Some(sha), "{id}");
+        let iid = r["instance_id"].as_str().unwrap();
+        assert!(prov["images"][iid].is_string(), "{iid} has no Part 2 image");
+        assert_eq!(r["result"]["image"], prov["images"][iid], "{id} image");
+    }
+
+    let s = &confirmatory_json("summary.json")["part3"];
+    assert_eq!(s["label"].as_str(), Some("PASS_categorical_by_design"));
+    assert_eq!(s["replay"], shapes["replay"]);
+    let check = |rows: &[&Value], cell: &Value, what: &str| {
+        let mut not_run = 0;
+        let (mut diff, mut base, mut union, mut misses, mut caught) = (0, 0, 0, 0, 0);
+        let mut kinds: BTreeMap<&str, usize> = ["failing-test", "suite-failed", "no-cases"]
+            .into_iter()
+            .map(|k| (k, 0))
+            .collect();
+        let ran: Vec<(&Value, Option<&str>)> = rows
+            .iter()
+            .filter_map(|r| match part3_kind(&r["result"]) {
+                (true, kind) => Some((*r, kind)),
+                (false, _) => {
+                    not_run += 1;
+                    None
+                }
+            })
+            .collect();
+        for (r, kind) in &ran {
+            let d = r["diff_blocked"].as_bool() == Some(true);
+            diff += usize::from(d);
+            base += usize::from(kind.is_some());
+            union += usize::from(d || kind.is_some());
+            if !d {
+                misses += 1;
+                caught += usize::from(kind.is_some());
+            }
+            if let Some(k) = kind {
+                *kinds.get_mut(k).unwrap() += 1;
+            }
+        }
+        let n = ran.len();
+        assert_eq!(int_json(&cell["runs"]), rows.len(), "{what} runs");
+        assert_eq!(int_json(&cell["not_run"]), not_run, "{what} not run");
+        for (key, k, n) in [
+            ("diff_blocked", diff, n),
+            ("base_tests_blocked", base, n),
+            ("union_blocked", union, n),
+            ("diff_misses_blocked_by_base_tests", caught, misses),
+        ] {
+            assert_eq!(int_json(&cell[key]["k"]), k, "{what} {key} k");
+            assert_eq!(int_json(&cell[key]["n"]), n, "{what} {key} n");
+            if n > 0 {
+                let (lo, hi) = wilson_score_interval(k, n, conf).unwrap();
+                close(
+                    &cell[key]["wilson_95"][0],
+                    lo,
+                    &format!("{what} {key} lower"),
+                );
+                close(
+                    &cell[key]["wilson_95"][1],
+                    hi,
+                    &format!("{what} {key} upper"),
+                );
+            }
+        }
+        for (k, v) in &kinds {
+            assert_eq!(int_json(&cell["base_tests_kinds"][*k]), *v, "{what} {k}");
+        }
+    };
+    let all: Vec<&Value> = part3.iter().collect();
+    check(&all, &s["all"], "all");
+    let table = s["shapes"].as_object().unwrap();
+    assert_eq!(table.len(), shapes["shapes"].as_object().unwrap().len());
+    for (shape, cell) in table {
+        let rows: Vec<&Value> = part3.iter().filter(|r| r["shape"] == *shape).collect();
+        assert_eq!(
+            rows.len() as u64,
+            shapes["shapes"][shape]["runs"].as_u64().unwrap(),
+            "{shape}"
+        );
+        check(&rows, cell, shape);
+    }
+}

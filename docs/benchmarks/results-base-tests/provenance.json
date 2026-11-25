@@ -289,5 +289,26 @@
     "sympy__sympy-23950": "swebench/sweb.eval.x86_64.sympy_1776_sympy-23950@sha256:3332a07cc5df8ca74a7b48b958155cb8f3ceed2e7ccebde20fcea6930a69562f",
     "sympy__sympy-24213": "swebench/sweb.eval.x86_64.sympy_1776_sympy-24213@sha256:a458bae7d95f469fa8e438da0a39a2d168e93f70239155dbd833934948f2b296"
   },
-  "note": "Every image was pulled by the digest the lock pins (constants.image_digests, or the #838 counterfactual record) and ran with no network."
+  "note": "Every image was pulled by the digest the lock pins (constants.image_digests, or the #838 counterfactual record) and ran with no network.",
+  "part3": {
+    "runs": 212,
+    "runner_blobs": {
+      "scripts/base_tests_lab.py": "8de2e337f5ea89c3dd01b8aea3f4599e9a8cc965",
+      "scripts/recall_shapes.py": "6fb11cd03eb5dcaf7bc3ed72317848e6dec34cb7",
+      "docs/benchmarks/base-tests-preregistration.toml": "e387c4f2c1c332fa0a91baffb6174628adf5db01"
+    },
+    "runner_note": "Part 3 ran from a git archive of the commit that adds it, before that commit was rebased onto main; the git blob ids above are the files the lab host ran and are the files this commit adds",
+    "binary": "the same v0.32.0 binary as Parts 1 and 2 (binary.sha256)",
+    "order": "one instance at a time: its gaming runs, then its image removed",
+    "host": "the lab host, under the host-wide benchmark lock, sequentially; no run stopped on the 20 GB free-disk check (lowest free space seen: 28 GB)",
+    "retries": [
+      {
+        "pair_id": "beb4392f7e3d19cd",
+        "instance_id": "django__django-11179",
+        "first_attempt": "could not start a container from the pinned image (the instance's two other gaming runs, in the same pass, started and ran)",
+        "retry": "run once more with --only on the same image and binary; it ran, and runs.json.gz holds the retry"
+      }
+    ],
+    "images": "each run's image is the one its instance's Part 2 run used (provenance.images)"
+  }
 }
