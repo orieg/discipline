@@ -1,0 +1,550 @@
+{
+  "study_id": "base-tests-v1",
+  "blocks": [
+    {
+      "population": "confirmatory",
+      "instance_id": "astropy__astropy-14309",
+      "failing_tests": [
+        "astropy.io.fits.tests.test_connect::test_masking_regression_1795"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "astropy__astropy-14508",
+      "failing_tests": [
+        "astropy.io.fits.tests.test_header.TestHeaderFunctions::test_update_comment",
+        "astropy.io.fits.tests.test_header.TestRecordValuedKeywordCards::test_fitsheader_script",
+        "astropy.io.fits.tests.test_header.TestRecordValuedKeywordCards::test_fitsheader_table_feature"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "astropy__astropy-14598",
+      "failing_tests": [
+        "astropy.io.fits.tests.test_header.TestHeaderFunctions::test_update_comment",
+        "astropy.io.fits.tests.test_header.TestRecordValuedKeywordCards::test_fitsheader_script",
+        "astropy.io.fits.tests.test_header.TestRecordValuedKeywordCards::test_fitsheader_table_feature"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-10973",
+      "failing_tests": [
+        "dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase::test_basic",
+        "dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase::test_column",
+        "dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase::test_escape_characters",
+        "dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase::test_nopass",
+        "dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase::test_sigint_handler"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-10999",
+      "failing_tests": [
+        "utils_tests.test_dateparse.DurationParseTests::test_negative"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-11276",
+      "failing_tests": [
+        "admin_docs.test_views.TestModelDetailView::test_methods_with_arguments_display_arguments_default_value",
+        "auth_tests.test_forms.UserCreationFormTest::test_password_help_text",
+        "forms_tests.tests.test_forms.FormsTestCase::test_escaping",
+        "forms_tests.tests.test_forms.FormsTestCase::test_templates_with_forms",
+        "forms_tests.widget_tests.test_clearablefileinput.ClearableFileInputTest::test_html_escaped",
+        "model_forms.tests.ModelFormBasicTests::test_initial_values",
+        "model_forms.tests.ModelFormBasicTests::test_m2m_initial_callable",
+        "model_forms.tests.ModelFormBasicTests::test_multi_fields",
+        "model_forms.tests.ModelFormBasicTests::test_runtime_choicefield_populated",
+        "template_tests.filter_tests.test_addslashes.AddslashesTests::test_addslashes02",
+        "template_tests.filter_tests.test_make_list.MakeListTests::test_make_list02",
+        "template_tests.filter_tests.test_title.TitleTests::test_title1",
+        "template_tests.filter_tests.test_urlize.FunctionTests::test_url_split_chars",
+        "template_tests.filter_tests.test_urlize.FunctionTests::test_wrapping_characters",
+        "template_tests.filter_tests.test_urlize.UrlizeTests::test_urlize06",
+        "template_tests.syntax_tests.test_url.UrlTagTests::test_url12",
+        "utils_tests.test_html.TestUtilsHtml::test_escape",
+        "view_tests.tests.test_csrf.CsrfViewTests::test_no_referer",
+        "view_tests.tests.test_debug.ExceptionReporterTests::test_local_variable_escaping",
+        "view_tests.tests.test_debug.ExceptionReporterTests::test_message_only",
+        "view_tests.tests.test_debug.ExceptionReporterTests::test_no_request",
+        "view_tests.tests.test_debug.ExceptionReporterTests::test_request_and_exception",
+        "view_tests.tests.test_debug.ExceptionReporterTests::test_request_and_message",
+        "view_tests.tests.test_debug.ExceptionReporterTests::test_request_with_items_key"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-11815",
+      "failing_tests": [
+        "migrations.test_writer.WriterTests::test_serialize_class_based_validators",
+        "migrations.test_writer.WriterTests::test_serialize_enums"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-12125",
+      "failing_tests": [
+        "migrations.test_writer.WriterTests::test_deconstruct_class_arguments"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-12325",
+      "failing_tests": [
+        "invalid_models_tests.test_models.OtherModelTests::test_missing_parent_link",
+        "migrations.test_state.StateTests::test_render"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-12419",
+      "failing_tests": [
+        "project_template.test_settings.TestStartProjectSettings::test_middleware_headers"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-12741",
+      "failing_tests": [
+        "backends.base.test_operations.SqlFlushTests::test_execute_sql_flush_statements",
+        "backends.tests.LongNameTest::test_sequence_name_length_limits_flush"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-13195",
+      "failing_tests": [
+        "sessions_tests.tests.SessionMiddlewareTests::test_session_delete_on_end",
+        "sessions_tests.tests.SessionMiddlewareTests::test_session_delete_on_end_with_custom_domain_and_path"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-13821",
+      "failing_tests": [
+        "backends.sqlite.tests.Tests::test_check_sqlite_version"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-14140",
+      "failing_tests": [
+        "queries.test_q.QTests::test_deconstruct",
+        "queries.test_q.QTests::test_deconstruct_negated"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-14155",
+      "failing_tests": [
+        "urlpatterns_reverse.tests.ResolverMatchTests::test_repr"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-14315",
+      "failing_tests": [
+        "dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase::test_nopass",
+        "dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase::test_parameters"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-14534",
+      "failing_tests": [
+        "forms_tests.tests.test_forms.FormsTestCase::test_iterable_boundfield_select"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-14608",
+      "failing_tests": [
+        "admin_views.tests.AdminViewListEditable::test_non_form_errors_is_errorlist"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-15161",
+      "failing_tests": [
+        "expressions.tests.ValueTests::test_deconstruct",
+        "expressions.tests.ValueTests::test_deconstruct_output_field"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-15268",
+      "failing_tests": [
+        "migrations.test_autodetector.AutodetectorTests::test_foo_together_ordering",
+        "migrations.test_autodetector.AutodetectorTests::test_remove_field_and_foo_together",
+        "migrations.test_autodetector.AutodetectorTests::test_rename_field_and_foo_together"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-15315",
+      "failing_tests": [
+        "model_fields.tests.BasicFieldTests::test_abstract_inherited_fields"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-15569",
+      "failing_tests": [
+        "schema.tests.SchemaTests::test_func_unique_constraint_lookups"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "django__django-15851",
+      "failing_tests": [
+        "dbshell.test_postgresql.PostgreSqlDbshellCommandTestCase::test_parameters"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "pydata__xarray-6992",
+      "failing_tests": [
+        "xarray.tests.test_dataarray.TestDataArray::test_reset_index",
+        "xarray.tests.test_dataarray.TestDataArray::test_reset_index_keep_attrs",
+        "xarray.tests.test_dataset.TestDataset::test_reset_index",
+        "xarray.tests.test_dataset.TestDataset::test_reset_index_keep_attrs",
+        "xarray.tests.test_groupby::test_groupby_drops_nans"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "pylint-dev__pylint-8898",
+      "failing_tests": [
+        "tests.config.test_config::test_csv_regex_error"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "pytest-dev__pytest-5809",
+      "failing_tests": [
+        "testing.test_pastebin.TestPaste::test_create_new_paste"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "pytest-dev__pytest-5840",
+      "failing_tests": [
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_basic_init[global]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_basic_init[inpackage]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_immediate_initialiation_and_incremental_are_the_same[global]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_immediate_initialiation_and_incremental_are_the_same[inpackage]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_value_access_by_path[global]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_value_access_by_path[inpackage]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_value_access_not_existing[global]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_value_access_not_existing[inpackage]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_value_access_with_confmod[global]",
+        "testing.test_conftest.TestConftestValueAccessGlobal::test_value_access_with_confmod[inpackage]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[package-.-3]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[package-..-3]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[package-./snc-1]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[package-./swc-1]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[runner-..-3]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[runner-../package-3]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[runner-../package/snc-1]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[runner-../package/swc-1]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[snc-.-1]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[snc-..-3]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[snc-../..-3]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[snc-../swc-1]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[swc-.-1]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[swc-..-3]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[swc-../..-3]",
+        "testing.test_conftest.TestConftestVisibility::test_parsefactories_relative_node_ids[swc-../snc-1]",
+        "testing.test_conftest::test_conftest_confcutdir",
+        "testing.test_conftest::test_conftest_exception_handling",
+        "testing.test_conftest::test_conftest_existing_junitxml",
+        "testing.test_conftest::test_conftest_existing_resultlog",
+        "testing.test_conftest::test_conftest_found_with_double_dash",
+        "testing.test_conftest::test_conftest_global_import",
+        "testing.test_conftest::test_conftest_import_order",
+        "testing.test_conftest::test_conftest_in_nonpkg_with_init",
+        "testing.test_conftest::test_conftest_symlink",
+        "testing.test_conftest::test_conftest_symlink_files",
+        "testing.test_conftest::test_conftestcutdir",
+        "testing.test_conftest::test_conftestcutdir_inplace_considered",
+        "testing.test_conftest::test_doubledash_considered",
+        "testing.test_conftest::test_fixture_dependency",
+        "testing.test_conftest::test_hook_proxy",
+        "testing.test_conftest::test_issue1073_conftest_special_objects",
+        "testing.test_conftest::test_issue151_load_all_conftests",
+        "testing.test_conftest::test_no_conftest",
+        "testing.test_conftest::test_required_option_help",
+        "testing.test_conftest::test_search_conftest_up_to_inifile[.-2-0]",
+        "testing.test_conftest::test_search_conftest_up_to_inifile[None-1-1]",
+        "testing.test_conftest::test_search_conftest_up_to_inifile[src-1-1]",
+        "testing.test_conftest::test_setinitial_conftest_subdirs[.dotdir]",
+        "testing.test_conftest::test_setinitial_conftest_subdirs[test]",
+        "testing.test_conftest::test_setinitial_conftest_subdirs[tests]",
+        "testing.test_conftest::test_setinitial_conftest_subdirs[whatever]"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "pytest-dev__pytest-6197",
+      "failing_tests": [
+        "testing.test_skipping::test_skip_package"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "pytest-dev__pytest-7205",
+      "failing_tests": [
+        "testing.test_setuponly::test_show_fixtures_with_parameter_ids[--setup-only]",
+        "testing.test_setuponly::test_show_fixtures_with_parameter_ids[--setup-plan]",
+        "testing.test_setuponly::test_show_fixtures_with_parameter_ids[--setup-show]",
+        "testing.test_setuponly::test_show_fixtures_with_parameter_ids_function[--setup-only]",
+        "testing.test_setuponly::test_show_fixtures_with_parameter_ids_function[--setup-plan]",
+        "testing.test_setuponly::test_show_fixtures_with_parameter_ids_function[--setup-show]",
+        "testing.test_setuponly::test_show_fixtures_with_parameters[--setup-only]",
+        "testing.test_setuponly::test_show_fixtures_with_parameters[--setup-plan]",
+        "testing.test_setuponly::test_show_fixtures_with_parameters[--setup-show]"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "scikit-learn__scikit-learn-25102",
+      "failing_tests": [
+        "sklearn.feature_selection.tests.test_base::test_transform_dense",
+        "sklearn.feature_selection.tests.test_base::test_transform_sparse"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "scikit-learn__scikit-learn-26194",
+      "failing_tests": [
+        "sklearn.metrics.tests.test_ranking::test_roc_curve_drop_intermediate"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sphinx-doc__sphinx-10435",
+      "failing_tests": [
+        "tests.test_build_latex::test_latex_code_role",
+        "tests.test_build_latex::test_latex_warnings"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sphinx-doc__sphinx-10449",
+      "failing_tests": [
+        "tests.test_ext_autodoc_configs::test_autodoc_typehints_description_with_documented_init"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sphinx-doc__sphinx-8265",
+      "failing_tests": [
+        "tests.test_pycode_ast::test_unparse[(1, 2, 3)-1, 2, 3]"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sphinx-doc__sphinx-9591",
+      "failing_tests": [
+        "tests.test_domain_py::test_pyproperty"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sphinx-doc__sphinx-9698",
+      "failing_tests": [
+        "tests.test_domain_py::test_pymethod_options"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-12481",
+      "failing_tests": [
+        "sympy.combinatorics.tests.test_permutations::test_args"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-14531",
+      "failing_tests": [
+        "sympy.printing.tests.test_python::test_python_relational"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-15017",
+      "failing_tests": [
+        "sympy.tensor.array.tests.test_immutable_ndim_array::test_ndim_array_initiation"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-15809",
+      "failing_tests": [
+        "sympy.functions.elementary.tests.test_miscellaneous::test_Max",
+        "sympy.functions.elementary.tests.test_miscellaneous::test_Min"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-16597",
+      "failing_tests": [
+        "sympy.core.tests.test_assumptions::test_infinity",
+        "sympy.core.tests.test_assumptions::test_neg_infinity",
+        "sympy.functions.elementary.tests.test_miscellaneous::test_minmax_assumptions"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-19495",
+      "failing_tests": [
+        "sympy.sets.tests.test_conditionset::test_subs_CondSet"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-20438",
+      "failing_tests": [
+        "sympy.sets.tests.test_sets::test_Eq"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-21596",
+      "failing_tests": [
+        "sympy.sets.tests.test_fancysets::test_imageset_intersect_real"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-21930",
+      "failing_tests": [
+        "sympy.physics.tests.test_secondquant::test_NO",
+        "sympy.physics.tests.test_secondquant::test_Tensors",
+        "sympy.physics.tests.test_secondquant::test_commutation",
+        "sympy.physics.tests.test_secondquant::test_create",
+        "sympy.physics.tests.test_secondquant::test_create_f"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-22080",
+      "failing_tests": [
+        "sympy.codegen.tests.test_rewriting::test_create_expand_pow_optimization"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-23413",
+      "failing_tests": [
+        "sympy.matrices.tests.test_normalforms::test_hermite_normal",
+        "sympy.polys.matrices.tests.test_normalforms::test_hermite_normal"
+      ],
+      "class": null,
+      "reason": ""
+    },
+    {
+      "population": "confirmatory",
+      "instance_id": "sympy__sympy-23950",
+      "failing_tests": [
+        "sympy.sets.tests.test_contains::test_as_set"
+      ],
+      "class": null,
+      "reason": ""
+    }
+  ]
+}

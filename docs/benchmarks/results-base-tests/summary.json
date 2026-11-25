@@ -1,0 +1,197 @@
+{
+  "study_id": "base-tests-v1",
+  "part1": {
+    "astropy": {
+      "verdict": "RUNS",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "django": {
+      "verdict": "DOES_NOT_RUN",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [
+        "suite failed"
+      ],
+      "label": "PASS_categorical_by_design"
+    },
+    "matplotlib": {
+      "verdict": "RUNS",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "pydata": {
+      "verdict": "RUNS",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "pytest-dev": {
+      "verdict": "RUNS",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "scikit-learn": {
+      "verdict": "RUNS",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "sphinx-doc": {
+      "verdict": "RUNS",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    },
+    "sympy": {
+      "verdict": "RUNS",
+      "pairs": 2,
+      "agree_with_stratum": 2,
+      "causes": [],
+      "label": "PASS_categorical_by_design"
+    }
+  },
+  "part2": {
+    "confirmatory": {
+      "instances": 272,
+      "eligible": 270,
+      "not_eligible": {
+        "no-base-test-file-modified": 0,
+        "control-no-case": 2,
+        "control-no-passing-test": 0,
+        "not-configured": 0,
+        "run-error": 0
+      },
+      "eligible_share": {
+        "k": 270,
+        "n": 272,
+        "wilson_95": [
+          0.9735913510341818,
+          0.9979812368783867
+        ]
+      },
+      "friction": {
+        "k": 48,
+        "n": 270,
+        "wilson_95": [
+          0.13679023113299765,
+          0.2278056165909524
+        ]
+      },
+      "verdict": "ESTIMATE_ONLY",
+      "control_excluded_tests": {
+        "excluded": 980,
+        "of": 28749
+      },
+      "control_excluded_instances": 86,
+      "block_classes": {
+        "behaviour-change": 0,
+        "environment": 0,
+        "other": 0
+      },
+      "unclassified_blocks": 48,
+      "per_repository": {
+        "astropy": {
+          "instances": 13,
+          "eligible": 13,
+          "blocked": 3
+        },
+        "django": {
+          "instances": 135,
+          "eligible": 133,
+          "blocked": 20
+        },
+        "matplotlib": {
+          "instances": 8,
+          "eligible": 8,
+          "blocked": 0
+        },
+        "mwaskom": {
+          "instances": 1,
+          "eligible": 1,
+          "blocked": 0
+        },
+        "pydata": {
+          "instances": 16,
+          "eligible": 16,
+          "blocked": 1
+        },
+        "pylint-dev": {
+          "instances": 5,
+          "eligible": 5,
+          "blocked": 1
+        },
+        "pytest-dev": {
+          "instances": 12,
+          "eligible": 12,
+          "blocked": 4
+        },
+        "scikit-learn": {
+          "instances": 18,
+          "eligible": 18,
+          "blocked": 2
+        },
+        "sphinx-doc": {
+          "instances": 20,
+          "eligible": 20,
+          "blocked": 5
+        },
+        "sympy": {
+          "instances": 44,
+          "eligible": 44,
+          "blocked": 12
+        }
+      }
+    },
+    "pilot": {
+      "instances": 0,
+      "eligible": 0,
+      "not_eligible": {
+        "no-base-test-file-modified": 0,
+        "control-no-case": 0,
+        "control-no-passing-test": 0,
+        "not-configured": 0,
+        "run-error": 0
+      },
+      "eligible_share": {
+        "k": 0,
+        "n": 0,
+        "wilson_95": [
+          null,
+          null
+        ]
+      },
+      "friction": {
+        "k": 0,
+        "n": 0,
+        "wilson_95": [
+          null,
+          null
+        ]
+      },
+      "verdict": "pilot: no verdict",
+      "control_excluded_tests": {
+        "excluded": 0,
+        "of": 0
+      },
+      "control_excluded_instances": 0,
+      "block_classes": {
+        "behaviour-change": 0,
+        "environment": 0,
+        "other": 0
+      },
+      "unclassified_blocks": 0,
+      "per_repository": {}
+    }
+  },
+  "part3": "not run by this runner (needs the shape classification)"
+}

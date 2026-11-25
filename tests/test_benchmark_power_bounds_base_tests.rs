@@ -521,3 +521,152 @@ fn the_lock_writes_the_pilot_values_and_the_estimate_only_label() {
         );
     }
 }
+
+const CONFIRMATORY: &str = "docs/benchmarks/results-base-tests";
+
+fn confirmatory_json(name: &str) -> Value {
+    let path = root().join(CONFIRMATORY).join(name);
+    let file = std::fs::File::open(&path).expect("confirmatory file exists");
+    if name.ends_with(".gz") {
+        serde_json::from_reader(flate2::read::GzDecoder::new(file))
+            .expect("confirmatory file parses")
+    } else {
+        serde_json::from_reader(file).expect("confirmatory file parses")
+    }
+}
+
+/// The confirmatory run (`[verdict] q2_rule`, estimate-only): every result is a confirmatory run
+/// of the locked binary on the image the lock pins; the Part 2 instances are the confirmatory id
+/// file and the Part 1 pairs the committed sample's; and `summary.json`'s Part 2 counts, Wilson
+/// intervals, per-repository table and verdict are the ones `runs.json.gz` gives through
+/// `bounds.rs`, with every block listed in `blocks.json`.
+#[test]
+fn the_confirmatory_summary_is_recomputed_from_the_confirmatory_runs() {
+    let p = prereg();
+    let conf = float(&p["power_and_bounds"]["confidence_level"]);
+    let runs = confirmatory_json("runs.json.gz");
+    let part2 = runs["part2"].as_array().expect("part2 rows");
+    let part1 = runs["part1"].as_array().expect("part1 rows");
+    let sha = p["binary"]["sha256"].as_str().unwrap();
+    for r in part2.iter().chain(part1) {
+        assert_eq!(r["mode"].as_str(), Some("confirmatory"));
+        assert_eq!(
+            r["binary_sha256"].as_str(),
+            Some(sha),
+            "{}",
+            r["instance_id"]
+        );
+    }
+
+    let mut got: Vec<&str> = part2
+        .iter()
+        .map(|r| r["instance_id"].as_str().unwrap())
+        .collect();
+    got.sort_unstable();
+    let mut want = ids(p["population"]["confirmatory_ids"].as_str().unwrap());
+    want.sort_unstable();
+    assert_eq!(got, want, "Part 2 ran exactly the confirmatory instances");
+    assert!(part2.iter().all(|r| r["population"] == "confirmatory"));
+    assert_eq!(
+        part1.len(),
+        int(&p["q1_feasibility"]["sampled_pairs"]),
+        "Part 1 ran every sampled pair"
+    );
+
+    // The image each instance ran on is the one the lock pins (`image_for` in the runner).
+    let strata = strata();
+    let digests = p["constants"]["image_digests"].as_table().unwrap();
+    let prov = confirmatory_json("provenance.json");
+    for r in part2 {
+        let id = r["instance_id"].as_str().unwrap();
+        let pinned = strata["counterfactual"]["pairs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| {
+                c["instance_id"] == id && c["image_digest"].as_str().is_some_and(|d| !d.is_empty())
+            })
+            .and_then(|c| c["image_digest"].as_str())
+            .or_else(|| digests.get(id).and_then(toml::Value::as_str))
+            .unwrap_or_else(|| panic!("{id} has no pinned image"));
+        assert_eq!(r["image"].as_str(), Some(pinned), "{id}");
+        assert_eq!(
+            prov["images"][id].as_str(),
+            Some(pinned),
+            "provenance image of {id}"
+        );
+    }
+    assert_eq!(prov["binary"]["sha256"].as_str(), Some(sha));
+
+    let flag = |r: &Value, key: &str| r["outcome"][key].as_bool() == Some(true);
+    let eligible = part2.iter().filter(|r| flag(r, "eligible")).count();
+    let blocked: Vec<&str> = part2
+        .iter()
+        .filter(|r| flag(r, "blocked"))
+        .map(|r| r["instance_id"].as_str().unwrap())
+        .collect();
+    assert!(part2
+        .iter()
+        .filter(|r| flag(r, "blocked"))
+        .all(|r| flag(r, "eligible")));
+
+    let s = &confirmatory_json("summary.json")["part2"]["confirmatory"];
+    assert_eq!(int_json(&s["instances"]), part2.len());
+    assert_eq!(int_json(&s["eligible"]), eligible);
+    assert_eq!(int_json(&s["friction"]["k"]), blocked.len());
+    assert_eq!(int_json(&s["friction"]["n"]), eligible);
+    let (lo, hi) = wilson_score_interval(eligible, part2.len(), conf).unwrap();
+    close(
+        &s["eligible_share"]["wilson_95"][0],
+        lo,
+        "eligible share lower bound",
+    );
+    close(
+        &s["eligible_share"]["wilson_95"][1],
+        hi,
+        "eligible share upper bound",
+    );
+    let (flo, fhi) = wilson_score_interval(blocked.len(), eligible, conf).unwrap();
+    close(&s["friction"]["wilson_95"][0], flo, "friction lower bound");
+    close(&s["friction"]["wilson_95"][1], fhi, "friction upper bound");
+    assert_eq!(s["verdict"].as_str(), Some("ESTIMATE_ONLY"));
+
+    let mut per_repo: BTreeMap<String, [usize; 3]> = BTreeMap::new();
+    for r in part2 {
+        let t = per_repo
+            .entry(owner(r["instance_id"].as_str().unwrap()).to_string())
+            .or_default();
+        t[0] += 1;
+        t[1] += usize::from(flag(r, "eligible"));
+        t[2] += usize::from(flag(r, "blocked"));
+    }
+    let table = s["per_repository"].as_object().unwrap();
+    assert_eq!(table.len(), per_repo.len());
+    for (o, [n, e, b]) in &per_repo {
+        let row = &table[o.as_str()];
+        assert_eq!(
+            [
+                int_json(&row["instances"]),
+                int_json(&row["eligible"]),
+                int_json(&row["blocked"])
+            ],
+            [*n, *e, *b],
+            "{o}"
+        );
+    }
+
+    let blocks = confirmatory_json("blocks.json");
+    let mut listed: Vec<&str> = blocks["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["instance_id"].as_str().unwrap())
+        .collect();
+    listed.sort_unstable();
+    let mut blocked = blocked;
+    blocked.sort_unstable();
+    assert_eq!(
+        listed, blocked,
+        "blocks.json lists every blocked gold pull request"
+    );
+}
