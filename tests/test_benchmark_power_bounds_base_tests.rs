@@ -669,4 +669,34 @@ fn the_confirmatory_summary_is_recomputed_from_the_confirmatory_runs() {
         listed, blocked,
         "blocks.json lists every blocked gold pull request"
     );
+
+    // `[q2_friction] classification`: every block carries one pre-registered class and a
+    // reason, the rater is disclosed, and summary.json's class counts are blocks.json's.
+    let classes: Vec<String> = p["q2_friction"]["block_classes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap().split(':').next().unwrap().to_string())
+        .collect();
+    assert!(blocks["rater"].as_str().is_some_and(|r| r.contains("AI")));
+    let mut by_class: BTreeMap<String, usize> = classes.iter().map(|c| (c.clone(), 0)).collect();
+    for b in blocks["blocks"].as_array().unwrap() {
+        let class = b["class"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{} has no class", b["instance_id"]));
+        assert!(
+            classes.iter().any(|c| c == class),
+            "{class} is not pre-registered"
+        );
+        assert!(
+            b["reason"].as_str().is_some_and(|r| r.len() > 20),
+            "{} has no reason",
+            b["instance_id"]
+        );
+        *by_class.get_mut(class).unwrap() += 1;
+    }
+    for (class, n) in &by_class {
+        assert_eq!(int_json(&s["block_classes"][class.as_str()]), *n, "{class}");
+    }
+    assert_eq!(int_json(&s["unclassified_blocks"]), 0);
 }

@@ -94,11 +94,11 @@
       },
       "control_excluded_instances": 86,
       "block_classes": {
-        "behaviour-change": 0,
-        "environment": 0,
+        "behaviour-change": 45,
+        "environment": 3,
         "other": 0
       },
-      "unclassified_blocks": 48,
+      "unclassified_blocks": 0,
       "per_repository": {
         "astropy": {
           "instances": 13,
