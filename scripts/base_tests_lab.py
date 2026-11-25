@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import gzip
 import hashlib
 import importlib.util
 import json
@@ -899,10 +900,23 @@ def collect(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return runs, blocks
 
 
+def read_runs(out: Path) -> dict[str, Any]:
+    """runs.json, or runs.json.gz when only the gzipped one is there (`collect --gzip`)."""
+    plain = out / "runs.json"
+    if plain.exists():
+        return json.loads(plain.read_text(encoding="utf-8"))
+    return json.loads(gzip.decompress((out / "runs.json.gz").read_bytes()).decode("utf-8"))
+
+
 def cmd_collect(args: argparse.Namespace) -> int:
     runs, blocks = collect(args.root)
     args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "runs.json").write_text(json.dumps(runs, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(runs, indent=2) + "\n"
+    if args.gzip:
+        # mtime 0: the same results give the same bytes.
+        (args.out / "runs.json.gz").write_bytes(gzip.compress(text.encode("utf-8"), compresslevel=9, mtime=0))
+    else:
+        (args.out / "runs.json").write_text(text, encoding="utf-8")
     dest = args.out / "blocks.json"
     if dest.exists() and not args.force:
         print(f"{dest} exists (the rater's classes); not overwritten without --force", file=sys.stderr)
@@ -913,7 +927,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 
 def cmd_summarize(args: argparse.Namespace) -> int:
-    runs = json.loads((args.out / "runs.json").read_text(encoding="utf-8"))
+    runs = read_runs(args.out)
     bpath = args.out / "blocks.json"
     blocks = json.loads(bpath.read_text(encoding="utf-8")) if bpath.exists() else None
     s = summarize(runs, blocks, load_prereg())
@@ -1187,6 +1201,7 @@ def main() -> int:
     co.add_argument("--root", type=Path, default=Path("/data/base-tests"))
     co.add_argument("--out", type=Path, default=RESULTS_DIR)
     co.add_argument("--force", action="store_true", help="overwrite blocks.json")
+    co.add_argument("--gzip", action="store_true", help="write runs.json.gz instead of runs.json")
     sm = sub.add_parser("summarize", help="write summary.json from runs.json and blocks.json")
     sm.add_argument("--out", type=Path, default=RESULTS_DIR)
     pv = sub.add_parser("pilot-values", help="write pilot-values.json (`[pilot] writes_at_lock`) from summary.json")
