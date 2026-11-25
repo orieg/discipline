@@ -193,5 +193,175 @@
       "per_repository": {}
     }
   },
-  "part3": "not run by this runner (needs the shape classification)"
+  "part3": {
+    "label": "PASS_categorical_by_design",
+    "replay": "replay-main-9df9b947.json.gz",
+    "shapes": {
+      "well-formed": {
+        "runs": 77,
+        "not_run": 0,
+        "diff_blocked": {
+          "k": 24,
+          "n": 77,
+          "wilson_95": [
+            0.21927281991691477,
+            0.42200035324140456
+          ]
+        },
+        "base_tests_blocked": {
+          "k": 77,
+          "n": 77,
+          "wilson_95": [
+            0.9524815747175658,
+            0.9999999999999999
+          ]
+        },
+        "union_blocked": {
+          "k": 77,
+          "n": 77,
+          "wilson_95": [
+            0.9524815747175658,
+            0.9999999999999999
+          ]
+        },
+        "diff_misses_blocked_by_base_tests": {
+          "k": 53,
+          "n": 53,
+          "wilson_95": [
+            0.932418011423458,
+            0.9999999999999999
+          ]
+        },
+        "base_tests_kinds": {
+          "failing-test": 77,
+          "suite-failed": 0,
+          "no-cases": 0
+        }
+      },
+      "broken": {
+        "runs": 99,
+        "not_run": 0,
+        "diff_blocked": {
+          "k": 16,
+          "n": 99,
+          "wilson_95": [
+            0.10199948349098721,
+            0.24651228629228994
+          ]
+        },
+        "base_tests_blocked": {
+          "k": 99,
+          "n": 99,
+          "wilson_95": [
+            0.9626467879321726,
+            1.0
+          ]
+        },
+        "union_blocked": {
+          "k": 99,
+          "n": 99,
+          "wilson_95": [
+            0.9626467879321726,
+            1.0
+          ]
+        },
+        "diff_misses_blocked_by_base_tests": {
+          "k": 83,
+          "n": 83,
+          "wilson_95": [
+            0.9557646903580262,
+            1.0
+          ]
+        },
+        "base_tests_kinds": {
+          "failing-test": 26,
+          "suite-failed": 73,
+          "no-cases": 0
+        }
+      },
+      "no-test-file-hunk": {
+        "runs": 36,
+        "not_run": 0,
+        "diff_blocked": {
+          "k": 4,
+          "n": 36,
+          "wilson_95": [
+            0.04406640300315648,
+            0.25314808590364857
+          ]
+        },
+        "base_tests_blocked": {
+          "k": 0,
+          "n": 36,
+          "wilson_95": [
+            0.0,
+            0.09641862859446367
+          ]
+        },
+        "union_blocked": {
+          "k": 4,
+          "n": 36,
+          "wilson_95": [
+            0.04406640300315648,
+            0.25314808590364857
+          ]
+        },
+        "diff_misses_blocked_by_base_tests": {
+          "k": 0,
+          "n": 32,
+          "wilson_95": [
+            0.0,
+            0.1071791982550706
+          ]
+        },
+        "base_tests_kinds": {
+          "failing-test": 0,
+          "suite-failed": 0,
+          "no-cases": 0
+        }
+      }
+    },
+    "all": {
+      "runs": 212,
+      "not_run": 0,
+      "diff_blocked": {
+        "k": 44,
+        "n": 212,
+        "wilson_95": [
+          0.15839878394524362,
+          0.2671054696049955
+        ]
+      },
+      "base_tests_blocked": {
+        "k": 176,
+        "n": 212,
+        "wilson_95": [
+          0.7738784189169661,
+          0.8747458109456672
+        ]
+      },
+      "union_blocked": {
+        "k": 180,
+        "n": 212,
+        "wilson_95": [
+          0.7946827974833165,
+          0.8910056740857529
+        ]
+      },
+      "diff_misses_blocked_by_base_tests": {
+        "k": 136,
+        "n": 168,
+        "wilson_95": [
+          0.7434872080749009,
+          0.8617218067561332
+        ]
+      },
+      "base_tests_kinds": {
+        "failing-test": 103,
+        "suite-failed": 73,
+        "no-cases": 0
+      }
+    },
+    "not_run_causes": []
+  }
 }
