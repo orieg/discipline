@@ -672,6 +672,20 @@ pub const GATES: &[GateInfo] = &[
         scope: Scope::File,
         triggers: &[],
     },
+    GateInfo {
+        id: "doc-staleness",
+        suite: Suite::Hygiene,
+        summary: "a registered document with no qualifying edit within max_age_days of the head commit",
+        coverage: Coverage::Stated("any"),
+        available: true,
+        // A whole-tree baseline would record a stale document as debt and keep it quiet
+        // for good: staleness is judged on the runs that check a change.
+        delta_only: true,
+        // Read from the committed history, not from the edited file: an edit hook has
+        // nothing for it to judge.
+        scope: Scope::Repository,
+        triggers: &[],
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -1139,6 +1153,7 @@ pub struct Gates {
     pub changed_line_coverage: ChangedLineCoverageGate,
     pub visual_evidence: VisualEvidenceGate,
     pub invented_names: InventedNamesGate,
+    pub doc_staleness: DocStalenessGate,
 }
 
 /// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
@@ -1252,7 +1267,8 @@ impl_gate_settings!(
     CompanionEditGate,
     ChangedLineCoverageGate,
     VisualEvidenceGate,
-    InventedNamesGate
+    InventedNamesGate,
+    DocStalenessGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2978,6 +2994,49 @@ fn one_or_many_patterns<'de, D: serde::Deserializer<'de>>(
     }
 }
 
+/// `doc-staleness`: registered documents that must be refreshed on a cadence, judged on
+/// every run from the head commit's first-parent history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DocStalenessGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub rules: Vec<DocStalenessRule>,
+}
+
+impl Default for DocStalenessGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            // Every run reports a stale document, whatever the change touches: a warning
+            // does not block a change that has nothing to do with it.
+            severity: Severity::Warning,
+            exempt_paths: Vec::new(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+/// One `[[gates.doc-staleness.rules]]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocStalenessRule {
+    /// Repository-relative path of the document; a file at the head commit.
+    pub path: String,
+    /// Most days the head commit may be past the newest qualifying commit.
+    pub max_age_days: u32,
+    /// Regular expressions; a commit qualifies only when its diff to `path` adds, for every
+    /// one of them, a line matching it (as `companion-edit` reads the key). Written as one
+    /// string or a list.
+    #[serde(
+        default,
+        deserialize_with = "one_or_many_patterns",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub require_added_line_match: Option<Vec<String>>,
+}
+
 /// `companion-edit`: independent rules, each "a change to `trigger_paths` must also
 /// change `require_edits_to`".
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3194,6 +3253,7 @@ impl Gates {
             "changed-line-coverage" => &self.changed_line_coverage,
             "visual-evidence" => &self.visual_evidence,
             "invented-names" => &self.invented_names,
+            "doc-staleness" => &self.doc_staleness,
             _ => return None,
         })
     }

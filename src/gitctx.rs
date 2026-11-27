@@ -632,6 +632,32 @@ fn worktree_metadata(path: &std::path::Path) -> std::io::Result<Option<std::fs::
     Ok(Some(link))
 }
 
+/// What `HEAD`'s committed tree holds at a path ([`GitCtx::head_commit_entry`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeadEntry {
+    /// A regular file (executable or not).
+    File,
+    /// Something that is not a regular file, named for a message.
+    Other(&'static str),
+    Missing,
+}
+
+/// Whether the lines a commit's diff to a path adds make it a qualifying commit
+/// ([`GitCtx::newest_first_parent_change`]).
+pub type AddedLinesJudge<'a> = dyn Fn(&[String]) -> bool + 'a;
+
+/// The newest qualifying change to a path ([`GitCtx::newest_first_parent_change`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathHistory {
+    /// The newest qualifying commit and its committer time.
+    Found { commit: String, time: i64 },
+    /// The whole history was read and no commit qualifies.
+    NeverChanged,
+    /// The history ends at commit `at` (a shallow boundary, or a parent not in the object
+    /// database) before a qualifying commit was found.
+    Truncated { at: String },
+}
+
 /// The id of the entry at `path` in `tree`; `None` when the tree has no such entry. A tree
 /// object that cannot be read on the way is an error, not an absent entry.
 fn tree_entry_id(tree: &Tree<'_>, path: &str) -> Result<Option<Oid>> {
@@ -1462,6 +1488,169 @@ impl GitCtx {
             }
         }
         Ok(None)
+    }
+
+    /// The `HEAD` commit's full id and committer time (seconds since the epoch): the clock
+    /// a gate that judges history reads, never the wall clock. `None` with no commit yet.
+    pub fn head_commit_time(&self) -> Result<Option<(String, i64)>> {
+        let Some(commit) = self.repo.head().ok().and_then(|h| h.peel_to_commit().ok()) else {
+            return Ok(None);
+        };
+        let time = commit.committer().when().seconds();
+        Ok(Some((commit.id().to_string(), time)))
+    }
+
+    /// What `HEAD`'s committed tree holds at `path` (the working tree and the index are not
+    /// read).
+    pub fn head_commit_entry(&self, path: &str) -> Result<HeadEntry> {
+        let commit = self.repo.head()?.peel_to_commit()?;
+        let tree = commit.tree()?;
+        let entry = match tree.get_path(std::path::Path::new(path)) {
+            Ok(entry) => entry,
+            Err(e)
+                if e.code() == git2::ErrorCode::NotFound && e.class() == git2::ErrorClass::Tree =>
+            {
+                return Ok(HeadEntry::Missing)
+            }
+            Err(e) => {
+                return Err(
+                    anyhow::Error::from(e).context(format!("failed to look up `{path}` at HEAD"))
+                )
+            }
+        };
+        Ok(match entry.filemode() {
+            0o100644 | 0o100755 => HeadEntry::File,
+            0o120000 => HeadEntry::Other("a symbolic link"),
+            0o160000 => HeadEntry::Other("a submodule"),
+            0o040000 => HeadEntry::Other("a directory"),
+            _ => HeadEntry::Other("not a regular file"),
+        })
+    }
+
+    /// The newest commit on `HEAD`'s first-parent history that changes `path` and leaves
+    /// it in place: its blob differs from the first parent's (a root commit that adds it
+    /// counts). `qualifies`, when given, is asked about each such commit with the lines
+    /// its diff to `path` adds (a binary blob adds none); a commit it refuses is passed
+    /// over. `HEAD` itself is judged first.
+    ///
+    /// `replay_parent` is the commit a `discipline replay` base stands in for: the walk
+    /// goes on from it instead of stopping at the base, which has no history. History
+    /// that ends at a shallow clone's boundary, or at a parent the object database does
+    /// not hold, before a qualifying commit is found is [`PathHistory::Truncated`].
+    pub fn newest_first_parent_change(
+        &self,
+        path: &str,
+        replay_parent: Option<&str>,
+        qualifies: Option<&AddedLinesJudge<'_>>,
+    ) -> Result<PathHistory> {
+        let replay_parent = replay_parent
+            .map(|hex| {
+                Oid::from_str(hex.trim())
+                    .with_context(|| format!("replay parent `{hex}` is not an object id"))
+            })
+            .transpose()?;
+        let shallow_roots = self.shallow_roots()?;
+        // A replay base stands in for the replayed change's parent and has no history of
+        // its own: the walk goes on from that parent, or stops there as truncated.
+        let replay_base = self.base.filter(|_| self.base_is_replay_base());
+        let mut commit = self.repo.head()?.peel_to_commit()?;
+        loop {
+            let mut parent_id = commit.parent_id(0).ok();
+            if parent_id.is_some() && parent_id == replay_base {
+                match replay_parent {
+                    Some(original) => parent_id = Some(original),
+                    None => {
+                        return Ok(PathHistory::Truncated {
+                            at: commit.id().to_string(),
+                        })
+                    }
+                }
+            }
+            if parent_id.is_none() && shallow_roots.contains(&commit.id()) {
+                return Ok(PathHistory::Truncated {
+                    at: commit.id().to_string(),
+                });
+            }
+            let parent = match parent_id {
+                None => None,
+                Some(id) => match self.repo.find_commit(id) {
+                    Ok(p) => Some(p),
+                    Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                        return Ok(PathHistory::Truncated {
+                            at: commit.id().to_string(),
+                        })
+                    }
+                    Err(e) => return Err(e.into()),
+                },
+            };
+            let here = tree_entry_id(&commit.tree()?, path)?;
+            let before = match &parent {
+                Some(p) => tree_entry_id(&p.tree()?, path)?,
+                None => None,
+            };
+            if let Some(new_blob) = here.filter(|h| Some(*h) != before) {
+                let counts = match qualifies {
+                    None => true,
+                    Some(judge) => judge(&self.added_blob_lines(before, new_blob)?),
+                };
+                if counts {
+                    return Ok(PathHistory::Found {
+                        commit: commit.id().to_string(),
+                        time: commit.committer().when().seconds(),
+                    });
+                }
+            }
+            match parent {
+                Some(p) => commit = p,
+                None => return Ok(PathHistory::NeverChanged),
+            }
+        }
+    }
+
+    /// The lines the change from blob `old` (none: the file is new) to blob `new` adds,
+    /// without their line endings. A binary side adds no line.
+    fn added_blob_lines(&self, old: Option<Oid>, new: Oid) -> Result<Vec<String>> {
+        let new_blob = self.repo.find_blob(new)?;
+        let old_blob = old.map(|o| self.repo.find_blob(o)).transpose()?;
+        if new_blob.is_binary() || old_blob.as_ref().is_some_and(|b| b.is_binary()) {
+            return Ok(Vec::new());
+        }
+        let mut opts = git2::DiffOptions::new();
+        opts.context_lines(0);
+        let old_bytes: &[u8] = old_blob.as_ref().map_or(&[], |b| b.content());
+        let patch =
+            git2::Patch::from_buffers(old_bytes, None, new_blob.content(), None, Some(&mut opts))?;
+        let mut added = Vec::new();
+        for h in 0..patch.num_hunks() {
+            for l in 0..patch.num_lines_in_hunk(h)? {
+                let line = patch.line_in_hunk(h, l)?;
+                if line.origin() == '+' {
+                    let text = String::from_utf8_lossy(line.content());
+                    let text = text.strip_suffix('\n').unwrap_or(&text);
+                    added.push(text.strip_suffix('\r').unwrap_or(text).to_string());
+                }
+            }
+        }
+        Ok(added)
+    }
+
+    /// The commits a shallow clone's history stops at (`<git dir>/shallow`): their parents
+    /// were not fetched. Empty for a full clone.
+    fn shallow_roots(&self) -> Result<std::collections::BTreeSet<Oid>> {
+        let mut roots = std::collections::BTreeSet::new();
+        if !self.repo.is_shallow() {
+            return Ok(roots);
+        }
+        let file = self.repo.path().join("shallow");
+        let text = std::fs::read_to_string(&file)
+            .with_context(|| "the clone is shallow and its list of boundary commits cannot be read; fetch full history")?;
+        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            roots.insert(
+                Oid::from_str(line)
+                    .with_context(|| "the clone's list of shallow boundary commits holds a line that is not an object id; fetch full history")?,
+            );
+        }
+        Ok(roots)
     }
 
     /// What the hexadecimal object id `hex` (full or abbreviated) names in the local

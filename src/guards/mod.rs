@@ -22,6 +22,7 @@ pub mod confusables;
 #[cfg(test)]
 mod confusables_tests;
 pub mod dependency;
+pub mod doc_staleness;
 pub mod error_swallowing;
 pub mod gate_command_lint;
 pub mod harness_tampering;
@@ -871,6 +872,12 @@ impl Context<'_> {
 /// nothing.
 pub const REPLAY_CASE_ENV: &str = "DISCIPLINE_REPLAY_CASE";
 
+/// Set by `discipline replay` on each case's `check`: the full id of the replayed
+/// change's first parent, which the replay base stands in for. A gate that reads the
+/// history before the change (`doc-staleness`) walks on from it. Honoured only when
+/// [`REPLAY_CASE_ENV`] is set and the base is a commit replay built.
+pub const REPLAY_PARENT_ENV: &str = "DISCIPLINE_REPLAY_PARENT";
+
 /// The end of the note a gate records when [`Context::predates_config`] skips part of
 /// it: `<what> skipped: <why> (the configuration is newer)`. `discipline replay` counts
 /// these notes per gate (`skipped_by_gate`), so every such note ends with this text.
@@ -910,6 +917,18 @@ impl Context<'_> {
             }
             None => None,
         })
+    }
+
+    /// Under `discipline replay`, the commit the replay base stands in for: the replayed
+    /// change's first parent ([`REPLAY_PARENT_ENV`]). `None` outside replay, and when the
+    /// base is not a commit replay built, so setting the variables by hand repoints nothing.
+    pub fn replay_parent(&self) -> Option<String> {
+        if std::env::var_os(REPLAY_CASE_ENV).is_none() || !self.git.base_is_replay_base() {
+            return None;
+        }
+        std::env::var(REPLAY_PARENT_ENV)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
     }
 
     /// Under `discipline replay`, a file the configuration names that neither side of the
@@ -1175,6 +1194,7 @@ pub fn run_checks(
             "changed-line-coverage" => changed_line_coverage::evaluate_changed_line_coverage(ctx),
             "visual-evidence" => visual_evidence::evaluate_visual_evidence(ctx),
             "invented-names" => invented_names::evaluate_invented_names(ctx),
+            "doc-staleness" => doc_staleness::evaluate_doc_staleness(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -2237,6 +2257,7 @@ mod tests {
             "unsafe-budget",
             "version-lockstep",
             "visual-evidence",
+            "doc-staleness",
         ];
         left_out.sort_unstable();
         expected.sort_unstable();
@@ -2300,6 +2321,7 @@ mod tests {
             "companion-edit",
             "changed-line-coverage",
             "visual-evidence",
+            "doc-staleness",
         ];
         let mut found = delta_only.clone();
         expected.sort_unstable();

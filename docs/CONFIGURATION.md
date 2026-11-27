@@ -230,6 +230,13 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.dependency-delta.manifests` | list | *(9 entries)* | Manifest file globs to inspect |
 | `gates.dependency-delta.require_git_pins` | boolean | `true` | Whether git dependencies must specify an immutable commit or tag pin (default: true) |
 | `gates.dependency-delta.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.doc-staleness.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.doc-staleness.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.doc-staleness.rules` | array of tables | `[]` | Documents that must be refreshed on a cadence; each is judged on every run, whatever the change touches |
+| `gates.doc-staleness.rules[].max_age_days` | integer | *(required)* | Most days the head commit's committer date may be past the newest qualifying commit's |
+| `gates.doc-staleness.rules[].path` | string | *(required)* | Repository-relative path of the document; a regular file at the head commit, or the run stops |
+| `gates.doc-staleness.rules[].require_added_line_match` | string or array | *(per entry)* | Regular expression, or a list of them; a commit qualifies only when its diff to the path adds, for every one of them, a line matching it, as in companion-edit (a whitespace-only touch does not) |
+| `gates.doc-staleness.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.error-swallowing.constant_fallback_paths` | list | `[]` | Globs of the files (a benchmark or evaluation harness) in which a new error handler that puts a numeric literal in place of the result is reported, at warning at most; empty turns the check off (default: []) |
 | `gates.error-swallowing.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.error-swallowing.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -909,6 +916,7 @@ Where a gate's subject is a keyword (`allow-unsafe`, `allow-msrv`, `allow-miri`,
 | `allow-companion-edit:` / `discipline:allow(companion-edit)` / `allow(companion-edit)` | `companion-edit` | The rule's first `require_edits_to` entry |
 | `allow-uncovered:` / `discipline:allow(changed-line-coverage)` / `allow(changed-line-coverage)` | `changed-line-coverage` | The changed source file whose uncovered lines are accepted |
 | `allow-visual-evidence:` / `discipline:allow(visual-evidence)` / `allow(visual-evidence)` | `visual-evidence` | `before` (the Before image) or `after` (the visual evidence as a whole) |
+| `review-scheduled:` | `doc-staleness` | A registered rule's `path`, then the scheduled review date (`YYYY-MM-DD`): after the head commit's date and no more than `max_age_days` after it |
 
 ### Inline Line Exemptions
 

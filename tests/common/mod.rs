@@ -226,7 +226,7 @@ fn apply_run_env(cmd: &mut Command, env: &[(&str, &str)]) {
     cmd.envs(env.iter().copied());
 }
 
-fn finish_run(out: std::process::Output) -> Run {
+pub fn finish_run(out: std::process::Output) -> Run {
     Run {
         code: out.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -281,6 +281,7 @@ pub const ISOLATED_ENV_VARS: &[&str] = &[
     "DISCIPLINE_CONFIG",
     "DISCIPLINE_CONFIG_OVERRIDE",
     "DISCIPLINE_REPLAY_CASE",
+    "DISCIPLINE_REPLAY_PARENT",
     "DISCIPLINE_ENABLE",
     "DISCIPLINE_DISABLE",
     "DISCIPLINE_BASE_REF",
@@ -470,6 +471,26 @@ impl Repo {
     pub fn commit(&self, message: &str) {
         self.git(&["add", "-A"]);
         self.git(&["commit", "-q", "--allow-empty", "-m", message]);
+    }
+
+    /// Commits everything with author and committer date `date` (any format `git`
+    /// reads, such as `2026-11-27T12:00:00Z`).
+    pub fn commit_at(&self, message: &str, date: &str) {
+        self.git(&["add", "-A"]);
+        let out = git_command()
+            .args(["-c", "user.email=t@example.invalid", "-c", "user.name=t"])
+            .args(HARNESS_GIT_CONFIG)
+            .args(["commit", "-q", "--allow-empty", "-m", message])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .current_dir(self.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     /// `discipline check --format json --base main <extra>`

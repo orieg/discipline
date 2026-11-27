@@ -5,7 +5,8 @@
 //! is laid over the base: a path mapped to a string is written, a path mapped to `null`
 //! is removed (a file, or a directory with everything under it), so a case can delete a
 //! test file, a fixture directory or a workflow. An `author` is handed to the run as the
-//! pull request's author in an Actions event payload. The verdict is one of:
+//! pull request's author in an Actions event payload, and a `base_date` / `head_date` as
+//! the two commits' dates. The verdict is one of:
 //! - `caught`: exactly these finding codes are reported, at any severity, counting a
 //!   policy refusal by its `policy/<code>` rule id;
 //! - `lifted`: nothing is reported, and a directive lifted exactly these finding codes;
@@ -54,6 +55,12 @@ struct Case {
     /// The gate a `known_miss`, `clean` or `exit` case is about.
     #[serde(default)]
     gate: Option<String>,
+    /// The author and committer date of the base and head commits, for a gate that reads
+    /// commit dates (`doc-staleness`); the time of the run when absent.
+    #[serde(default)]
+    base_date: Option<String>,
+    #[serde(default)]
+    head_date: Option<String>,
     verdict: Verdict,
 }
 
@@ -182,7 +189,10 @@ fn run_case(case: &Case) -> Outcome {
     for (path, content) in &case.base {
         repo.write(path, content);
     }
-    repo.commit("base");
+    match &case.base_date {
+        Some(date) => repo.commit_at("base", date),
+        None => repo.commit("base"),
+    }
     repo.git(&["checkout", "-q", "-b", "work"]);
     for (path, content) in &case.head {
         match content {
@@ -190,7 +200,10 @@ fn run_case(case: &Case) -> Outcome {
             None => repo.remove(path),
         }
     }
-    repo.commit("change");
+    match &case.head_date {
+        Some(date) => repo.commit_at("change", date),
+        None => repo.commit("change"),
+    }
     for (path, content) in &case.untracked {
         repo.write(path, content);
     }
@@ -635,6 +648,8 @@ fn the_judge_rejects_each_kind_of_disagreement() {
         enable: vec![],
         author: None,
         gate: None,
+        base_date: None,
+        head_date: None,
         verdict,
     };
     let set = |codes: &[&str]| codes.iter().map(|c| c.to_string()).collect::<BTreeSet<_>>();

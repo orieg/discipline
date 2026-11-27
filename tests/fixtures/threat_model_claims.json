@@ -958,6 +958,17 @@
       "verdict": "holds"
     },
     {
+      "id": "gate-doc-staleness",
+      "category": "gates",
+      "claim": "a registered document with no qualifying edit within max_age_days of the head commit",
+      "source": "docs/GATES.md:doc-staleness",
+      "code": "src/guards/doc_staleness.rs:evaluate_doc_staleness",
+      "pinning_tests": [
+        "tests/test_gates_e2e.rs::doc_staleness_reports_an_old_document_on_any_change_and_a_refresh_clears_it"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "gate-error-swallowing",
       "category": "gates",
       "claim": "no new empty error handler or discarded Result outside tests",

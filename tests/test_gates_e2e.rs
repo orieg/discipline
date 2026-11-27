@@ -11786,7 +11786,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 23 disabled, 1 not evaluated (66 items examined)"
+            "gates:  26 passed, 0 failed, 24 disabled, 1 not evaluated (67 items examined)"
         ),
         "{}",
         run.stdout
@@ -11802,13 +11802,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=66"), "{step_output}");
+    assert!(step_output.contains("examined_items=67"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 23 disabled, 1 not evaluated (66 items examined)"
+            "**Summary:** 26 passed, 0 failed, 24 disabled, 1 not evaluated (67 items examined)"
         ),
         "{step_summary}"
     );
@@ -27936,4 +27936,244 @@ require_added_line_match = "^## \\d{4}-\\d{2}-\\d{2} "
     let (reason, gate) = stopped.could_not_check();
     assert_eq!(reason, "configuration");
     assert_eq!(gate.as_deref(), Some("companion-edit"));
+}
+
+// ---- doc-staleness ---------------------------------------------------------
+
+const REVIEW_LOG: &str = "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n";
+
+/// A repository whose `main` registers `docs/REVIEW-LOG.md` (last refreshed 2026-08-01)
+/// under `doc-staleness` with `rule`, checked out on `work`.
+fn doc_staleness_repo(gate: &str, rule: &str) -> Repo {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.doc-staleness]\nenabled = true\n{gate}\n[[gates.doc-staleness.rules]]\npath = \"docs/REVIEW-LOG.md\"\n{rule}\n"
+        ),
+    );
+    repo.write("docs/REVIEW-LOG.md", REVIEW_LOG);
+    repo.commit_at("docs: review log", "2026-08-01T12:00:00Z");
+    repo.git(&["checkout", "-q", "-B", "work", "main"]);
+    repo
+}
+
+fn doc_staleness_codes(run: &Run) -> Vec<String> {
+    let mut codes: Vec<String> = run
+        .violations("doc-staleness")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    codes.sort();
+    codes
+}
+
+#[test]
+fn doc_staleness_reports_an_old_document_on_any_change_and_a_refresh_clears_it() {
+    let repo = doc_staleness_repo(
+        "severity = \"error\"",
+        "max_age_days = 92\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"",
+    );
+    let unrelated = |branch: &str, message: &str| {
+        repo.git(&["checkout", "-q", "-B", branch, "main"]);
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn later() {{}}\n"));
+        repo.commit_at(message, "2026-11-27T12:00:00Z");
+    };
+
+    // 1. A change that does not touch the log: 118 days since its last dated entry.
+    unrelated("unrelated", "feat: later");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(doc_staleness_codes(&run), ["doc-staleness/doc-stale"]);
+    let found = &run.violations("doc-staleness")[0];
+    assert_eq!(found["file"], "docs/REVIEW-LOG.md");
+    let message = found["message"].as_str().unwrap();
+    assert!(
+        message.contains("118 day(s) before the head commit (2026-11-27)")
+            && message.contains("(2026-08-01)")
+            && message.contains("allows 92 day(s)"),
+        "{message}"
+    );
+    assert_eq!(run.outcome("doc-staleness")["examined"], 1);
+
+    // 2. A whitespace-only touch of the log adds no dated entry: still stale.
+    repo.git(&["checkout", "-q", "-B", "whitespace", "main"]);
+    repo.write("docs/REVIEW-LOG.md", &format!("{REVIEW_LOG}\n   \n"));
+    repo.commit_at("docs: touch", "2026-11-27T12:00:00Z");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(doc_staleness_codes(&run), ["doc-staleness/doc-stale"]);
+
+    // 3. The change adds a dated entry: its own head commit refreshes the log.
+    repo.git(&["checkout", "-q", "-B", "refresh", "main"]);
+    repo.write(
+        "docs/REVIEW-LOG.md",
+        &format!("{REVIEW_LOG}\n## 2026-11-27 quarterly review\n"),
+    );
+    repo.commit_at("docs: quarterly review", "2026-11-27T12:00:00Z");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(doc_staleness_codes(&run).is_empty(), "{}", run.stdout);
+    let notes = run.outcome("doc-staleness")["notes"].to_string();
+    assert!(notes.contains("0 day(s) before the head commit"), "{notes}");
+
+    // 4. A scheduled review within max_age_days lifts the finding, from the pull request
+    // body or from a commit body; free text may follow the date.
+    unrelated("scheduled", "feat: later");
+    let run = repo.check_with_pr(
+        &[],
+        "review-scheduled: docs/REVIEW-LOG.md 2026-12-15 with the security review\n",
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(doc_staleness_codes(&run).is_empty(), "{}", run.stdout);
+    let overrides = run.outcome("doc-staleness")["overrides"].clone();
+    assert_eq!(overrides.as_array().unwrap().len(), 1, "{overrides}");
+    assert_eq!(overrides[0]["code"], "doc-staleness/doc-stale");
+    unrelated(
+        "scheduled-commit",
+        "feat: later\n\nreview-scheduled: docs/REVIEW-LOG.md 2027-02-27",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(doc_staleness_codes(&run).is_empty(), "{}", run.stdout);
+
+    // 5. A date past the cap, in the past, not a date, or for an unregistered path grants
+    // nothing and is reported.
+    unrelated("void", "feat: later");
+    for body in [
+        "review-scheduled: docs/REVIEW-LOG.md 2027-02-28\n",
+        "review-scheduled: docs/REVIEW-LOG.md 2026-11-27\n",
+        "review-scheduled: docs/REVIEW-LOG.md once-the-audit-lands\n",
+        "review-scheduled: docs/OTHER.md 2026-12-15\n",
+    ] {
+        let run = repo.check_with_pr(&[], body);
+        assert_eq!(run.code, 1, "{body}\n{}\n{}", run.stdout, run.stderr);
+        assert_eq!(
+            doc_staleness_codes(&run),
+            [
+                "doc-staleness/doc-stale",
+                "doc-staleness/review-schedule-void"
+            ],
+            "{body}"
+        );
+        // Text that is not a date is the author's, and is never echoed.
+        let outcome = run.outcome("doc-staleness").to_string();
+        assert!(!outcome.contains("once-the-audit-lands"), "{outcome}");
+    }
+
+    // 6. A directive in the commit subject is not read.
+    unrelated("subject", "review-scheduled: docs/REVIEW-LOG.md 2026-12-15");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    assert!(doc_staleness_codes(&run).contains(&"doc-staleness/doc-stale".to_string()));
+}
+
+#[test]
+fn doc_staleness_warns_by_default_and_reports_a_document_never_refreshed() {
+    // No pattern: any edit refreshes; within the limit the gate passes with a note.
+    let repo = doc_staleness_repo("", "max_age_days = 200");
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn later() {{}}\n"));
+    repo.commit_at("feat: later", "2026-11-27T12:00:00Z");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(doc_staleness_codes(&run).is_empty(), "{}", run.stdout);
+
+    // Past the limit at the default severity: a warning, so an unrelated change passes.
+    let repo = doc_staleness_repo("", "max_age_days = 30");
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn later() {{}}\n"));
+    repo.commit_at("feat: later", "2026-11-27T12:00:00Z");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    let found = run.violations("doc-staleness");
+    assert_eq!(found.len(), 1, "{}", run.stdout);
+    assert_eq!(found[0]["severity"], "warning");
+
+    // No commit in the whole history adds a line the pattern matches: stale, age unknown.
+    let repo = doc_staleness_repo(
+        "severity = \"error\"",
+        "max_age_days = 92\nrequire_added_line_match = \"^Reviewed-by: \"",
+    );
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn later() {{}}\n"));
+    repo.commit_at("feat: later", "2026-11-27T12:00:00Z");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    let message = run.violations("doc-staleness")[0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(message.contains("its age is unknown"), "{message}");
+
+    // A gate with no rules examines nothing and passes.
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.doc-staleness]\nenabled = true\n"),
+        "base",
+    );
+    repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn later() {{}}\n"));
+    repo.commit("feat: later");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("doc-staleness")["examined"], 0);
+}
+
+#[test]
+fn doc_staleness_stops_on_what_it_cannot_judge() {
+    let stopped = |repo: &Repo, reason: &str, says: &str| {
+        let run = repo.check(&[]);
+        assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+        let (why, gate) = run.could_not_check();
+        assert_eq!(why, reason, "{}", run.stderr);
+        if gate.is_some() {
+            assert_eq!(gate.as_deref(), Some("doc-staleness"));
+        }
+        assert!(run.stderr.contains(says), "{}", run.stderr);
+    };
+    let later = |repo: &Repo, date: &str| {
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn later() {{}}\n"));
+        repo.commit_at("feat: later", date);
+    };
+
+    // max_age_days = 0, a missing key, a path the head commit does not have.
+    let repo = doc_staleness_repo("", "max_age_days = 0");
+    later(&repo, "2026-11-27T12:00:00Z");
+    stopped(&repo, "configuration", "max_age_days` is 0");
+    let repo = doc_staleness_repo("", "");
+    later(&repo, "2026-11-27T12:00:00Z");
+    stopped(&repo, "configuration", "max_age_days");
+    let repo = doc_staleness_repo("", "max_age_days = 92");
+    repo.remove("docs/REVIEW-LOG.md");
+    later(&repo, "2026-11-27T12:00:00Z");
+    stopped(&repo, "configuration", "does not exist at the head commit");
+
+    // A qualifying commit dated after the head commit.
+    let repo = doc_staleness_repo("", "max_age_days = 92");
+    repo.write("docs/REVIEW-LOG.md", &format!("{REVIEW_LOG}\nMore.\n"));
+    repo.commit_at("docs: more", "2026-12-01T12:00:00Z");
+    later(&repo, "2026-11-27T12:00:00Z");
+    stopped(&repo, "repository", "after the head commit");
+
+    // A shallow clone whose history ends before the last refresh: fetch full history.
+    let repo = doc_staleness_repo("", "max_age_days = 92");
+    later(&repo, "2026-11-27T12:00:00Z");
+    let shallow = tempfile::tempdir().unwrap();
+    let dest = shallow.path().join("clone");
+    let out = common::git_command()
+        .args(["clone", "-q", "--depth", "1", "--branch", "work"])
+        .arg(format!("file://{}", repo.path().display()))
+        .arg(&dest)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut cmd = common::discipline_cmd(&dest);
+    cmd.args(["check", "--format", "json", "--base", "HEAD"]);
+    let run = common::finish_run(cmd.output().unwrap());
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(run.could_not_check().0, "repository", "{}", run.stderr);
+    assert!(run.stderr.contains("fetch full history"), "{}", run.stderr);
 }

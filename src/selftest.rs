@@ -6072,6 +6072,39 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "doc-staleness: the age runs from the head commit's date, a qualifying commit adds a matching line, and a review date grants only within max_age_days (#1139)",
+        || {
+            use crate::config::DocStalenessRule;
+            use crate::guards::doc_staleness::{
+                compile_rules, judge_age, judge_schedule, parse_day, Age,
+            };
+            let day = 86_400;
+            let rule = compile_rules(&[DocStalenessRule {
+                path: "docs/REVIEW-LOG.md".into(),
+                max_age_days: 92,
+                require_added_line_match: Some(vec![r"^## \d{4}-\d{2}-\d{2} ".into()]),
+            }])?
+            .remove(0);
+            let head = parse_day("2026-11-27").ok_or_else(|| anyhow::anyhow!("date"))?;
+            let zero = compile_rules(&[DocStalenessRule {
+                path: "docs/a.md".into(),
+                max_age_days: 0,
+                require_added_line_match: None,
+            }]);
+            Ok(rule.qualifies(&["## 2026-11-27 review".into()])
+                && !rule.qualifies(&["   ".into()])
+                && judge_age(head * day, Some((head - 92) * day), 92) == Ok(Age::Fresh { days: 92 })
+                && judge_age(head * day, Some((head - 93) * day), 92) == Ok(Age::Stale { days: 93 })
+                && judge_age(head * day, None, 92) == Ok(Age::NeverRefreshed)
+                && judge_age(head * day, Some(head * day + 1), 92).is_err()
+                && judge_schedule(Some("2026-12-15"), head, 92).is_ok()
+                && judge_schedule(Some("2026-11-27"), head, 92).is_err()
+                && judge_schedule(Some("2027-03-01"), head, 92).is_err()
+                && judge_schedule(Some("2026-02-30"), head, 92).is_err()
+                && zero.is_err())
+        },
+    ),
+    (
         "visual-evidence: images under Before / After headings are read outside fences, and Before is required only for a matched path the base had (#1083)",
         || {
             use crate::gitctx::ChangeKind;
