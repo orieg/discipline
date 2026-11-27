@@ -363,5 +363,74 @@
       }
     },
     "not_run_causes": []
+  },
+  "secondary": {
+    "label": "secondary: reported apart, never the headline",
+    "replay": "replay-main-9df9b947.json.gz",
+    "instances": 231,
+    "all": {
+      "runs": 432,
+      "not_run": 0,
+      "eligible": 428,
+      "ineligible_reasons": {
+        "control-no-case": 4
+      },
+      "friction": {
+        "k": 69,
+        "n": 428,
+        "wilson_95": [
+          0.1294151575618021,
+          0.19904209433810965
+        ]
+      }
+    },
+    "passed_838": 432,
+    "per_repository": {
+      "astropy": {
+        "runs": 20,
+        "eligible": 20,
+        "blocked": 4
+      },
+      "django": {
+        "runs": 227,
+        "eligible": 223,
+        "blocked": 38
+      },
+      "matplotlib": {
+        "runs": 15,
+        "eligible": 15,
+        "blocked": 0
+      },
+      "pydata": {
+        "runs": 25,
+        "eligible": 25,
+        "blocked": 0
+      },
+      "pylint-dev": {
+        "runs": 9,
+        "eligible": 9,
+        "blocked": 2
+      },
+      "pytest-dev": {
+        "runs": 16,
+        "eligible": 16,
+        "blocked": 4
+      },
+      "scikit-learn": {
+        "runs": 33,
+        "eligible": 33,
+        "blocked": 2
+      },
+      "sphinx-doc": {
+        "runs": 27,
+        "eligible": 27,
+        "blocked": 8
+      },
+      "sympy": {
+        "runs": 60,
+        "eligible": 60,
+        "blocked": 11
+      }
+    }
   }
 }

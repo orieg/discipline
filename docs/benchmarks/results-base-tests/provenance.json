@@ -310,5 +310,20 @@
       }
     ],
     "images": "each run's image is the one its instance's Part 2 run used (provenance.images)"
+  },
+  "secondary": {
+    "runs": 432,
+    "instances": 231,
+    "runner_blobs": {
+      "scripts/base_tests_lab.py": "f8ca98e5b7ca8fe3fac16f47ec99ac6ea6fac5a1",
+      "scripts/recall_shapes.py": "6fb11cd03eb5dcaf7bc3ed72317848e6dec34cb7",
+      "docs/benchmarks/base-tests-preregistration.toml": "e387c4f2c1c332fa0a91baffb6174628adf5db01"
+    },
+    "runner_note": "the secondary runs ran from a git archive of the commit that adds them, before that commit was squashed; the git blob ids above are the files the lab host ran and are the files this commit adds",
+    "binary": "the same v0.32.0 binary as Parts 1 to 3 (binary.sha256)",
+    "order": "one instance at a time: its control, then each of its honest original-split runs, then its image removed",
+    "host": "the lab host, under the host-wide benchmark lock, sequentially. A first pass stopped on the 20 GB free-disk check after 8 runs (free space 18 GB; other sessions' images and volumes on the host); the driver was changed to recheck free space before stopping and restarted, skipping the 8 written results. The restarted pass never fell below 24 GB and no run stopped. Another session's build ran on the host, outside the lock, during the runs (load average up to 3.4 on 32 cores); the runs are pass or fail with a 900-second timeout and none timed out",
+    "retries": [],
+    "images": "each run's image is the one its instance's Part 2 run used (provenance.images)"
   }
 }

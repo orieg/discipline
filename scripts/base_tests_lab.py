@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lab runner for `base-tests-v1` (#1052): the Part 1, Part 2 and Part 3 runs of the `base-tests` preset.
+"""Lab runner for `base-tests-v1` (#1052): the Part 1, Part 2, Part 3 and secondary runs of the `base-tests` preset.
 
 Pre-registration: `docs/benchmarks/base-tests-preregistration.toml` (`locked-pre-data`; Part 2
 estimate-only, `[q2_friction] label`).
@@ -34,6 +34,12 @@ over H's code, as it does in CI. The runs:
   The preset blocks a run when it reports a failing base test, a failed suite or no case
   (`part3_outcome`: each is an error that fails the check in CI); a run the runner could
   not complete (the agent patch does not apply, a timeout) is `not run` and not blocked.
+- Secondary (`[q2_friction] secondary`), the 432 honest `original`-split runs of #838
+  (`access_full`, `swe`, the replay's confirmatory pairs; `secondary_plan`), run as Part 2
+  with the agent's patch in place of the gold patch, per instance: one `control` on B =
+  `base_commit`, then, per run, H = B + the original `test_patch` + the agent's patch (the
+  agent worked on base + test patch). Reported apart from Part 2 (`summarize_secondary`),
+  never the headline.
 
 `/testbed` in the SWE-bench images is one `SWE-bench` setup commit past `base_commit`; B is
 built on it (as the harness evaluates on it) and the files it touches are recorded
@@ -476,6 +482,8 @@ def summarize(runs: dict[str, Any], blocks: dict[str, Any] | None, prereg: dict[
     out: dict[str, Any] = {"study_id": STUDY_ID, "part1": {}, "part2": {}}
     part3 = runs.get("part3") or []
     out["part3"] = summarize_part3(part3) if part3 else "not run"
+    secondary = runs.get("secondary") or []
+    out["secondary"] = summarize_secondary(secondary) if secondary else "not run"
     # Part 1, per repository owner.
     per_owner: dict[str, list[dict[str, Any]]] = {}
     for p in runs.get("part1", []):
@@ -588,6 +596,51 @@ def summarize_part3(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def secondary_plan(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """`[q2_friction] secondary`: #838's honest `original`-split confirmatory runs (`access_full`,
+    benchmark `swe`) in the `recall_shapes.REPLAY` replay, with #838's score (`passed`)."""
+    with gzip.open(RECALL / shapes_mod.REPLAY, "rt", encoding="utf-8") as f:
+        replay = json.load(f)
+    pairs = {p["pair_id"]: p for p in manifest["pairs"]}
+    out = []
+    for r in replay["pairs"]:
+        if r["arm"] != "access_full" or r["split"] != "original" or r["benchmark"] != "swe":
+            continue
+        m = pairs[r["pair_id"]]
+        out.append({"pair_id": r["pair_id"], "instance_id": m["instance_id"], "owner": owner(m["instance_id"]), "split": "original", "passed": m["passed"], "replay": shapes_mod.REPLAY})
+    return sorted(out, key=lambda r: (r["instance_id"], r["pair_id"]))
+
+
+def summarize_secondary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The secondary friction: as Part 2, over runs. A run the runner could not complete
+    (`run-error`) is `not run`; the other ineligible runs are counted by reason. `passed_838`
+    counts the runs #838 scored as solving their task."""
+
+    def cell(rs: list[dict[str, Any]]) -> dict[str, Any]:
+        outs = [r["outcome"] for r in rs]
+        eligible = [o for o in outs if o["eligible"]]
+        reasons: dict[str, int] = {}
+        for o in outs:
+            if not o["eligible"]:
+                reasons[o["reason"]] = reasons.get(o["reason"], 0) + 1
+        return {
+            "runs": len(rs),
+            "not_run": reasons.get("run-error", 0),
+            "eligible": len(eligible),
+            "ineligible_reasons": dict(sorted(reasons.items())),
+            "friction": share(sum(bool(o.get("blocked")) for o in eligible), len(eligible)),
+        }
+
+    out: dict[str, Any] = {"label": "secondary: reported apart, never the headline", "replay": shapes_mod.REPLAY, "instances": len({r["instance_id"] for r in rows})}
+    out["all"] = cell(rows)
+    out["passed_838"] = sum(bool(r["passed"]) for r in rows)
+    per: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        per.setdefault(r["owner"], []).append(r)
+    out["per_repository"] = {o: {"runs": c["runs"], "eligible": c["eligible"], "blocked": c["friction"]["k"]} for o, rs in sorted(per.items()) for c in [cell(rs)]}
+    return out
+
+
 # --- Plan ----------------------------------------------------------------------------------
 
 
@@ -605,6 +658,7 @@ def plan(prereg: dict[str, Any], strata: dict[str, Any], overlay: dict[str, Any]
         sampled_per_owner[p["owner"]] = sampled_per_owner.get(p["owner"], 0) + 1
     refusal = confirmatory_refusal(prereg, overlay)
     p3 = part3_plan(json.loads(MANIFEST.read_text(encoding="utf-8")))
+    sec = secondary_plan(json.loads(MANIFEST.read_text(encoding="utf-8")))
     return {
         "study_id": STUDY_ID,
         "status": prereg["study"]["status"],
@@ -626,6 +680,7 @@ def plan(prereg: dict[str, Any], strata: dict[str, Any], overlay: dict[str, Any]
             "diff_blocked": sum(r["diff_blocked"] for r in p3),
             "replay": shapes_mod.REPLAY,
         },
+        "secondary": {"runs": len(sec), "instances": len({r["instance_id"] for r in sec}), "passed_838": sum(r["passed"] for r in sec)},
         "lock_values_remaining": lock_values(prereg, constants),
         "confirmatory_refusal": refusal,
         "pilot_refusal": pilot_refusal(constants),
@@ -644,6 +699,8 @@ def print_plan(p: dict[str, Any], as_json: bool) -> None:
     print(f"Part 2: {q2['instances']['confirmatory']} confirmatory + {q2['instances']['pilot']} pilot instances, runs {' -> '.join(q2['runs_per_instance'])}")
     q3 = p["part3"]
     print(f"Part 3: {q3['runs']} gaming runs {q3['per_shape']}, {q3['diff_blocked']} blocked by the diff gates ({q3['replay']})")
+    sec = p["secondary"]
+    print(f"Secondary: {sec['runs']} honest original-split runs over {sec['instances']} instances ({sec['passed_838']} passed in #838)")
     print(f"LOCK values remaining: {', '.join(p['lock_values_remaining']) or 'none'}")
     print(f"confirmatory mode: {'refused: ' + p['confirmatory_refusal'] if p['confirmatory_refusal'] else 'allowed'}")
 
@@ -858,6 +915,58 @@ def run_part2(iid: str, row: dict[str, Any], rc: dict[str, Any], constants: dict
     return result
 
 
+def run_secondary(iid: str, row: dict[str, Any], runs: list[tuple[dict[str, Any], str]], rc: dict[str, Any], constants: dict[str, Any], image: str, binary: Path) -> dict[str, dict[str, Any]]:
+    """The secondary runs of one instance: its control once, as Part 2, then per run H = B +
+    the original test patch + the agent's patch, with Part 2's reruns. One result per run."""
+    globs = list(rc["tests_paths_globs_per_repository"])
+    files = base_test_files(row["test_patch"], globs)
+    common: dict[str, Any] = {"base_test_files": files, "tests_paths_globs": globs, "image": image}
+    if not files:
+        return {s["pair_id"]: {**common, "outcome": instance_outcome(files, None, None)} for s, _ in runs}
+    timeout = int(constants["timeout_seconds"])
+    command = expand_command(rc["runner_command_per_repository"], rc["junit_options_per_repository"], files)
+    config = discipline_config(command, globs, timeout)
+    common["command"] = command
+    try:
+        with Container(image, constants["container_memory"], binary) as c:
+            c.setup_base(row["base_commit"], "", config)
+            common["image_setup_commit"] = c.setup_commit
+            control = c.run_tests(command, timeout + 60)
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        return {s["pair_id"]: {**common, "error": str(e)[-600:], "outcome": {"eligible": False, "reason": "run-error"}} for s, _ in runs}
+    common["control"] = control
+    out: dict[str, dict[str, Any]] = {}
+    ok, _ = eligibility(files, control)
+    for s, agent in runs:
+        result = dict(common)
+        if not ok:
+            result["outcome"] = instance_outcome(files, control, None)
+            out[s["pair_id"]] = result
+            continue
+        reruns = int((constants["flaky_rerun_policy"] or {}).get("head_reruns", 0))
+        attempts = []
+        try:
+            for _ in range(1 + reruns):
+                with Container(image, constants["container_memory"], binary) as c:
+                    b = c.setup_base(row["base_commit"], "", config)
+                    c.apply(row["test_patch"], "test patch does not apply")
+                    c.apply(agent, "agent patch does not apply")
+                    c.commit("agent")
+                    attempts.append(c.check(b, timeout))
+                last = read_report(attempts[-1]["report"])
+                if not last["failed_ids"] and not last["suite_failed"]:
+                    break
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            result["error"] = str(e)[-600:]
+            result["outcome"] = {"eligible": False, "reason": "run-error"}
+            out[s["pair_id"]] = result
+            continue
+        result["agent"] = {"attempts": attempts}
+        result["outcome"] = instance_outcome(files, control, result["agent"])
+        out[s["pair_id"]] = result
+    return out
+
+
 def run_part1(pair: dict[str, Any], row: dict[str, Any], agent_patch: str, rc: dict[str, Any], constants: dict[str, Any], image: str, binary: Path) -> dict[str, Any]:
     globs = list(rc["tests_paths_globs_per_repository"])
     files = sorted(set(head_test_files(row["test_patch"], globs)) | set(base_test_files(agent_patch, globs)))
@@ -915,11 +1024,41 @@ def cmd_run(args: argparse.Namespace) -> int:
         more = (pilot_strata,)
         recall_dir = RECALL_PILOT
     lock = take_lock(args.lock_file)
-    results = args.root / "results" / f"part{args.part}"
+    results = args.root / "results" / ("secondary" if args.part == "secondary" else f"part{args.part}")
     results.mkdir(parents=True, exist_ok=True)
     p = plan(prereg, strata, overlay)
     meta = {"mode": args.mode, "binary_sha256": binary_sha, "constants": constants}
-    if args.part == 3:
+    if args.part == "secondary":
+        if args.mode != "confirmatory":
+            print("the secondary runs are confirmatory only", file=sys.stderr)
+            return 2
+        pairs = {x["pair_id"]: x for x in manifest["pairs"]}
+        by_instance: dict[str, list[dict[str, Any]]] = {}
+        for s in secondary_plan(manifest):
+            if args.only and s["pair_id"] not in args.only and s["instance_id"] not in args.only:
+                continue
+            if (results / f"{s['pair_id']}.json").exists() and not args.force:
+                continue
+            by_instance.setdefault(s["instance_id"], []).append(s)
+        for iid, todo in by_instance.items():
+            rc = repo_constants(constants, todo[0]["owner"])
+            if rc is None:
+                res_by = {s["pair_id"]: {"outcome": {"eligible": False, "reason": "not-configured"}} for s in todo}
+            else:
+                row = dataset[(iid, "original")]
+                check_patch_sha(known, iid, "original", row["test_patch"])
+                runs_in = []
+                for s in todo:
+                    agent = (recall_dir / manifest["patches_dir"] / s["pair_id"] / "agent_patch.diff").read_text(encoding="utf-8")
+                    if pairs_mod.sha256_text(agent) != pairs[s["pair_id"]]["patch_sha256"]["agent_patch"]:
+                        raise RuntimeError(f"{s['pair_id']}: agent patch sha256 differs from the manifest")
+                    runs_in.append((s, agent))
+                res_by = run_secondary(iid, row, runs_in, rc, constants, image_for(iid, constants, strata, args.mode, more), args.binary)
+            for s in todo:
+                res = res_by[s["pair_id"]]
+                (results / f"{s['pair_id']}.json").write_text(json.dumps({**s, **meta, **res}, indent=2) + "\n", encoding="utf-8")
+                print(f"{s['pair_id']} {iid} passed={s['passed']}: {res['outcome']}")
+    elif args.part == 3:
         if args.mode != "confirmatory":
             print("Part 3 runs the confirmatory gaming runs only", file=sys.stderr)
             return 2
@@ -990,6 +1129,8 @@ def collect(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     runs = {"study_id": STUDY_ID, "part1": rows("part1"), "part2": rows("part2")}
     if rows("part3"):
         runs["part3"] = rows("part3")
+    if rows("secondary"):
+        runs["secondary"] = rows("secondary")
     blocks = {
         "study_id": STUDY_ID,
         "blocks": [
@@ -1023,7 +1164,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         print(f"{dest} exists (the rater's classes); not overwritten without --force", file=sys.stderr)
     else:
         dest.write_text(json.dumps(blocks, indent=2) + "\n", encoding="utf-8")
-    print(f"{len(runs['part1'])} Part 1 pairs, {len(runs['part2'])} Part 2 instances, {len(runs.get('part3', []))} Part 3 runs, {len(blocks['blocks'])} blocks")
+    print(f"{len(runs['part1'])} Part 1 pairs, {len(runs['part2'])} Part 2 instances, {len(runs.get('part3', []))} Part 3 runs, {len(runs.get('secondary', []))} secondary runs, {len(blocks['blocks'])} blocks")
     return 0
 
 
@@ -1305,6 +1446,27 @@ def self_test() -> int:
     check("part3 well-formed misses", (s3["shapes"]["well-formed"]["diff_misses_blocked_by_base_tests"]["k"], s3["shapes"]["well-formed"]["diff_misses_blocked_by_base_tests"]["n"]), (1, 1))
     check("part3 not run", (s3["all"]["not_run"], s3["not_run_causes"]), (1, ["x"]))
     check("part3 kinds", s3["all"]["base_tests_kinds"], {"failing-test": 2, "suite-failed": 0, "no-cases": 1})
+    # Secondary: #838's 432 honest original-split runs over 231 confirmatory instances, each
+    # scored as solving its task; summarized as Part 2, over runs, run errors not run.
+    sec = secondary_plan(json.loads(MANIFEST.read_text(encoding="utf-8")))
+    check("secondary runs", len(sec), 432)
+    check("secondary instances", len({r["instance_id"] for r in sec}), 231)
+    check("secondary within the confirmatory instances", {r["instance_id"] for r in sec} <= set(read_ids(prereg["population"]["confirmatory_ids"])), True)
+    check("secondary passed in #838", sum(r["passed"] for r in sec), 432)
+    check("secondary original split only", {r["split"] for r in sec}, {"original"})
+    rows_s = [
+        {"instance_id": "a__a-1", "owner": "a", "passed": True, "outcome": {"eligible": True, "blocked": True}},
+        {"instance_id": "a__a-1", "owner": "a", "passed": True, "outcome": {"eligible": True, "blocked": False}},
+        {"instance_id": "b__b-1", "owner": "b", "passed": True, "outcome": {"eligible": False, "reason": "run-error"}},
+        {"instance_id": "b__b-2", "owner": "b", "passed": False, "outcome": {"eligible": False, "reason": "control-no-case"}},
+    ]
+    ss = summarize_secondary(rows_s)
+    check("secondary friction", (ss["all"]["friction"]["k"], ss["all"]["friction"]["n"]), (1, 2))
+    check("secondary not run", ss["all"]["not_run"], 1)
+    check("secondary reasons", ss["all"]["ineligible_reasons"], {"control-no-case": 1, "run-error": 1})
+    check("secondary instances counted", ss["instances"], 3)
+    check("secondary passed_838", ss["passed_838"], 3)
+    check("secondary per repository", ss["per_repository"], {"a": {"runs": 2, "eligible": 2, "blocked": 1}, "b": {"runs": 2, "eligible": 0, "blocked": 0}})
     print(f"{'FAILED' if failures else 'ok'}: {len(ran)} checks")
     return 1 if failures else 0
 
@@ -1318,9 +1480,9 @@ def main() -> int:
     pl.add_argument("--dry-run", action="store_true", help="accepted for symmetry with `run --dry-run`")
     pl.add_argument("--json", action="store_true")
     pl.add_argument("--constants", type=Path)
-    rn = sub.add_parser("run", help="run Part 1, 2 or 3 on the lab host")
+    rn = sub.add_parser("run", help="run Part 1, 2, 3 or the secondary runs on the lab host")
     rn.add_argument("--mode", choices=("pilot", "confirmatory"), required=True)
-    rn.add_argument("--part", type=int, choices=(1, 2, 3), default=2)
+    rn.add_argument("--part", type=lambda v: v if v == "secondary" else int(v), choices=(1, 2, 3, "secondary"), default=2)
     rn.add_argument("--dry-run", action="store_true", help="print the plan and exit; no Docker")
     rn.add_argument("--json", action="store_true")
     rn.add_argument("--constants", type=Path, help="pilot only: candidate [constants] values (JSON)")

@@ -872,3 +872,183 @@ fn the_part3_summary_is_recomputed_from_the_part3_runs() {
         check(&rows, cell, shape);
     }
 }
+
+/// `[q2_friction] secondary`: the secondary runs are exactly #838's honest `original`-split
+/// confirmatory runs (`access_full`, benchmark `swe`) in the replay `recall_shapes.py` reads,
+/// each with #838's score; each ran in confirmatory mode on the locked binary and its
+/// instance's Part 2 image; each outcome agrees with its control run; and `summary.json`'s
+/// counts, Wilson interval, per-repository table and label are the ones the rows give.
+#[test]
+fn the_secondary_summary_is_recomputed_from_the_secondary_runs() {
+    let p = prereg();
+    let conf = float(&p["power_and_bounds"]["confidence_level"]);
+    let sha = p["binary"]["sha256"].as_str().unwrap();
+    let runs = confirmatory_json("runs.json.gz");
+    let secondary = runs["secondary"].as_array().expect("secondary rows");
+    let prov = confirmatory_json("provenance.json");
+
+    let recall = root().join("docs/benchmarks/results-recall-confirmatory");
+    let replay_name = "replay-main-9df9b947.json.gz";
+    let replay: Value = serde_json::from_reader(flate2::read::GzDecoder::new(
+        std::fs::File::open(recall.join(replay_name)).expect("replay exists"),
+    ))
+    .expect("replay parses");
+    let manifest: Value = serde_json::from_reader(
+        std::fs::File::open(recall.join("manifest.json")).expect("manifest exists"),
+    )
+    .expect("manifest parses");
+    let pairs: BTreeMap<&str, &Value> = manifest["pairs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| (m["pair_id"].as_str().unwrap(), m))
+        .collect();
+    let want: BTreeMap<&str, &Value> = replay["pairs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            r["arm"] == "access_full" && r["split"] == "original" && r["benchmark"] == "swe"
+        })
+        .map(|r| {
+            let id = r["pair_id"].as_str().unwrap();
+            (id, pairs[id])
+        })
+        .collect();
+    assert_eq!(
+        secondary.len(),
+        want.len(),
+        "every honest original-split run ran"
+    );
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut instances = std::collections::BTreeSet::new();
+    for r in secondary {
+        let id = r["pair_id"].as_str().unwrap();
+        assert!(seen.insert(id), "{id} ran twice");
+        let m = want
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} is not an honest original-split run"));
+        let iid = r["instance_id"].as_str().unwrap();
+        instances.insert(iid);
+        assert_eq!(r["instance_id"], m["instance_id"], "{id} instance");
+        assert_eq!(r["passed"], m["passed"], "{id} #838 score");
+        assert_eq!(r["split"].as_str(), Some("original"), "{id}");
+        assert_eq!(r["owner"].as_str(), Some(owner(iid)), "{id} owner");
+        assert_eq!(r["replay"].as_str(), Some(replay_name), "{id} replay");
+        assert_eq!(r["mode"].as_str(), Some("confirmatory"), "{id}");
+        assert_eq!(r["binary_sha256"].as_str(), Some(sha), "{id}");
+        assert!(prov["images"][iid].is_string(), "{iid} has no Part 2 image");
+        assert_eq!(r["image"], prov["images"][iid], "{id} image");
+
+        // The outcome agrees with the control run: the counted tests are the control's passing
+        // cases, a block names counted tests only, and every eligible run ran the agent change.
+        let o = &r["outcome"];
+        if o["eligible"].as_bool() != Some(true) {
+            assert!(o["reason"].is_string(), "{id} ineligible without a reason");
+            continue;
+        }
+        let counted: std::collections::BTreeSet<&str> = r["control"]["cases"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, s)| s.as_str() == Some("passed"))
+            .map(|(c, _)| c.as_str())
+            .collect();
+        assert_eq!(int_json(&o["counted_tests"]), counted.len(), "{id} counted");
+        let failing: Vec<&str> = o["failing_counted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert!(
+            failing.iter().all(|c| counted.contains(c)),
+            "{id} blocks on a test the control did not pass"
+        );
+        assert_eq!(
+            o["blocked"].as_bool(),
+            Some(!failing.is_empty()),
+            "{id} blocked"
+        );
+        assert_eq!(
+            int_json(&o["attempts"]),
+            r["agent"]["attempts"].as_array().map_or(0, Vec::len),
+            "{id} attempts"
+        );
+    }
+
+    let flag = |r: &Value, key: &str| r["outcome"][key].as_bool() == Some(true);
+    let reason = |r: &Value| r["outcome"]["reason"].as_str().map(str::to_string);
+    let s = &confirmatory_json("summary.json")["secondary"];
+    assert_eq!(
+        s["label"].as_str(),
+        Some("secondary: reported apart, never the headline")
+    );
+    assert_eq!(s["replay"].as_str(), Some(replay_name));
+    assert_eq!(int_json(&s["instances"]), instances.len());
+    assert_eq!(
+        int_json(&s["passed_838"]),
+        secondary
+            .iter()
+            .filter(|r| r["passed"].as_bool() == Some(true))
+            .count()
+    );
+    let all = &s["all"];
+    let eligible = secondary.iter().filter(|r| flag(r, "eligible")).count();
+    let blocked = secondary.iter().filter(|r| flag(r, "blocked")).count();
+    let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
+    for r in secondary.iter().filter(|r| !flag(r, "eligible")) {
+        *reasons.entry(reason(r).unwrap()).or_default() += 1;
+    }
+    assert_eq!(int_json(&all["runs"]), secondary.len());
+    assert_eq!(
+        int_json(&all["not_run"]),
+        reasons.get("run-error").copied().unwrap_or(0)
+    );
+    assert_eq!(int_json(&all["eligible"]), eligible);
+    let got: BTreeMap<String, usize> = all["ineligible_reasons"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), int_json(v)))
+        .collect();
+    assert_eq!(got, reasons, "ineligible reasons");
+    assert_eq!(int_json(&all["friction"]["k"]), blocked);
+    assert_eq!(int_json(&all["friction"]["n"]), eligible);
+    let (lo, hi) = wilson_score_interval(blocked, eligible, conf).unwrap();
+    close(
+        &all["friction"]["wilson_95"][0],
+        lo,
+        "secondary friction lower",
+    );
+    close(
+        &all["friction"]["wilson_95"][1],
+        hi,
+        "secondary friction upper",
+    );
+
+    let mut per_repo: BTreeMap<&str, [usize; 3]> = BTreeMap::new();
+    for r in secondary {
+        let t = per_repo
+            .entry(owner(r["instance_id"].as_str().unwrap()))
+            .or_default();
+        t[0] += 1;
+        t[1] += usize::from(flag(r, "eligible"));
+        t[2] += usize::from(flag(r, "blocked"));
+    }
+    let table = s["per_repository"].as_object().unwrap();
+    assert_eq!(table.len(), per_repo.len());
+    for (o, [n, e, b]) in &per_repo {
+        let row = &table[*o];
+        assert_eq!(
+            [
+                int_json(&row["runs"]),
+                int_json(&row["eligible"]),
+                int_json(&row["blocked"])
+            ],
+            [*n, *e, *b],
+            "{o}"
+        );
+    }
+}
