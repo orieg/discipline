@@ -1,0 +1,176 @@
+{
+  "study_id": "agent-pr-precision-v8",
+  "label": "exploratory: a third AI rater after v8's results, not pre-registered, not human",
+  "synthetic_rater_disclosure": "Rater 3 is an AI model (Gemini through the agy CLI), not a person. No human labelled any item.",
+  "model_requested": [
+    "gemini-4-neon-high"
+  ],
+  "model_reported": [
+    "None"
+  ],
+  "batches": 14,
+  "items": 276,
+  "reasked_batches": 0,
+  "label_counts": {
+    "rule_fidelity": {
+      "true-positive": 183,
+      "false-positive": 84,
+      "cannot-tell": 9
+    },
+    "actionability": {
+      "would-block": 0,
+      "would-not-block": 266,
+      "cannot-tell": 10
+    }
+  },
+  "agreement": {
+    "r1": {
+      "rule_fidelity": {
+        "n": 276,
+        "agree": 199,
+        "kappa": 0.5043380912398545,
+        "kappa_95": [
+          0.4234344193033518,
+          0.586787072243346
+        ]
+      },
+      "actionability": {
+        "n": 276,
+        "agree": 268,
+        "kappa": 0.3251833740831306,
+        "kappa_95": [
+          0.0,
+          0.6617647058823511
+        ]
+      }
+    },
+    "r2": {
+      "rule_fidelity": {
+        "n": 276,
+        "agree": 195,
+        "kappa": 0.4715268420679385,
+        "kappa_95": [
+          0.38628705040918787,
+          0.5505101307659147
+        ]
+      },
+      "actionability": {
+        "n": 276,
+        "agree": 270,
+        "kappa": 0.5623678646934466,
+        "kappa_95": [
+          0.19474835886214686,
+          0.8366219415943167
+        ]
+      }
+    },
+    "final": {
+      "rule_fidelity": {
+        "n": 276,
+        "agree": 198,
+        "kappa": 0.4952521629035661,
+        "kappa_95": [
+          0.4153080961591599,
+          0.5762538382804504
+        ]
+      },
+      "actionability": {
+        "n": 276,
+        "agree": 268,
+        "kappa": 0.3251833740831306,
+        "kappa_95": [
+          0.0,
+          0.6617647058823511
+        ]
+      }
+    }
+  },
+  "by_class": {
+    "heuristic-and-prose": {
+      "items": 4,
+      "final_vs_slot": {
+        "false-positive -> cannot-tell": 1,
+        "true-positive -> true-positive": 3
+      },
+      "rule_fidelity_true_positive": {
+        "final": {
+          "k": 3,
+          "n": 4,
+          "point": 0.75,
+          "wilson_95": [
+            0.30064184258240184,
+            0.9544127391902995
+          ]
+        },
+        "slot": {
+          "k": 3,
+          "n": 4,
+          "point": 0.75,
+          "wilson_95": [
+            0.30064184258240184,
+            0.9544127391902995
+          ]
+        }
+      }
+    },
+    "structural-ast-and-deterministic": {
+      "items": 122,
+      "final_vs_slot": {
+        "cannot-tell -> cannot-tell": 2,
+        "false-positive -> cannot-tell": 3,
+        "false-positive -> false-positive": 14,
+        "true-positive -> true-positive": 103
+      },
+      "rule_fidelity_true_positive": {
+        "final": {
+          "k": 103,
+          "n": 122,
+          "point": 0.8442622950819673,
+          "wilson_95": [
+            0.769533914546802,
+            0.8979726511525664
+          ]
+        },
+        "slot": {
+          "k": 103,
+          "n": 122,
+          "point": 0.8442622950819673,
+          "wilson_95": [
+            0.769533914546802,
+            0.8979726511525664
+          ]
+        }
+      }
+    },
+    "twin": {
+      "items": 150,
+      "final_vs_slot": {
+        "cannot-tell -> cannot-tell": 3,
+        "cannot-tell -> true-positive": 1,
+        "false-positive -> false-positive": 70,
+        "false-positive -> true-positive": 73,
+        "true-positive -> true-positive": 3
+      },
+      "rule_fidelity_true_positive": {
+        "final": {
+          "k": 3,
+          "n": 150,
+          "point": 0.02,
+          "wilson_95": [
+            0.006824751322967459,
+            0.05714668327038608
+          ]
+        },
+        "slot": {
+          "k": 77,
+          "n": 150,
+          "point": 0.5133333333333333,
+          "wilson_95": [
+            0.4340179127073932,
+            0.5919828807761246
+          ]
+        }
+      }
+    }
+  }
+}

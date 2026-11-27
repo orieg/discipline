@@ -1,0 +1,73 @@
+{
+  "model_requested": "gemini-4-neon-high",
+  "model_reported": null,
+  "conversation_id": "b992526b-9a33-4363-b62c-a2e0ed448bf1",
+  "attempts": 1,
+  "num_turns": 1,
+  "labels": {
+    "PKT-0014": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0027": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0029": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0064": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0116": {
+      "actionability": "cannot-tell",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0122": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0148": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0175": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0178": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0179": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0191": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0197": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0203": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "cannot-tell"
+    },
+    "PKT-0225": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0255": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    },
+    "PKT-0262": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "false-positive"
+    }
+  }
+}
