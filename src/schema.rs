@@ -89,6 +89,7 @@ pub fn generate_schema() -> Value {
             "changed-line-coverage" => "#/$defs/ChangedLineCoverageGate",
             "visual-evidence" => "#/$defs/VisualEvidenceGate",
             "invented-names" => "#/$defs/InventedNamesGate",
+            "doc-staleness" => "#/$defs/DocStalenessGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -717,6 +718,22 @@ pub fn generate_schema() -> Value {
             "ChangedLineCoverageGate": gate_table(json!({
                 "report": { "type": "string", "description": "Repository-relative path of the coverage report the test run writes; a tracked file, a symlink or a path outside the repository stops the run" },
                 "format": { "type": "string", "enum": ["lcov", "cobertura"], "description": "The report's format: an LCOV tracefile or a Cobertura XML report" }
+            })),
+            "DocStalenessGate": gate_table(json!({
+                "rules": {
+                    "type": "array",
+                    "description": "Documents that must be refreshed on a cadence; each is judged on every run, whatever the change touches",
+                    "items": {
+                        "type": "object",
+                        "required": ["path", "max_age_days"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "path": { "type": "string", "description": "Repository-relative path of the document; a regular file at the head commit, or the run stops" },
+                            "max_age_days": { "type": "integer", "minimum": 1, "description": "Most days the head commit's committer date may be past the newest qualifying commit's" },
+                            "require_added_line_match": { "type": ["string", "array"], "items": { "type": "string" }, "description": "Regular expression, or a list of them; a commit qualifies only when its diff to the path adds, for every one of them, a line matching it, as in companion-edit (a whitespace-only touch does not)" }
+                        }
+                    }
+                }
             })),
             "VisualEvidenceGate": gate_table(json!({
                 "exempt_authors": { "$ref": "#/$defs/StringListOrReset", "description": "Pull request author logins (dependency bots) whose changes need no images" },

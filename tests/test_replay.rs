@@ -691,3 +691,57 @@ fn replay_writes_one_self_contained_html_page_from_its_json() {
         "{page}"
     );
 }
+
+#[test]
+fn doc_staleness_reads_each_replayed_change_from_its_own_history() {
+    // The log is refreshed in #2 (2026-01-10); #3 lands within 92 days of it, #4 past
+    // them, and #5 refreshes it again. Each replayed change is judged from its original
+    // parent's history and its own commit date, never from the day of the replay.
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "docs/REVIEW-LOG.md",
+        "# Review log\n\n## 2026-01-10 first review\n",
+    );
+    repo.commit_at("docs: review log (#2)", "2026-01-10T12:00:00Z");
+    repo.write("docs/notes.md", "# Notes\n");
+    repo.commit_at("docs: notes (#3)", "2026-03-01T12:00:00Z");
+    repo.write("docs/notes.md", "# Notes\n\nMore.\n");
+    repo.commit_at("docs: more notes (#4)", "2026-06-01T12:00:00Z");
+    repo.write(
+        "docs/REVIEW-LOG.md",
+        "# Review log\n\n## 2026-01-10 first review\n\n## 2026-06-02 second review\n",
+    );
+    repo.commit_at("docs: second review (#5)", "2026-06-02T12:00:00Z");
+    let candidate = repo.file("candidate.toml");
+    std::fs::write(
+        &candidate,
+        format!("{CONFIG_HEAD}[gates.doc-staleness]\nenabled = true\nseverity = \"error\"\n[[gates.doc-staleness.rules]]\npath = \"docs/REVIEW-LOG.md\"\nmax_age_days = 92\nrequire_added_line_match = \"^## \\\\d{{4}}-\\\\d{{2}}-\\\\d{{2}} \"\n"),
+    )
+    .unwrap();
+    let args = [
+        "replay",
+        "--last",
+        "4",
+        "--ref",
+        "main",
+        "--json",
+        "--config",
+        candidate.to_str().unwrap(),
+    ];
+    let first = repo.run(&args, &[]);
+    assert_eq!(first.code, 0, "{}\n{}", first.stdout, first.stderr);
+    let s: Value = serde_json::from_str(&first.stdout).unwrap();
+    assert_eq!(
+        verdicts(&s),
+        [
+            (5, "passed".to_string()),
+            (4, "blocked".to_string()),
+            (3, "passed".to_string()),
+            (2, "passed".to_string()),
+        ],
+        "{s}"
+    );
+    let blocked = &s["cases_detail"][1];
+    assert!(blocked.to_string().contains("doc-staleness"), "{blocked}");
+}

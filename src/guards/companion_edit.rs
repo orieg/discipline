@@ -30,6 +30,61 @@ use std::collections::BTreeSet;
 
 pub const GATE: &str = "companion-edit";
 
+/// A compiled `require_added_line_match` pattern: its text, for a message, and the
+/// expression.
+pub type LinePattern = (String, regex::Regex);
+
+/// Compiles a `require_added_line_match` value (`field` is its full key, for a message),
+/// refusing what cannot discriminate: an empty list, a blank pattern, an expression that
+/// does not compile, and one a blank line matches. Shared by `companion-edit` and
+/// `doc-staleness`.
+pub fn compile_line_patterns(field: &str, patterns: &[String]) -> Result<Vec<LinePattern>> {
+    let config_err = |msg: String| tag(Reason::Configuration, anyhow!(msg));
+    if patterns.is_empty() {
+        return Err(config_err(format!(
+            "`{field}` is an empty list, which asks nothing: remove the key or list a pattern"
+        )));
+    }
+    let mut compiled = Vec::new();
+    for pattern in patterns {
+        if pattern.trim().is_empty() {
+            return Err(config_err(format!(
+                "`{field}` holds a blank pattern, which every line matches"
+            )));
+        }
+        let re = regex::Regex::new(pattern).map_err(|e| {
+            config_err(format!(
+                "`{field}`: `{pattern}` is not a regular expression: {e}"
+            ))
+        })?;
+        // A pattern a blank line matches is met by a whitespace-only edit: the very edit
+        // the key exists to refuse.
+        if ["", " ", "\t"].iter().any(|blank| re.is_match(blank)) {
+            return Err(config_err(format!(
+                "`{field}`: `{pattern}` matches an empty or whitespace-only line, so a whitespace-only edit would meet it"
+            )));
+        }
+        compiled.push((pattern.clone(), re));
+    }
+    Ok(compiled)
+}
+
+/// The patterns no line in `added` matches, in the order given. Empty when `patterns` is
+/// empty, or every one matched some line.
+pub fn missing_line_patterns<'a>(
+    patterns: &[LinePattern],
+    added: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut unmet: Vec<&LinePattern> = patterns.iter().collect();
+    for line in added {
+        if unmet.is_empty() {
+            break;
+        }
+        unmet.retain(|(_, re)| !re.is_match(line));
+    }
+    unmet.into_iter().map(|(p, _)| p.clone()).collect()
+}
+
 /// One rule's globs, compiled.
 pub struct CompiledRule {
     trigger: PathFilter,
@@ -39,7 +94,7 @@ pub struct CompiledRule {
     require_all: bool,
     /// `require_added_line_match`, compiled: every pattern must match an added companion
     /// line.
-    line_patterns: Vec<(String, regex::Regex)>,
+    line_patterns: Vec<LinePattern>,
 }
 
 impl CompiledRule {
@@ -81,35 +136,10 @@ impl CompiledRule {
                 compile("require_edits_to", std::slice::from_ref(glob))?,
             ));
         }
-        let mut line_patterns = Vec::new();
-        if let Some(patterns) = &rule.require_added_line_match {
-            let field = key("require_added_line_match");
-            if patterns.is_empty() {
-                return Err(config_err(format!(
-                    "`{field}` is an empty list, which asks nothing: remove the key or list a pattern"
-                )));
-            }
-            for pattern in patterns {
-                if pattern.trim().is_empty() {
-                    return Err(config_err(format!(
-                        "`{field}` holds a blank pattern, which every line matches"
-                    )));
-                }
-                let re = regex::Regex::new(pattern).map_err(|e| {
-                    config_err(format!(
-                        "`{field}`: `{pattern}` is not a regular expression: {e}"
-                    ))
-                })?;
-                // A pattern a blank line matches is met by a whitespace-only edit: the
-                // very edit the key exists to refuse.
-                if ["", " ", "\t"].iter().any(|blank| re.is_match(blank)) {
-                    return Err(config_err(format!(
-                        "`{field}`: `{pattern}` matches an empty or whitespace-only line, so a whitespace-only edit would meet it"
-                    )));
-                }
-                line_patterns.push((pattern.clone(), re));
-            }
-        }
+        let line_patterns = match &rule.require_added_line_match {
+            Some(patterns) => compile_line_patterns(&key("require_added_line_match"), patterns)?,
+            None => Vec::new(),
+        };
         Ok(Self {
             trigger,
             required,
@@ -129,14 +159,7 @@ impl CompiledRule {
         &self,
         added: impl IntoIterator<Item = &'a str>,
     ) -> Vec<String> {
-        let mut unmet: Vec<&(String, regex::Regex)> = self.line_patterns.iter().collect();
-        for line in added {
-            if unmet.is_empty() {
-                break;
-            }
-            unmet.retain(|(_, re)| !re.is_match(line));
-        }
-        unmet.into_iter().map(|(p, _)| p.clone()).collect()
+        missing_line_patterns(&self.line_patterns, added)
     }
 
     /// Judges one rule against the change: `touched` is every path either side of the

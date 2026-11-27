@@ -68,6 +68,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`changed-line-coverage`](#changed-line-coverage) | integrity | **shipped** | any (LCOV, Cobertura) | a line the change adds that the coverage report lists as never run |
 | [`visual-evidence`](#visual-evidence) | hygiene | **shipped** | any | a change to UI paths needs before and after images in the pull request body |
 | [`invented-names`](#invented-names) | hygiene | **shipped** | markdown, any | a flag or configuration key a document gives a tool that the tool's declared surface does not list |
+| [`doc-staleness`](#doc-staleness) | hygiene | **shipped** | any | a registered document with no qualifying edit within max_age_days of the head commit |
 <!-- /generated -->
 
 ### Scope on an Agent Edit
@@ -95,6 +96,7 @@ An agent's edit hook (`discipline hook run` after an edit) runs the gates about 
 | [`config-integrity`](#config-integrity) | file | runs |
 | [`deletion-rationale`](#deletion-rationale) | change set | runs |
 | [`dependency-delta`](#dependency-delta) | repository | not evaluated; end of turn and CI |
+| [`doc-staleness`](#doc-staleness) | repository | not evaluated; end of turn and CI |
 | [`error-swallowing`](#error-swallowing) | file | runs |
 | [`gate-command-lint`](#gate-command-lint) | file | runs |
 | [`golden-output`](#golden-output) | repository | not evaluated; end of turn and CI |
@@ -433,6 +435,8 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `visual-evidence/visual-evidence-incomplete` | Before Image Missing |
 | `invented-names/unknown-flag` | Flag Not In Declared Surface |
 | `invented-names/unknown-config-key` | Configuration Key Not In Declared Surface |
+| `doc-staleness/doc-stale` | Registered Document Not Refreshed |
+| `doc-staleness/review-schedule-void` | Scheduled Review Directive Grants Nothing |
 | `engine/could-not-run` | Check Could Not Run |
 <!-- /generated -->
 
@@ -1666,6 +1670,34 @@ How a gate's default severity is allowed to move. This section is doctrine for c
 - **Baseline:** each finding is located at the document line that holds the name.
 - **Default:** off, severity `warning`, until a replay over agent-authored documentation changes reports its false blocks (#1090).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `tools` (`name`, `surface`, `config_files`, `config_docs`).
+
+#### `doc-staleness`
+- **Rule:** A registered document must have a qualifying edit within `max_age_days` of the head commit. Each `[[gates.doc-staleness.rules]]` entry names one `path` (a repository-relative file) and its `max_age_days`, with an optional `require_added_line_match`. The gate runs on every `discipline check`, whatever the change touches: an unrelated pull request or push reports a stale document too, at the gate's severity (`warning` by default, so it does not block).
+- **Clock:** the age is the head commit's committer date minus the committer date of the newest qualifying commit. The wall clock is never read, so `discipline replay` reaches the same verdict on any day. A replayed change's history is read from its original first parent onward.
+- **Qualifying commit:** a commit on the head commit's first-parent history whose tree changes `path` from its first parent's and still holds it (a root commit that adds it counts; a deletion does not). With `require_added_line_match` (one regular expression, or a list, compiled and refused as in [`companion-edit`](#companion-edit)), its diff to `path` must also add, for every pattern, a line matching it (the key means what it means on `companion-edit`); context and removed lines do not count. The head commit is judged first, so a change that refreshes the document clears its own finding.
+- **Languages:** Any; the gate reads commit trees and the diff of one path per commit.
+- **What it catches:**
+  - A document whose newest qualifying commit is more than `max_age_days` before the head commit (`doc-stale`). The finding names that commit, its date and the age in whole days.
+  - A document no commit in the whole history qualifies for (`doc-stale`, its age unknown).
+  - A `review-scheduled` directive that grants nothing (`review-schedule-void`): a date that is not a `YYYY-MM-DD` calendar date, one on or before the head commit's date, one more than `max_age_days` after it, or a directive that names no registered `path`. A void directive is reported whether or not the document is stale; a date that is not a date is never echoed.
+- **Could not check (exit 2):**
+  - Reason `configuration`: `max_age_days = 0`, a missing or malformed key (a missing `max_age_days`, a negative one), a blank, absolute, `..` or duplicate `path`, a `require_added_line_match` that is an empty list, blank, not a regular expression or matches a blank line, and a `path` that does not exist at the head commit or is not a regular file there (a directory, a symlink, a submodule).
+  - Reason `repository`: a qualifying commit dated after the head commit (its time cannot bound an age), a repository with no commit, and a shallow clone whose history ends before a qualifying commit is found ("fetch full history": check out with `fetch-depth: 0`).
+- **Failing example (rejected):** `docs/REVIEW-LOG.md` registered with `max_age_days = 92`; its last qualifying commit is dated 2026-08-01 and the head commit 2026-11-27. `doc-stale`: last refreshed 118 days before the head commit. <!-- discipline:allow(time-estimates) -->
+- **Passing example (accepted):** the same change adds `## 2026-11-27 quarterly review` to `docs/REVIEW-LOG.md`, or its body carries `review-scheduled: docs/REVIEW-LOG.md 2026-12-15`.
+- **What it does NOT catch:**
+  - A content-free refresh when the rule sets no `require_added_line_match`: a whitespace-only touch of the document is a qualifying commit and resets its age (#1139). Set a pattern for a dated entry.
+  - Whether the refresh is a real review: an added line matching the pattern meets the rule, whatever follows it.
+  - A commit that creates the file at `path` (a rename onto it, or a re-add after a deletion) adds every line, so an existing entry matching the pattern qualifies it.
+  - A committer date set by hand: the clock is the dates the commits carry, so a head commit dated in the past makes a stale document look fresh. Only a qualifying commit dated after the head commit is refused.
+  - The staged change of a pre-commit run: it is not a commit yet, so ages are read at `HEAD` and a note says so.
+  - A whole-tree run (`baseline --whole-tree`) and an agent's edit hook: the gate is not evaluated there.
+- **Examined:** the number of rules judged (a rule whose `path` is in `exempt_paths` is skipped with a note). A gate with no rules examines 0 and passes. A fresh document gets a note with its age.
+- **Weakening the gate:** disabling it, lowering its severity, growing `exempt_paths`, and removing or editing a rule are weakenings [`config-integrity`](#config-integrity) reports (`allow-gate-weakening:`). Any edit to an entry is read as the entry lost, a shorter `max_age_days` included.
+- **Lifting directive:** `review-scheduled: <path> <YYYY-MM-DD>` in the pull request body or a commit body lifts that path's `doc-stale` finding while the date is after the head commit's date (UTC) and no more than `max_age_days` after it. Text after the date is free. The directive belongs in the body, never the subject or title. It counts against `max_overrides`.
+- **Baseline:** each finding is located at the registered `path`, with no line.
+- **Default:** off, severity `warning`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `rules` (`path`, `max_age_days`, `require_added_line_match`).
 
 ---
 

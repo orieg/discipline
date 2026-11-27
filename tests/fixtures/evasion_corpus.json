@@ -11,6 +11,7 @@
       "config-integrity",
       "deletion-rationale",
       "dependency-delta",
+      "doc-staleness",
       "error-swallowing",
       "golden-output",
       "harness-tampering",
@@ -4693,6 +4694,113 @@
         "tests/test_mean.py": "from src.calc import mean\n\n\ndef test_mean():\n    assert mean([1, 3]) == 2\n"
       },
       "gate": "scope-confinement",
+      "verdict": "clean"
+    },
+    {
+      "name": "doc-whitespace-touch-without-a-line-pattern",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.doc-staleness]\nenabled = true\n\n[[gates.doc-staleness.rules]]\npath = \"docs/REVIEW-LOG.md\"\nmax_age_days = 92\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "base_date": "2026-08-01T12:00:00Z",
+      "head": {
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n\n   \n"
+      },
+      "head_date": "2026-11-27T12:00:00Z",
+      "gate": "doc-staleness",
+      "verdict": {
+        "known_miss": "#1139"
+      }
+    },
+    {
+      "name": "doc-whitespace-touch-with-a-line-pattern",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.doc-staleness]\nenabled = true\n\n[[gates.doc-staleness.rules]]\npath = \"docs/REVIEW-LOG.md\"\nmax_age_days = 92\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "base_date": "2026-08-01T12:00:00Z",
+      "head": {
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n\n   \n"
+      },
+      "head_date": "2026-11-27T12:00:00Z",
+      "verdict": {
+        "caught": [
+          "doc-staleness/doc-stale"
+        ]
+      }
+    },
+    {
+      "name": "doc-stale-on-an-unrelated-change",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.doc-staleness]\nenabled = true\n\n[[gates.doc-staleness.rules]]\npath = \"docs/REVIEW-LOG.md\"\nmax_age_days = 92\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "base_date": "2026-08-01T12:00:00Z",
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n"
+      },
+      "head_date": "2026-11-27T12:00:00Z",
+      "verdict": {
+        "caught": [
+          "doc-staleness/doc-stale"
+        ]
+      }
+    },
+    {
+      "name": "doc-review-scheduled-past-max-age-days",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.doc-staleness]\nenabled = true\n\n[[gates.doc-staleness.rules]]\npath = \"docs/REVIEW-LOG.md\"\nmax_age_days = 92\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "base_date": "2026-08-01T12:00:00Z",
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n"
+      },
+      "head_date": "2026-11-27T12:00:00Z",
+      "body": "Adds close.\n\nreview-scheduled: docs/REVIEW-LOG.md 2027-06-01\n",
+      "verdict": {
+        "caught": [
+          "doc-staleness/doc-stale",
+          "doc-staleness/review-schedule-void"
+        ]
+      }
+    },
+    {
+      "name": "doc-review-scheduled-within-max-age-days",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.doc-staleness]\nenabled = true\n\n[[gates.doc-staleness.rules]]\npath = \"docs/REVIEW-LOG.md\"\nmax_age_days = 92\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "base_date": "2026-08-01T12:00:00Z",
+      "head": {
+        "src/lib.rs": "pub fn open() {}\npub fn close() {}\n"
+      },
+      "head_date": "2026-11-27T12:00:00Z",
+      "body": "Adds close.\n\nreview-scheduled: docs/REVIEW-LOG.md 2026-12-15\n",
+      "verdict": {
+        "lifted": [
+          "doc-staleness/doc-stale"
+        ]
+      }
+    },
+    {
+      "name": "doc-refreshed-with-a-dated-entry",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.doc-staleness]\nenabled = true\n\n[[gates.doc-staleness.rules]]\npath = \"docs/REVIEW-LOG.md\"\nmax_age_days = 92\nrequire_added_line_match = \"^## \\\\d{4}-\\\\d{2}-\\\\d{2} \"\n",
+        "src/lib.rs": "pub fn open() {}\n",
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n"
+      },
+      "base_date": "2026-08-01T12:00:00Z",
+      "head": {
+        "docs/REVIEW-LOG.md": "# Review log\n\n## 2026-08-01 first review\n\nAll clear.\n\n## 2026-11-27 quarterly review\n\nNo open item.\n"
+      },
+      "head_date": "2026-11-27T12:00:00Z",
+      "gate": "doc-staleness",
       "verdict": "clean"
     }
   ]

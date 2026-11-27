@@ -875,6 +875,9 @@ fn check_change(
 
     let mut cmd = std::process::Command::new(exe);
     cmd.env(crate::guards::REPLAY_CASE_ENV, "1")
+        // The replay base has no history: a gate that reads what came before the change
+        // walks on from the commit it stands in for.
+        .env(crate::guards::REPLAY_PARENT_ENV, parent.id().to_string())
         .current_dir(tmp.0.join("tree"))
         .args(["check", "--format", "json", "--base"])
         .arg(base.to_string())

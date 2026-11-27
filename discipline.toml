@@ -229,3 +229,15 @@ name = "discipline"
 surface = "docs/surface.txt"
 config_files = ["discipline.toml"]
 config_docs = ["docs/CONFIGURATION.md", "docs/GATES.md"]
+
+# doc-staleness (off): a registered document must have a qualifying commit within
+# max_age_days of the head commit, judged on every run. This repository keeps no
+# document on a cadence, so it registers none. The shape, for a quarterly review log:
+#
+# [gates.doc-staleness]
+# enabled = true
+# severity = "warning"
+# [[gates.doc-staleness.rules]]
+# path = "docs/REVIEW-LOG.md"
+# max_age_days = 92
+# require_added_line_match = "^## \\d{4}-\\d{2}-\\d{2} "

@@ -29,6 +29,7 @@ fn dogfood_config_loads_with_every_available_gate_on() {
             || gate.id == "visual-evidence"
             // On in this repository at `warning`, its default, until its replay (#1090).
             || gate.id == "invented-names"
+            || gate.id == "doc-staleness"
         {
             continue;
         }
@@ -329,6 +330,7 @@ name = "my-test-proj"
             || g.id == "changed-line-coverage"
             || g.id == "visual-evidence"
             || g.id == "invented-names"
+            || g.id == "doc-staleness"
         {
             assert!(
                 !cfg.gates.settings(g.id).unwrap().enabled(),
@@ -779,6 +781,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("changed-line-coverage", false, Severity::Error),
     ("visual-evidence", false, Severity::Error),
     ("invented-names", false, Severity::Warning),
+    ("doc-staleness", false, Severity::Warning),
 ];
 
 #[test]
@@ -963,6 +966,7 @@ const REVIEWED_DYNAMIC_READS: &[(&str, &str, &str)] = &[
     ("src/hook_log.rs", "crate::hook::HOOK_RUN_ENV", NAMED_CONSTANT),
     ("src/report/mod.rs", "crate::hook::HOOK_RUN_ENV", NAMED_CONSTANT),
     ("src/guards/mod.rs", "REPLAY_CASE_ENV", NAMED_CONSTANT),
+    ("src/guards/mod.rs", "REPLAY_PARENT_ENV", NAMED_CONSTANT),
     ("src/cli.rs", "HOSTNAME_DENYLIST_ENV", NAMED_CONSTANT),
     ("src/cli.rs", "TERM_DENYLIST_ENV", NAMED_CONSTANT),
     (

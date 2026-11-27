@@ -380,6 +380,16 @@ gates.dependency-delta.manifests.items
 gates.dependency-delta.manifests.reset
 gates.dependency-delta.require_git_pins
 gates.dependency-delta.severity
+gates.doc-staleness
+gates.doc-staleness.enabled
+gates.doc-staleness.exempt_paths
+gates.doc-staleness.exempt_paths.items
+gates.doc-staleness.exempt_paths.reset
+gates.doc-staleness.rules
+gates.doc-staleness.rules[].max_age_days
+gates.doc-staleness.rules[].path
+gates.doc-staleness.rules[].require_added_line_match
+gates.doc-staleness.severity
 gates.error-swallowing
 gates.error-swallowing.constant_fallback_paths
 gates.error-swallowing.constant_fallback_paths.items

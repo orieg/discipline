@@ -572,11 +572,18 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_kind: DirectiveSubjectKind::RuleName,
         subject_doc: "`before` (the Before image) or `after` (the visual evidence as a whole)",
     },
+    DirectiveSpec {
+        canonical: "review-scheduled",
+        deprecated: None,
+        gate: "doc-staleness",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "A registered rule's `path`, then the scheduled review date (`YYYY-MM-DD`): after the head commit's date and no more than `max_age_days` after it",
+    },
 ];
 
-/// The 50 named directives recognized by discipline (40 canonical + 10 deprecated aliases).
+/// The 51 named directives recognized by discipline (41 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 40 Canonical
+    // 41 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -617,6 +624,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-companion-edit",
     "allow-uncovered",
     "allow-visual-evidence",
+    "review-scheduled",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -853,6 +861,10 @@ pub const ALLOW_VISUAL_EVIDENCE: &[&str] = &[
     "allow(visual-evidence)",
 ];
 
+/// `doc-staleness`: the date of a registered document's next review. It has no namespaced
+/// form: it schedules, rather than allows.
+pub const REVIEW_SCHEDULED: &[&str] = &["review-scheduled"];
+
 /// Returns the slice of aliases accepted for a given directive name.
 pub fn names_for_directive(name: &str) -> &'static [&'static str] {
     let lower = name.to_ascii_lowercase();
@@ -897,6 +909,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-companion-edit" => ALLOW_COMPANION_EDIT,
         "allow-uncovered" => ALLOW_UNCOVERED,
         "allow-visual-evidence" => ALLOW_VISUAL_EVIDENCE,
+        "review-scheduled" => REVIEW_SCHEDULED,
         _ => &[],
     }
 }
@@ -911,7 +924,7 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 40 Canonical
+    // 41 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -952,6 +965,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-companion-edit",
     "allow-uncovered",
     "allow-visual-evidence",
+    "review-scheduled",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -1612,6 +1626,14 @@ fn first_qualified_name(text: &str) -> &str {
         }
     }
     &text[..end]
+}
+
+/// The text of a directive after the subject it opens with, when it opens with
+/// `subject` (as [`ParsedDirective::names_subject`] reads it); `None` when it names
+/// something else. A directive that carries a value after its subject (`review-scheduled:
+/// <path> <date>`) reads the value from here.
+pub fn text_after_subject<'a>(reason: &'a str, subject: &str) -> Option<&'a str> {
+    after_subject(reason, subject)
 }
 
 fn reason_names(reason: &str, subject: &str) -> bool {
