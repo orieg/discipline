@@ -1,0 +1,89 @@
+{
+  "model_requested": "gemini-4-neon-high",
+  "model_reported": null,
+  "conversation_id": "7858057b-d0d6-4419-943e-c96c19b7e7ff",
+  "attempts": 1,
+  "num_turns": 1,
+  "labels": {
+    "PKT-0016": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0023": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0032": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0041": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0063": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0066": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0077": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0103": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0118": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0123": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0127": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0130": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0134": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0160": {
+      "actionability": "cannot-tell",
+      "rule_fidelity": "cannot-tell"
+    },
+    "PKT-0174": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0193": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0196": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0212": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0221": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    },
+    "PKT-0250": {
+      "actionability": "would-not-block",
+      "rule_fidelity": "true-positive"
+    }
+  }
+}

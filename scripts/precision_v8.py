@@ -13,6 +13,12 @@
            adjudication.json, findings.json and summary.json (block rates, rule-fidelity
            and actionability shares per class and gate with Wilson and cluster-bootstrap
            intervals, kappa per question, degenerate slots, tie-breaker-final counts, verdicts).
+  rate-agy re-rate the packet with one more model through the agy CLI (#1076, exploratory, not
+           pre-registered): the r2 slot's batches, `rater_prompt_agy.txt` with the batch's items
+           after it, one new conversation per batch, a JSON-schema output constraint, and v7's
+           invalid-answer rule. Resumable: a batch already written is skipped.
+  agreement that slot's agreement with r1, r2 and the final labels, per question: raw
+           agreement and Cohen's kappa with a bootstrap interval, and its label counts.
 
 The replay, the twin rule, the rule summaries, the diff excerpts and the redaction are
 `scripts/benchmark_precision.py`'s, imported, so the packet is built as v6's was.
@@ -26,7 +32,9 @@ import argparse
 import importlib
 import json
 import random
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -264,12 +272,124 @@ def report(args) -> int:
     return 0
 
 
+def batch_schema(ids: list) -> dict:
+    """The output constraint of one batch: one valid pair of labels per item id, nothing else."""
+    pair = {"type": "object", "additionalProperties": False, "required": list(QUESTIONS),
+            "properties": {q: {"enum": list(v)} for q, v in QUESTIONS.items()}}
+    return {"type": "object", "additionalProperties": False, "required": list(ids),
+            "properties": {i: pair for i in ids}}
+
+
+def valid_labels(labels, ids: list) -> bool:
+    """v7's invalid-answer rule: exactly one valid pair of labels per item id."""
+    return (isinstance(labels, dict) and sorted(labels) == sorted(ids)
+            and all(isinstance(v, dict) and sorted(v) == sorted(QUESTIONS)
+                    and all(v[q] in QUESTIONS[q] for q in QUESTIONS) for v in labels.values()))
+
+
+def rate_agy(args) -> int:
+    d = Path(args.dir)
+    items = {it["item_id"]: it for it in json.loads((d / "rater-packet.json").read_text())["items"]}
+    prompt = (d / "rater_prompt_agy.txt").read_text()
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for f in sorted((d / "r2").glob("batch-??.json")):
+        dest = out / f.name
+        if dest.exists():
+            continue
+        ids = list(json.loads(f.read_text())["labels"])
+        text = prompt.rstrip("\n") + "\n\n" + json.dumps([items[i] for i in ids], indent=2) + "\n"
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as s:
+            json.dump(batch_schema(ids), s)
+        for attempt in (1, 2):
+            r = subprocess.run([args.agy, "-p", text, "--model", args.model, "--output-format", "json",
+                                "--json-schema", s.name, "--disable-slash-commands", "--new-project"],
+                               capture_output=True, text=True, check=False)
+            try:
+                doc = json.loads(r.stdout)
+            except json.JSONDecodeError:
+                doc = {}
+            labels = doc.get("structured_output")
+            if r.returncode == 0 and doc.get("status") == "SUCCESS" and valid_labels(labels, ids):
+                break
+            print(f"{f.name}: invalid answer on attempt {attempt} (exit {r.returncode})", file=sys.stderr)
+        else:
+            print(f"{f.name}: a second invalid answer stops the run (v7's invalid-answer rule)", file=sys.stderr)
+            return 1
+        dest.write_text(json.dumps({"model_requested": args.model, "model_reported": doc.get("model"),
+                                    "conversation_id": doc.get("conversation_id"), "attempts": attempt,
+                                    "num_turns": doc.get("num_turns"), "labels": labels}, indent=2) + "\n")
+        print(f"{f.name}: {len(ids)} items, attempt {attempt}", flush=True)
+    return 0
+
+
+def agreement_of(a: dict, b: dict, ids: list) -> dict:
+    out = {}
+    for q in QUESTIONS:
+        x, y = [a[i][q] for i in ids], [b[i][q] for i in ids]
+        out[q] = {"n": len(ids), "agree": sum(u == v for u, v in zip(x, y)),
+                  "kappa": bp.cohens_kappa(x, y), "kappa_95": kappa_ci(x, y)}
+    return out
+
+
+def agreement(args) -> int:
+    d = Path(args.dir)
+    slot = load_slot(Path(args.slot), True)
+    others = {"r1": load_slot(d / "r1", False), "r2": load_slot(d / "r2", True),
+              "final": {it["item_id"]: it["final"] for it in json.loads((d / "adjudication.json").read_text())["items"]}}
+    ids = sorted(slot)
+    for name, o in others.items():
+        if sorted(o) != ids:
+            print(f"{name} labels a different item set from the slot", file=sys.stderr)
+            return 2
+    docs = [json.loads(f.read_text()) for f in sorted(Path(args.slot).glob("batch-??.json"))]
+    res = {
+        "study_id": "agent-pr-precision-v8",
+        "label": "exploratory: a third AI rater after v8's results, not pre-registered, not human",
+        "synthetic_rater_disclosure": "Rater 3 is an AI model (Gemini through the agy CLI), not a person. No human labelled any item.",
+        "model_requested": sorted({doc["model_requested"] for doc in docs}),
+        "model_reported": sorted({str(doc["model_reported"]) for doc in docs}),
+        "batches": len(docs), "items": len(ids), "reasked_batches": sum(doc["attempts"] > 1 for doc in docs),
+        "label_counts": {q: {lab: sum(slot[i][q] == lab for i in ids) for lab in QUESTIONS[q]} for q in QUESTIONS},
+        "agreement": {name: agreement_of(slot, o, ids) for name, o in others.items()},
+    }
+    # Per item class (each structural or heuristic gate class, and the twin): the slot's
+    # rule-fidelity label against the final label, and the share the slot alone would give.
+    kind = {it["item_id"]: (it["gate_class"] if it["source_tool"] == "discipline" else "twin")
+            for it in json.loads((d / "findings.json").read_text())["items"]}
+    by_class: dict = {}
+    for i in ids:
+        c = by_class.setdefault(kind[i], {"items": 0, "final_vs_slot": {}})
+        c["items"] += 1
+        key = f"{others['final'][i]['rule_fidelity']} -> {slot[i]['rule_fidelity']}"
+        c["final_vs_slot"][key] = c["final_vs_slot"].get(key, 0) + 1
+    for name, c in by_class.items():
+        rows = [i for i in ids if kind[i] == name]
+        c["final_vs_slot"] = dict(sorted(c["final_vs_slot"].items()))
+        c["rule_fidelity_true_positive"] = {
+            "final": share(sum(others["final"][i]["rule_fidelity"] == "true-positive" for i in rows), len(rows)),
+            "slot": share(sum(slot[i]["rule_fidelity"] == "true-positive" for i in rows), len(rows))}
+    res["by_class"] = dict(sorted(by_class.items()))
+    Path(args.out).write_text(json.dumps(res, indent=2) + "\n")
+    for name in others:
+        k = res["agreement"][name]["rule_fidelity"]
+        print(f"vs {name}: rule fidelity {k['agree']}/{k['n']}, kappa {k['kappa']:.3f}")
+    return 0
+
+
 def self_test() -> int:
     v6 = [{"item_id": "PKT-0007", "repo": "a/b", "commit_sha": "0123456789ab", "file": "f", "line": 3, "rule_summary": "r"}]
     items = [{"repo": "a/b", "sha": "0123456789abcdef", "file": "f", "line": 3, "rule_summary": "r"},
              {"repo": "a/b", "sha": "0123456789abcdef", "file": "g", "line": 3, "rule_summary": "r"}]
     assign_ids(items, v6)
     assert sorted(it["item_id"] for it in items) == ["PKT-0007", "PKT-1001"], items
+    good = {"PKT-0001": {"rule_fidelity": "true-positive", "actionability": "would-block"}}
+    assert valid_labels(good, ["PKT-0001"])
+    assert not valid_labels(good, ["PKT-0001", "PKT-0002"]), "a missing item is invalid"
+    assert not valid_labels({"PKT-0001": {"rule_fidelity": "maybe", "actionability": "would-block"}}, ["PKT-0001"])
+    assert not valid_labels({"PKT-0001": {"rule_fidelity": "true-positive"}}, ["PKT-0001"])
+    sch = batch_schema(["PKT-0001"])
+    assert sch["required"] == ["PKT-0001"] and sch["properties"]["PKT-0001"]["properties"]["rule_fidelity"]["enum"] == list(QUESTIONS["rule_fidelity"])
     print("precision_v8 self-test: ok")
     return 0
 
@@ -292,8 +412,17 @@ def main() -> int:
     rp.add_argument("--binary-sha256", required=True)
     rp.add_argument("--host", required=True)
     rp.add_argument("--out-dir", required=True)
+    ra = sub.add_parser("rate-agy")
+    ra.add_argument("--dir", required=True, help="docs/benchmarks/results-v8")
+    ra.add_argument("--model", required=True)
+    ra.add_argument("--out-dir", required=True)
+    ra.add_argument("--agy", default="agy")
+    ag = sub.add_parser("agreement")
+    ag.add_argument("--dir", required=True, help="docs/benchmarks/results-v8")
+    ag.add_argument("--slot", required=True, help="the rate-agy output directory")
+    ag.add_argument("--out", required=True)
     a = p.parse_args()
-    return packet(a) if a.stage == "packet" else report(a)
+    return {"packet": packet, "report": report, "rate-agy": rate_agy, "agreement": agreement}[a.stage](a)
 
 
 if __name__ == "__main__":
