@@ -244,6 +244,7 @@ jobs:
             auth.docker.io:443
             production.cloudflare.docker.com:443
             production.cloudfront.docker.com:443
+            docker-images-prod.s3.dualstack.us-east-1.amazonaws.com:443
             dl-cdn.alpinelinux.org:443
             dl-cdn.alpinelinux.org:80
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -576,6 +577,7 @@ jobs:
             auth.docker.io:443
             production.cloudflare.docker.com:443
             production.cloudfront.docker.com:443
+            docker-images-prod.s3.dualstack.us-east-1.amazonaws.com:443
             crates.io:443
             index.crates.io:443
             static.crates.io:443
@@ -596,11 +598,18 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           set -euo pipefail
-          if curl -fsSL "https://crates.io/api/v1/crates/discipline/${VERSION}" >/dev/null 2>&1; then
-            echo "::notice::discipline ${VERSION} is already published on crates.io; skipping publish"
-          else
-            cargo publish --locked
-          fi
+          # crates.io answers 403 to a request without a descriptive User-Agent
+          # (curl's default included), so the check names the project. Only a 404
+          # means "not published"; any other answer stops the step rather than
+          # publishing again (#1154).
+          status="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -A "discipline-release (https://github.com/${GITHUB_REPOSITORY})" \
+            "https://crates.io/api/v1/crates/discipline/${VERSION}")"
+          case "${status}" in
+            200) echo "::notice::discipline ${VERSION} is already published on crates.io; skipping publish" ;;
+            404) cargo publish --locked ;;
+            *) echo "::error::crates.io answered ${status} for discipline ${VERSION}; not publishing"; exit 1 ;;
+          esac
       - name: Mark the release latest
         shell: bash
         env:
