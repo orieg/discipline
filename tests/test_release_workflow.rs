@@ -3,6 +3,8 @@
 //! the crate accepts no API token, so a `cargo publish` step can only authenticate
 //! with the token an earlier `rust-lang/crates-io-auth-action` step of its job returned.
 
+mod common;
+
 use serde_yaml::Value;
 
 const EXCHANGE_ACTION: &str = "rust-lang/crates-io-auth-action@";
@@ -338,7 +340,7 @@ fn run_crates_io_step(script: &str, answer: &str) -> (bool, bool) {
         &format!("#!/bin/sh\ntouch '{}'\n", published.display()),
     );
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    let status = std::process::Command::new("bash")
+    let status = common::script_command("bash")
         .arg("-c")
         .arg(script)
         .env("PATH", path)
