@@ -3,6 +3,8 @@
 //! the crate accepts no API token, so a `cargo publish` step can only authenticate
 //! with the token an earlier `rust-lang/crates-io-auth-action` step of its job returned.
 
+mod common;
+
 use serde_yaml::Value;
 
 const EXCHANGE_ACTION: &str = "rust-lang/crates-io-auth-action@";
@@ -233,4 +235,162 @@ fn the_release_tarball_normalises_owner_and_mode() {
         at("-type f -exec chmod 0644") < at("chmod 0755 \"${stage}/discipline\""),
         "the binary's mode is set after every file's"
     );
+}
+
+/// The hosts Docker Hub serves image blobs from. A registry pull answers with a
+/// redirect to one of them, and which one varies between requests: v0.33.0's
+/// `promote` was sent to the S3 host and timed out under `egress-policy: block`
+/// while `publish`, in the same run, pulled through CloudFront (#1153).
+const DOCKER_HUB_BLOB_HOSTS: [&str; 3] = [
+    "production.cloudflare.docker.com:443",
+    "production.cloudfront.docker.com:443",
+    "docker-images-prod.s3.dualstack.us-east-1.amazonaws.com:443",
+];
+
+/// For each job whose harden-runner allows Docker Hub's registry, the blob hosts it
+/// does not allow.
+fn missing_docker_hub_blob_hosts(workflow: &Value) -> Vec<String> {
+    let mut missing = Vec::new();
+    let jobs = workflow["jobs"].as_mapping().expect("release.yml has jobs");
+    for (job_name, job) in jobs {
+        let job_name = job_name.as_str().unwrap();
+        let Some(steps) = job["steps"].as_sequence() else {
+            continue;
+        };
+        for step in steps {
+            let Some(allowed) = step["with"]["allowed-endpoints"].as_str() else {
+                continue;
+            };
+            let allowed: Vec<&str> = allowed.split_whitespace().collect();
+            if !allowed.contains(&"registry-1.docker.io:443") {
+                continue;
+            }
+            for host in DOCKER_HUB_BLOB_HOSTS {
+                if !allowed.contains(&host) {
+                    missing.push(format!("{job_name}: {host}"));
+                }
+            }
+        }
+    }
+    missing
+}
+
+#[test]
+fn every_job_that_pulls_from_docker_hub_allows_each_of_its_blob_hosts() {
+    let workflow = release_workflow();
+    let missing = missing_docker_hub_blob_hosts(&workflow);
+    assert!(missing.is_empty(), "not allowed:\n{}", missing.join("\n"));
+    // `publish` and `promote` both pull buildkit, so the check is not vacuous.
+    for job in ["publish", "promote"] {
+        let endpoints = workflow["jobs"][job]["steps"][0]["with"]["allowed-endpoints"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            endpoints.contains("registry-1.docker.io:443"),
+            "{job} no longer allows Docker Hub; update this test"
+        );
+    }
+}
+
+#[test]
+fn a_docker_hub_job_without_a_blob_host_is_reported() {
+    let job = |hosts: &str| -> Value {
+        serde_yaml::from_str(&format!(
+            "jobs:\n  promote:\n    steps:\n      - uses: step-security/harden-runner@x\n        with:\n          allowed-endpoints: >\n            registry-1.docker.io:443\n{hosts}"
+        ))
+        .unwrap()
+    };
+    let line = |h: &str| format!("            {h}\n");
+    let all: String = DOCKER_HUB_BLOB_HOSTS.iter().map(|h| line(h)).collect();
+    assert!(missing_docker_hub_blob_hosts(&job(&all)).is_empty());
+    // The v0.33.0 list: Cloudflare and CloudFront only.
+    let without_s3 = line(DOCKER_HUB_BLOB_HOSTS[0]) + &line(DOCKER_HUB_BLOB_HOSTS[1]);
+    assert_eq!(
+        missing_docker_hub_blob_hosts(&job(&without_s3)),
+        vec![format!("promote: {}", DOCKER_HUB_BLOB_HOSTS[2])]
+    );
+}
+
+/// Runs promote's `Publish to crates.io` script with `curl` and `cargo` replaced by
+/// stubs. The `curl` stub stands in for crates.io: it answers 403 to a request with
+/// no `-A` or with curl's own User-Agent, as crates.io does, and `answer` otherwise.
+/// Returns the script's exit status and whether it ran `cargo publish`.
+fn run_crates_io_step(script: &str, answer: &str) -> (bool, bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let published = dir.path().join("published");
+    let write_exe = |name: &str, body: &str| {
+        let path = bin.join(name);
+        std::fs::write(&path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    };
+    write_exe(
+        "curl",
+        &format!(
+            "#!/usr/bin/env bash\nua=''\nwrite=0\nfail=0\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -A) ua=\"$2\"; shift ;;\n    -w) write=1; shift ;;\n    -*f*) fail=1 ;;\n  esac\n  shift\ndone\ncase \"$ua\" in ''|curl/*) code=403 ;; *) code={answer} ;; esac\nif [ $fail = 1 ] && [ \"$code\" -ge 400 ]; then exit 22; fi\nif [ $write = 1 ]; then printf '%s' \"$code\"; fi\n"
+        ),
+    );
+    write_exe(
+        "cargo",
+        &format!("#!/bin/sh\ntouch '{}'\n", published.display()),
+    );
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let status = common::script_command("bash")
+        .arg("-c")
+        .arg(script)
+        .env("PATH", path)
+        .env("VERSION", "0.33.0")
+        .env("GITHUB_REPOSITORY", "orieg/discipline")
+        .status()
+        .unwrap();
+    (status.success(), published.exists())
+}
+
+fn crates_io_step(workflow: &Value) -> String {
+    workflow["jobs"]["promote"]["steps"]
+        .as_sequence()
+        .expect("promote has steps")
+        .iter()
+        .find(|s| s["name"].as_str() == Some("Publish to crates.io"))
+        .and_then(|s| s["run"].as_str())
+        .expect("promote has a Publish to crates.io step")
+        .to_string()
+}
+
+/// A re-run of `promote` after the crate was published must get past this step
+/// (#1154): only a 404 publishes, and any answer other than 200 or 404 fails the
+/// step rather than publishing again.
+#[cfg(unix)]
+#[test]
+fn the_crates_io_check_publishes_only_a_version_crates_io_does_not_have() {
+    let script = crates_io_step(&release_workflow());
+    assert_eq!(
+        run_crates_io_step(&script, "200"),
+        (true, false),
+        "published version"
+    );
+    assert_eq!(
+        run_crates_io_step(&script, "404"),
+        (true, true),
+        "new version"
+    );
+    assert_eq!(
+        run_crates_io_step(&script, "500"),
+        (false, false),
+        "server error"
+    );
+}
+
+/// The step v0.33.0 shipped sent curl's own User-Agent, was refused, and published
+/// a version crates.io already had.
+#[cfg(unix)]
+#[test]
+fn the_v0_33_0_crates_io_check_publishes_again() {
+    let old = "set -euo pipefail\nif curl -fsSL \"https://crates.io/api/v1/crates/discipline/${VERSION}\" >/dev/null 2>&1; then\n  echo skip\nelse\n  cargo publish --locked\nfi\n";
+    assert_eq!(run_crates_io_step(old, "200"), (true, true));
 }
